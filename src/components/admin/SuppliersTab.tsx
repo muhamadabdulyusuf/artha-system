@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit, Loader2, Plus, Search, Truck, X } from "lucide-react";
-import { SupplierModal, type SupplierRecord } from "@/components/admin/SupplierModal";
+import {
+  SupplierModal,
+  type SupplierRecord,
+} from "@/components/admin/SupplierModal";
 import { Toast } from "@/components/ui/Toast";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { SupplierRow } from "@/lib/types/database";
+import { Edit, Loader2, Plus, Search, Truck, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type SupplierListItem = SupplierRow;
 
@@ -43,9 +46,14 @@ export function SuppliersTab() {
   const [suppliers, setSuppliers] = useState<SupplierListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingSupplier, setEditingSupplier] = useState<SupplierRecord | null>(null);
+  const [editingSupplier, setEditingSupplier] = useState<SupplierRecord | null>(
+    null,
+  );
   const [searchTerm, setSearchTerm] = useState("");
-  const [toast, setToast] = useState<{ message: string; variant: "success" | "error" } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    variant: "success" | "error";
+  } | null>(null);
 
   const fetchSuppliers = useCallback(async () => {
     setIsLoading(true);
@@ -53,14 +61,17 @@ export function SuppliersTab() {
     try {
       const { data, error } = await supabase
         .from("supplier")
-        .select("id, name, phone_number, min_order_amount, is_active, created_at, updated_at")
+        .select(
+          "id, name, phone_number, min_order_amount, is_active, created_at, updated_at",
+        )
         .order("name", { ascending: true });
 
       if (error) throw error;
 
       setSuppliers((data ?? []) as SupplierListItem[]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Gagal memuat data supplier.";
+      const message =
+        err instanceof Error ? err.message : "Gagal memuat data supplier.";
       setToast({ message, variant: "error" });
       setSuppliers([]);
     }
@@ -113,7 +124,8 @@ export function SuppliersTab() {
         <div className="flex items-center gap-2 text-slate-300">
           <Truck className="h-5 w-5 text-indigo-400" />
           <p className="text-sm">
-            Kelola profil supplier, nomor WhatsApp operasional, dan batas minimum order.
+            Kelola profil supplier, nomor WhatsApp operasional, dan batas
+            minimum order.
           </p>
         </div>
 
@@ -177,7 +189,10 @@ export function SuppliersTab() {
             <tbody className="divide-y divide-zinc-700/80">
               {filteredSuppliers.length === 0 ? (
                 <tr>
-                  <td colSpan={TABLE_COL_COUNT} className="px-4 py-12 text-center text-sm text-slate-500">
+                  <td
+                    colSpan={TABLE_COL_COUNT}
+                    className="px-4 py-12 text-center text-sm text-slate-500"
+                  >
                     {emptyTableMessage}
                   </td>
                 </tr>
@@ -187,8 +202,12 @@ export function SuppliersTab() {
                     key={item.id}
                     className={`bg-zinc-900/60 ${!item.is_active ? "opacity-50" : ""}`}
                   >
-                    <td className="px-4 py-3 tabular-nums text-zinc-500">{index + 1}</td>
-                    <td className="px-4 py-3 font-medium text-slate-100">{item.name}</td>
+                    <td className="px-4 py-3 tabular-nums text-zinc-500">
+                      {index + 1}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-100">
+                      {item.name}
+                    </td>
                     <td className="px-4 py-3 font-mono text-sm text-slate-300">
                       {formatWhatsAppDisplay(item.phone_number)}
                     </td>

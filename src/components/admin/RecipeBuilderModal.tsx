@@ -5,7 +5,8 @@ import { Loader2, Plus, Trash2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { getSupabaseClient } from "@/lib/supabase/client";
-import type { Department, IngredientRow, MenuItemRow } from "@/lib/types/database";
+import type { Department, MenuItemRow } from "@/lib/types/database";
+import { IngredientSearchPicker } from "./IngredientSearchPicker";
 
 export type RecipeDraftRow = {
   clientKey: string;
@@ -41,7 +42,6 @@ function isValidQuantity(value: string): boolean {
 
 export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModalProps) {
   const supabase = getSupabaseClient();
-  const [ingredients, setIngredients] = useState<IngredientRow[]>([]);
   const [rows, setRows] = useState<RecipeDraftRow[]>([newDraftRow()]);
   const [versionId, setVersionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -49,19 +49,6 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-
-  const fetchDeptIngredients = useCallback(async () => {
-    if (!menu) return;
-    const { data, error: err } = await supabase
-      .from("ingredient")
-      .select("*")
-      .eq("department", menu.department as Department)
-      .eq("is_active", true)
-      .order("name");
-
-    if (err) throw new Error(err.message);
-    setIngredients(data ?? []);
-  }, [menu, supabase]);
 
   const loadExistingRecipe = useCallback(async () => {
     if (!menu) return;
@@ -72,8 +59,6 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
     setRows([newDraftRow()]);
 
     try {
-      await fetchDeptIngredients();
-
       const { data: activeVersion, error: verErr } = await supabase
         .from("menu_recipe_version")
         .select("id")
@@ -112,7 +97,7 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
     }
 
     setLoading(false);
-  }, [fetchDeptIngredients, menu, supabase]);
+  }, [menu, supabase]);
 
   useEffect(() => {
     if (menu) void loadExistingRecipe();
@@ -281,6 +266,9 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
                 row.quantity_per_serving.trim() !== "" &&
                 !isValidQuantity(row.quantity_per_serving);
               const isDeleting = deletingKey === row.clientKey;
+              const excludeIngredientIds = rows
+                .filter((other) => other.clientKey !== row.clientKey && other.ingredient_id)
+                .map((other) => other.ingredient_id);
 
               return (
                 <div
@@ -289,18 +277,15 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
                 >
                   <label className="block">
                     <span className="mb-1 block text-xs text-zinc-500">Bahan #{index + 1}</span>
-                    <select
+                    <IngredientSearchPicker
+                      department={menu.department as Department}
                       value={row.ingredient_id}
-                      onChange={(e) => updateRow(row.clientKey, { ingredient_id: e.target.value })}
-                      className="min-h-11 w-full rounded-lg border border-zinc-600 bg-zinc-950 px-3 text-white"
-                    >
-                      <option value="">— Pilih bahan —</option>
-                      {ingredients.map((ing) => (
-                        <option key={ing.id} value={ing.id}>
-                          {ing.name} ({ing.unit})
-                        </option>
-                      ))}
-                    </select>
+                      excludeIds={excludeIngredientIds}
+                      disabled={saving || isDeleting}
+                      onChange={(ingredientId) =>
+                        updateRow(row.clientKey, { ingredient_id: ingredientId })
+                      }
+                    />
                   </label>
                   <label className="block">
                     <span className="mb-1 block text-xs text-zinc-500">Qty / porsi</span>

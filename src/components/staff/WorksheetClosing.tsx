@@ -27,6 +27,13 @@ import type {
   RecipeLineForCalc,
 } from "@/lib/types/database";
 import { canAccessWorksheet } from "@/lib/worksheet/access";
+import {
+  OUTSTOCK_LOGICAL_FALLACY_MESSAGE,
+  findOutstockValidationErrors,
+  formatStockAvailability,
+  hasOutstockValidationErrors,
+  validateOutstockLine,
+} from "@/lib/worksheet/outstockValidation";
 import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
 
 const SUBMITTED_LOCK_STATUSES: ClosingStatus[] = ["SUBMITTED", "ADJUSTED", "LOCKED"];
@@ -211,6 +218,45 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     if (!normalizedSearch) return menus;
     return menus.filter((menu) => menu.menu_name.toLowerCase().includes(normalizedSearch));
   }, [menus, normalizedSearch]);
+
+  const outstockHasBlockingErrors = useMemo(
+    () => hasOutstockValidationErrors(ingredients, lines),
+    [ingredients, lines]
+  );
+
+  const refreshIngredientStockFromDb = useCallback(async () => {
+    const { data, error: stockErr } = await supabase
+      .from("ingredient")
+      .select("*")
+      .eq("department", department)
+      .eq("is_active", true)
+      .order("name", { ascending: true });
+
+    if (stockErr) {
+      throw new Error(stockErr.message);
+    }
+
+    const freshList = data ?? [];
+    setIngredients(freshList);
+    return freshList;
+  }, [department, supabase]);
+
+  const assertOutstockPayloadValid = useCallback(
+    async (stockList: IngredientRow[]) => {
+      const errors = findOutstockValidationErrors(stockList, lines);
+      if (errors.length === 0) return;
+
+      const first = errors[0];
+      if (first.exceedsStock) {
+        throw new Error(OUTSTOCK_LOGICAL_FALLACY_MESSAGE);
+      }
+
+      throw new Error(
+        `Keterangan / Alasan Outstock wajib diisi untuk ${first.ingredientName}.`
+      );
+    },
+    [lines]
+  );
 
   const initIngredientLines = useCallback(
     (items: IngredientRow[], preset?: Record<string, Partial<IngredientLineState>>) => {
@@ -487,16 +533,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const handleSaveOutStock = async () => {
-    if (locked || isSavingOutStock) return;
+    if (locked || isSavingOutStock || outstockHasBlockingErrors) return;
 
     const date = businessDate || resolveBusinessDate();
     setIsSavingOutStock(true);
     setError(null);
 
     try {
+      const freshIngredients = await refreshIngredientStockFromDb();
+      await assertOutstockPayloadValid(freshIngredients);
+
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
 
-      const outLinePayload = ingredients.map((ing) => {
+      const outLinePayload = freshIngredients.map((ing) => {
         const line = lines[ing.id] ?? DEFAULT_LINE;
         return {
           session_id: activeSessionId,
@@ -517,6 +566,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       setToast("Out stock tersimpan. Form tetap bisa diedit untuk koreksi typo.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal menyimpan out stock.");
+      setActiveTab("outstock");
     } finally {
       setIsSavingOutStock(false);
     }
@@ -600,10 +650,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const handleSubmit = async () => {
-    if (locked || isSubmitting) return;
+    if (locked || isSubmitting || outstockHasBlockingErrors) return;
 
     if (!staff) {
       setError("Sesi staf tidak ditemukan.");
+      return;
+    }
+
+    try {
+      const freshIngredients = await refreshIngredientStockFromDb();
+      await assertOutstockPayloadValid(freshIngredients);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Validasi out stock gagal.");
+      setActiveTab("outstock");
       return;
     }
 
@@ -655,6 +714,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     const submittedAt = new Date().toISOString();
 
     try {
+      const freshIngredients = await refreshIngredientStockFromDb();
+      await assertOutstockPayloadValid(freshIngredients);
+
       const { data: wsRow, error: wsErr } = await supabase
         .from("worksheet_session")
         .upsert(
@@ -694,7 +756,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan worksheet_in_line: ${inLineErr.message}`);
       }
 
-      const outLinePayload = ingredients.map((ing) => {
+      const outLinePayload = freshIngredients.map((ing) => {
         const line = lines[ing.id] ?? DEFAULT_LINE;
         return {
           session_id: activeSessionId,
@@ -728,7 +790,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const menuTheoreticalMap = computeMenuTheoreticalUsage(menuListForCalc, soldItems);
 
-      const ledgerPayload: StockLedgerInsert[] = ingredients.map((ing) => {
+      const ledgerPayload: StockLedgerInsert[] = freshIngredients.map((ing) => {
         const line = lines[ing.id] ?? DEFAULT_LINE;
         const in_qty = parseQty(line.inQty);
         const closing_stock = parseQty(line.closingStock);
@@ -757,7 +819,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal upsert stock_ledger: ${ledgerErr.message}`);
       }
 
-      for (const ing of ingredients) {
+      for (const ing of freshIngredients) {
         const line = lines[ing.id] ?? DEFAULT_LINE;
         const closing_stock = parseQty(line.closingStock);
 
@@ -770,6 +832,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           throw new Error(`Gagal update current_stock ${ing.name}: ${stockErr.message}`);
         }
       }
+
+      setIngredients(
+        freshIngredients.map((ing) => {
+          const line = lines[ing.id] ?? DEFAULT_LINE;
+          return { ...ing, current_stock: parseQty(line.closingStock) };
+        })
+      );
 
       const { error: dayErr } = await supabase
         .from("business_day")
@@ -1040,8 +1109,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   Kamar 2 — Out Stock
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
-                  Barang keluar/rusak/basi. Isi keterangan jika qty &gt; 0. Simpan draft ke Supabase —
-                  form tetap aktif.
+                  Barang keluar/rusak/basi. Qty tidak boleh melebihi persediaan. Keterangan wajib
+                  jika qty &gt; 0. Simpan draft ke Supabase — form tetap aktif.
                 </p>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (
@@ -1051,7 +1120,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   ) : null}
                   {filteredIngredients.map((ing) => {
                     const line = lines[ing.id] ?? DEFAULT_LINE;
-                    const showOutNote = parseQty(line.outQty) > 0;
+                    const validation = validateOutstockLine(ing, line);
+                    const showOutFields = validation.outQty > 0;
+                    const qtyInputInvalid = validation.exceedsStock;
+                    const noteInvalid = validation.noteMissing;
+
                     return (
                       <li
                         key={ing.id}
@@ -1065,6 +1138,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                           <span className="mb-1 block text-xs text-zinc-400">
                             Qty keluar (out_qty)
                           </span>
+                          <p className="mb-2 text-xs font-medium text-sky-300/90">
+                            {formatStockAvailability(ing)}
+                          </p>
                           <input
                             type="number"
                             inputMode="decimal"
@@ -1073,24 +1149,46 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             disabled={locked}
                             value={line.outQty}
                             onChange={(e) => updateOutQty(ing.id, e.target.value)}
-                            className={INPUT_CLASS}
+                            aria-invalid={qtyInputInvalid}
+                            className={`${INPUT_CLASS} ${
+                              qtyInputInvalid
+                                ? "border-red-500 focus:border-red-500 focus:ring-red-500/40"
+                                : ""
+                            }`}
                           />
+                          {qtyInputInvalid ? (
+                            <p className="mt-2 text-xs text-red-300" role="alert">
+                              {OUTSTOCK_LOGICAL_FALLACY_MESSAGE}
+                            </p>
+                          ) : null}
                         </label>
-                        {showOutNote ? (
+                        {showOutFields ? (
                           <label className="block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Keterangan Masalah
+                              Keterangan / Alasan Outstock{" "}
+                              <span className="text-red-400">*</span>
                             </span>
-                            <input
-                              type="text"
+                            <textarea
+                              required
+                              rows={3}
                               disabled={locked}
                               value={line.outNote}
                               onChange={(e) => updateOutNote(ing.id, e.target.value)}
-                              placeholder="Contoh: spillage, barang basi, rusak"
+                              placeholder="Contoh: Tumpah, Salah buat/re-make, Expired"
                               autoCorrect="off"
                               spellCheck={false}
-                              className="min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+                              aria-invalid={noteInvalid}
+                              className={`min-h-24 w-full rounded-lg border bg-zinc-950 px-3 py-2 text-sm text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                noteInvalid
+                                  ? "border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500/40"
+                                  : "border-zinc-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/40"
+                              } focus:outline-none`}
                             />
+                            {noteInvalid ? (
+                              <p className="mt-2 text-xs text-red-300" role="alert">
+                                Keterangan / Alasan Outstock wajib diisi sebelum menyimpan.
+                              </p>
+                            ) : null}
                           </label>
                         ) : null}
                       </li>
@@ -1101,9 +1199,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   <div className="mt-6">
                     <button
                       type="button"
-                      disabled={isSavingOutStock || isSubmitting}
+                      disabled={isSavingOutStock || isSubmitting || outstockHasBlockingErrors}
                       onClick={() => void handleSaveOutStock()}
-                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:opacity-50"
+                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isSavingOutStock ? (
                         <Loader2 className="h-5 w-5 animate-spin" />
@@ -1259,9 +1357,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   <div className="mt-8">
                     <button
                       type="button"
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || outstockHasBlockingErrors}
                       onClick={() => void handleSubmit()}
-                      className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:opacity-50"
+                      className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
                       {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}
