@@ -1,0 +1,1278 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Loader2,
+  Lock,
+  Minus,
+  Package,
+  PackageMinus,
+  ClipboardList,
+  UtensilsCrossed,
+  Plus,
+  Search,
+  Unlock,
+  X,
+} from "lucide-react";
+import { useRouter } from "next/navigation";
+import { LogoutButton } from "@/components/auth/LogoutButton";
+import { Toast } from "@/components/ui/Toast";
+import { getStaffSession, type StaffSession } from "@/lib/auth/session";
+import { getSupabaseClient } from "@/lib/supabase/client";
+import type {
+  ClosingStatus,
+  Department,
+  IngredientRow,
+  MenuItemRow,
+  RecipeLineForCalc,
+} from "@/lib/types/database";
+import { canAccessWorksheet } from "@/lib/worksheet/access";
+import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
+
+const SUBMITTED_LOCK_STATUSES: ClosingStatus[] = ["SUBMITTED", "ADJUSTED", "LOCKED"];
+
+type WorksheetTab = "receive" | "outstock" | "opname" | "sold";
+
+type IngredientLineState = {
+  inQty: string;
+  closingStock: string;
+  outQty: string;
+  outNote: string;
+};
+
+type RecipeVersionNested = {
+  id: string;
+  is_active: boolean;
+  recipe_line: RecipeLineForCalc[];
+};
+
+type MenuItemWithRecipe = MenuItemRow & {
+  menu_recipe_version: RecipeVersionNested[];
+};
+
+type StockLedgerInsert = {
+  business_date: string;
+  ingredient_id: string;
+  opening_stock: number;
+  in_qty: number;
+  theoretical_usage: number;
+  adjustment_qty: number;
+  closing_stock: number;
+};
+
+type WorksheetClosingProps = {
+  department: Department;
+  title: string;
+};
+
+const DEFAULT_LINE: IngredientLineState = {
+  inQty: "0",
+  closingStock: "0",
+  outQty: "0",
+  outNote: "",
+};
+
+const TAB_CONFIG: { id: WorksheetTab; label: string; icon: typeof Package }[] = [
+  { id: "receive", label: "Receive", icon: Package },
+  { id: "outstock", label: "Out Stock", icon: PackageMinus },
+  { id: "opname", label: "Opname", icon: ClipboardList },
+  { id: "sold", label: "Menu", icon: UtensilsCrossed },
+];
+
+const INPUT_CLASS =
+  "min-h-12 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-lg font-semibold tabular-nums text-zinc-50 disabled:cursor-not-allowed disabled:opacity-50";
+
+const SEARCH_INPUT_CLASS =
+  "min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50";
+
+function parseQty(value: string): number {
+  const n = parseFloat(String(value).replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatQty(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const rounded = Math.round(value * 10000) / 10000;
+  return String(rounded);
+}
+
+function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
+  return status !== null && status !== undefined && SUBMITTED_LOCK_STATUSES.includes(status);
+}
+
+function canRequestResubmit(status: ClosingStatus | null | undefined): boolean {
+  return status === "SUBMITTED";
+}
+
+function getActiveRecipeLines(menu: MenuItemWithRecipe): RecipeLineForCalc[] {
+  const active = menu.menu_recipe_version?.find((v) => v.is_active);
+  return active?.recipe_line ?? [];
+}
+
+function computeMenuTheoreticalUsage(
+  menuList: MenuItemWithRecipe[],
+  soldItems: Record<string, string>
+): Map<string, number> {
+  const usage = new Map<string, number>();
+
+  for (const menu of menuList) {
+    const quantitySold = parseQty(soldItems[menu.id] ?? "0");
+    for (const line of getActiveRecipeLines(menu)) {
+      const add = quantitySold * Number(line.quantity_per_serving);
+      usage.set(line.ingredient_id, (usage.get(line.ingredient_id) ?? 0) + add);
+    }
+  }
+
+  return usage;
+}
+
+function createDefaultLine(preset?: Partial<IngredientLineState>): IngredientLineState {
+  return {
+    inQty: preset?.inQty ?? "0",
+    closingStock: preset?.closingStock ?? "0",
+    outQty: preset?.outQty ?? "0",
+    outNote: preset?.outNote ?? "",
+  };
+}
+
+async function fetchMenusWithActiveRecipes(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  department: Department
+): Promise<MenuItemWithRecipe[]> {
+  const { data, error } = await supabase
+    .from("menu_item")
+    .select(
+      `
+        id,
+        menu_name,
+        department,
+        price,
+        is_active,
+        menu_recipe_version (
+          id,
+          is_active,
+          recipe_line (
+            ingredient_id,
+            quantity_per_serving
+          )
+        )
+      `
+    )
+    .eq("department", department)
+    .eq("is_active", true)
+    .order("menu_name", { ascending: true });
+
+  if (error) {
+    throw new Error(`Gagal memuat resep aktif: ${error.message}`);
+  }
+
+  return (data ?? []) as MenuItemWithRecipe[];
+}
+
+export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
+  const router = useRouter();
+  const supabase = getSupabaseClient();
+
+  const [staff, setStaff] = useState<StaffSession | null>(null);
+  const [activeTab, setActiveTab] = useState<WorksheetTab>("receive");
+  const [businessDate, setBusinessDate] = useState<string>("");
+  const [worksheetStatus, setWorksheetStatus] = useState<ClosingStatus | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [ingredients, setIngredients] = useState<IngredientRow[]>([]);
+  const [menus, setMenus] = useState<MenuItemWithRecipe[]>([]);
+  const [lines, setLines] = useState<Record<string, IngredientLineState>>({});
+  const [soldItems, setSoldItems] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSavingReceive, setIsSavingReceive] = useState(false);
+  const [isSavingOutStock, setIsSavingOutStock] = useState(false);
+  const [isSavingOpname, setIsSavingOpname] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRequestingResubmit, setIsRequestingResubmit] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const locked = isWorksheetLocked(worksheetStatus ?? undefined);
+  const showResubmitCta = canRequestResubmit(worksheetStatus ?? undefined);
+
+  const businessDateLabel = useMemo(
+    () => (businessDate ? formatBusinessDateLabel(businessDate) : ""),
+    [businessDate]
+  );
+
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+
+  const filteredIngredients = useMemo(() => {
+    if (!normalizedSearch) return ingredients;
+    return ingredients.filter((ing) => ing.name.toLowerCase().includes(normalizedSearch));
+  }, [ingredients, normalizedSearch]);
+
+  const filteredMenus = useMemo(() => {
+    if (!normalizedSearch) return menus;
+    return menus.filter((menu) => menu.menu_name.toLowerCase().includes(normalizedSearch));
+  }, [menus, normalizedSearch]);
+
+  const initIngredientLines = useCallback(
+    (items: IngredientRow[], preset?: Record<string, Partial<IngredientLineState>>) => {
+      const next: Record<string, IngredientLineState> = {};
+      for (const ing of items) {
+        next[ing.id] = createDefaultLine(preset?.[ing.id]);
+      }
+      setLines(next);
+    },
+    []
+  );
+
+  const initSoldItems = useCallback(
+    (menuList: MenuItemWithRecipe[], preset?: Record<string, string>) => {
+      const next: Record<string, string> = {};
+      for (const menu of menuList) {
+        next[menu.id] = preset?.[menu.id] ?? "0";
+      }
+      setSoldItems(next);
+    },
+    []
+  );
+
+  const loadData = useCallback(async () => {
+    if (!staff) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    const date = resolveBusinessDate();
+    setBusinessDate(date);
+
+    const { error: dayErr } = await supabase.from("business_day").upsert(
+      { business_date: date, status: "DRAFT" },
+      { onConflict: "business_date" }
+    );
+    if (dayErr) {
+      setError(dayErr.message);
+      setIsLoading(false);
+      return;
+    }
+
+    const { data: ingRows, error: ingErr } = await supabase
+      .from("ingredient")
+      .select("*")
+      .eq("department", department)
+      .eq("is_active", true)
+      .order("name", { ascending: true });
+
+    if (ingErr) {
+      setError(ingErr.message);
+      setIsLoading(false);
+      return;
+    }
+
+    const ingredientList = ingRows ?? [];
+    setIngredients(ingredientList);
+
+    let menuList: MenuItemWithRecipe[];
+    try {
+      menuList = await fetchMenusWithActiveRecipes(supabase, department);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal memuat menu.");
+      setIsLoading(false);
+      return;
+    }
+    setMenus(menuList);
+
+    const { data: ws, error: wsErr } = await supabase
+      .from("worksheet_session")
+      .select("id, status")
+      .eq("business_date", date)
+      .eq("department", department)
+      .maybeSingle();
+
+    if (wsErr) {
+      setError(wsErr.message);
+      setIsLoading(false);
+      return;
+    }
+
+    setWorksheetStatus(ws?.status ?? null);
+    setSessionId(ws?.id ?? null);
+
+    const ingredientPreset: Record<string, Partial<IngredientLineState>> = {};
+    const soldPreset: Record<string, string> = {};
+
+    if (ws?.id) {
+      const { data: inLines } = await supabase
+        .from("worksheet_in_line")
+        .select("ingredient_id, quantity")
+        .eq("session_id", ws.id);
+
+      for (const row of inLines ?? []) {
+        ingredientPreset[row.ingredient_id] = {
+          ...ingredientPreset[row.ingredient_id],
+          inQty: String(row.quantity),
+        };
+      }
+
+      const { data: outLines } = await supabase
+        .from("worksheet_out_line")
+        .select("ingredient_id, quantity, note")
+        .eq("session_id", ws.id);
+
+      for (const row of outLines ?? []) {
+        ingredientPreset[row.ingredient_id] = {
+          ...ingredientPreset[row.ingredient_id],
+          outQty: String(row.quantity),
+          outNote: row.note ?? "",
+        };
+      }
+
+      const { data: soldLines } = await supabase
+        .from("worksheet_sold_line")
+        .select("menu_item_id, quantity_sold")
+        .eq("session_id", ws.id);
+
+      for (const row of soldLines ?? []) {
+        soldPreset[row.menu_item_id] = String(row.quantity_sold);
+      }
+
+      const { data: ledgers } = await supabase
+        .from("stock_ledger")
+        .select("ingredient_id, closing_stock, in_qty")
+        .eq("business_date", date)
+        .in(
+          "ingredient_id",
+          ingredientList.map((i) => i.id)
+        );
+
+      for (const row of ledgers ?? []) {
+        const existing = ingredientPreset[row.ingredient_id];
+        ingredientPreset[row.ingredient_id] = {
+          inQty: existing?.inQty ?? String(row.in_qty),
+          closingStock: String(row.closing_stock),
+          outQty: existing?.outQty,
+          outNote: existing?.outNote,
+        };
+      }
+    }
+
+    initIngredientLines(ingredientList, ingredientPreset);
+    initSoldItems(menuList, soldPreset);
+    setIsLoading(false);
+  }, [department, initIngredientLines, initSoldItems, staff, supabase]);
+
+  useEffect(() => {
+    const current = getStaffSession();
+    if (!current || !canAccessWorksheet(current, department)) {
+      router.replace("/");
+      return;
+    }
+    setStaff(current);
+  }, [department, router]);
+
+  useEffect(() => {
+    if (staff) void loadData();
+  }, [staff, loadData]);
+
+  const ensureDraftSession = async (
+    date: string
+  ): Promise<{ sessionId: string; status: ClosingStatus }> => {
+    if (sessionId && worksheetStatus === "DRAFT") {
+      return { sessionId, status: "DRAFT" };
+    }
+
+    if (sessionId && worksheetStatus && worksheetStatus !== "DRAFT") {
+      throw new Error("Worksheet terkunci. Gunakan Request Resubmit di tab Menu.");
+    }
+
+    const { data: wsRow, error: wsErr } = await supabase
+      .from("worksheet_session")
+      .upsert(
+        {
+          business_date: date,
+          department,
+          status: "DRAFT",
+          submitted_at: null,
+          submitted_by_staff_id: null,
+          locked_at: null,
+          locked_by_staff_id: null,
+        },
+        { onConflict: "business_date,department" }
+      )
+      .select("id, status")
+      .single();
+
+    if (wsErr || !wsRow) {
+      throw new Error(wsErr?.message ?? "Gagal membuat worksheet session.");
+    }
+
+    setSessionId(wsRow.id);
+    setWorksheetStatus(wsRow.status);
+    return { sessionId: wsRow.id, status: wsRow.status };
+  };
+
+  const updateInQty = (ingredientId: string, value: string) => {
+    if (locked) return;
+    setLines((prev) => ({
+      ...prev,
+      [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), inQty: value },
+    }));
+  };
+
+  const updateClosingStock = (ingredientId: string, value: string) => {
+    if (locked) return;
+    setLines((prev) => ({
+      ...prev,
+      [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), closingStock: value },
+    }));
+  };
+
+  const updateOutQty = (ingredientId: string, value: string) => {
+    if (locked) return;
+    setLines((prev) => ({
+      ...prev,
+      [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), outQty: value },
+    }));
+  };
+
+  const updateOutNote = (ingredientId: string, value: string) => {
+    if (locked) return;
+    setLines((prev) => ({
+      ...prev,
+      [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), outNote: value },
+    }));
+  };
+
+  const updateSoldQty = (menuId: string, value: string) => {
+    if (locked) return;
+    setSoldItems((prev) => ({ ...prev, [menuId]: value }));
+  };
+
+  const adjustSoldQty = (menuId: string, delta: number) => {
+    if (locked) return;
+    setSoldItems((prev) => {
+      const current = parseQty(prev[menuId] ?? "0");
+      const next = Math.max(0, current + delta);
+      return { ...prev, [menuId]: String(next) };
+    });
+  };
+
+  const handleSaveReceive = async () => {
+    if (locked || isSavingReceive) return;
+
+    const date = businessDate || resolveBusinessDate();
+    setIsSavingReceive(true);
+    setError(null);
+
+    try {
+      const { sessionId: activeSessionId } = await ensureDraftSession(date);
+
+      const upsertPayload = ingredients.map((ing) => ({
+        session_id: activeSessionId,
+        ingredient_id: ing.id,
+        quantity: parseQty(lines[ing.id]?.inQty ?? "0"),
+      }));
+
+      const { error: inLineErr } = await supabase
+        .from("worksheet_in_line")
+        .upsert(upsertPayload, { onConflict: "session_id,ingredient_id" });
+
+      if (inLineErr) {
+        throw new Error(`Gagal menyimpan pasokan: ${inLineErr.message}`);
+      }
+
+      setToast("Pasokan tersimpan. Form tetap bisa diedit untuk koreksi typo.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan pasokan.");
+    } finally {
+      setIsSavingReceive(false);
+    }
+  };
+
+  const handleSaveOutStock = async () => {
+    if (locked || isSavingOutStock) return;
+
+    const date = businessDate || resolveBusinessDate();
+    setIsSavingOutStock(true);
+    setError(null);
+
+    try {
+      const { sessionId: activeSessionId } = await ensureDraftSession(date);
+
+      const outLinePayload = ingredients.map((ing) => {
+        const line = lines[ing.id] ?? DEFAULT_LINE;
+        return {
+          session_id: activeSessionId,
+          ingredient_id: ing.id,
+          quantity: parseQty(line.outQty),
+          note: line.outNote.trim(),
+        };
+      });
+
+      const { error: outLineErr } = await supabase
+        .from("worksheet_out_line")
+        .upsert(outLinePayload, { onConflict: "session_id,ingredient_id" });
+
+      if (outLineErr) {
+        throw new Error(`Gagal menyimpan out stock: ${outLineErr.message}`);
+      }
+
+      setToast("Out stock tersimpan. Form tetap bisa diedit untuk koreksi typo.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan out stock.");
+    } finally {
+      setIsSavingOutStock(false);
+    }
+  };
+
+  const handleSaveOpname = async () => {
+    if (locked || isSavingOpname) return;
+
+    const date = businessDate || resolveBusinessDate();
+    setIsSavingOpname(true);
+    setError(null);
+
+    try {
+      await ensureDraftSession(date);
+
+      const ledgerDraft: StockLedgerInsert[] = ingredients.map((ing) => {
+        const line = lines[ing.id] ?? DEFAULT_LINE;
+        const in_qty = parseQty(line.inQty);
+        const closing_stock = parseQty(line.closingStock);
+        const opening_stock = Math.max(0, closing_stock - in_qty);
+
+        return {
+          business_date: date,
+          ingredient_id: ing.id,
+          opening_stock,
+          in_qty,
+          theoretical_usage: 0,
+          adjustment_qty: 0,
+          closing_stock,
+        };
+      });
+
+      const { error: ledgerErr } = await supabase
+        .from("stock_ledger")
+        .upsert(ledgerDraft, { onConflict: "business_date,ingredient_id" });
+
+      if (ledgerErr) {
+        throw new Error(`Gagal menyimpan opname: ${ledgerErr.message}`);
+      }
+
+      setToast("Opname tersimpan. Form tetap bisa diedit untuk koreksi typo.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menyimpan opname.");
+    } finally {
+      setIsSavingOpname(false);
+    }
+  };
+
+  const handleRequestResubmit = async () => {
+    if (!sessionId || !showResubmitCta || isRequestingResubmit) return;
+
+    const confirmed = window.confirm(
+      "Buka kembali worksheet untuk koreksi typo? Anda perlu submit ulang setelah selesai memperbaiki."
+    );
+    if (!confirmed) return;
+
+    setIsRequestingResubmit(true);
+    setError(null);
+
+    try {
+      const { error: unlockErr } = await supabase
+        .from("worksheet_session")
+        .update({
+          status: "DRAFT",
+          submitted_at: null,
+          submitted_by_staff_id: null,
+        })
+        .eq("id", sessionId);
+
+      if (unlockErr) {
+        throw new Error(unlockErr.message);
+      }
+
+      setWorksheetStatus("DRAFT");
+      setToast("Worksheet dibuka kembali. Semua kamar bisa diedit.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal membuka kembali worksheet.");
+    } finally {
+      setIsRequestingResubmit(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (locked || isSubmitting) return;
+
+    if (!staff) {
+      setError("Sesi staf tidak ditemukan.");
+      return;
+    }
+
+    let menuListForCalc: MenuItemWithRecipe[];
+    try {
+      menuListForCalc = await fetchMenusWithActiveRecipes(supabase, department);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal memuat resep aktif.");
+      return;
+    }
+
+    const menuTheoreticalPreview = computeMenuTheoreticalUsage(menuListForCalc, soldItems);
+
+    for (const ing of ingredients) {
+      const line = lines[ing.id] ?? DEFAULT_LINE;
+      const inQty = parseQty(line.inQty);
+      const closingStock = parseQty(line.closingStock);
+      const outQty = parseQty(line.outQty);
+      const menuTheoretical = menuTheoreticalPreview.get(ing.id) ?? 0;
+      const theoretical = menuTheoretical + outQty;
+      const openingStock = closingStock - inQty + theoretical;
+
+      if (closingStock < inQty) {
+        setError(
+          `${ing.name}: Sisa opname tidak boleh lebih kecil dari pasokan masuk (min. ${inQty} ${ing.unit}).`
+        );
+        setActiveTab("opname");
+        return;
+      }
+
+      if (openingStock < 0) {
+        setError(
+          `${ing.name}: Data tidak valid — stok awal terhitung negatif. Periksa opname, pasokan, out stock, dan penjualan menu.`
+        );
+        setActiveTab("opname");
+        return;
+      }
+    }
+
+    const confirmed = window.confirm(
+      "Kunci laporan closing hari ini? Setelah submit, worksheet terkunci sampai Request Resubmit."
+    );
+    if (!confirmed) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    const date = businessDate || resolveBusinessDate();
+    const submittedAt = new Date().toISOString();
+
+    try {
+      const { data: wsRow, error: wsErr } = await supabase
+        .from("worksheet_session")
+        .upsert(
+          {
+            business_date: date,
+            department,
+            status: "SUBMITTED",
+            submitted_at: submittedAt,
+            submitted_by_staff_id: staff.id,
+            locked_at: null,
+            locked_by_staff_id: null,
+          },
+          { onConflict: "business_date,department" }
+        )
+        .select("id, status")
+        .single();
+
+      if (wsErr || !wsRow) {
+        throw new Error(wsErr?.message ?? "Gagal memperbarui worksheet_session.");
+      }
+
+      const activeSessionId = wsRow.id;
+      setWorksheetStatus("SUBMITTED");
+      setSessionId(activeSessionId);
+
+      const inLinePayload = ingredients.map((ing) => ({
+        session_id: activeSessionId,
+        ingredient_id: ing.id,
+        quantity: parseQty(lines[ing.id]?.inQty ?? "0"),
+      }));
+
+      const { error: inLineErr } = await supabase
+        .from("worksheet_in_line")
+        .upsert(inLinePayload, { onConflict: "session_id,ingredient_id" });
+
+      if (inLineErr) {
+        throw new Error(`Gagal menyimpan worksheet_in_line: ${inLineErr.message}`);
+      }
+
+      const outLinePayload = ingredients.map((ing) => {
+        const line = lines[ing.id] ?? DEFAULT_LINE;
+        return {
+          session_id: activeSessionId,
+          ingredient_id: ing.id,
+          quantity: parseQty(line.outQty),
+          note: line.outNote.trim(),
+        };
+      });
+
+      const { error: outLineErr } = await supabase
+        .from("worksheet_out_line")
+        .upsert(outLinePayload, { onConflict: "session_id,ingredient_id" });
+
+      if (outLineErr) {
+        throw new Error(`Gagal menyimpan worksheet_out_line: ${outLineErr.message}`);
+      }
+
+      const soldPayload = menuListForCalc.map((menu) => ({
+        session_id: activeSessionId,
+        menu_item_id: menu.id,
+        quantity_sold: parseQty(soldItems[menu.id] ?? "0"),
+      }));
+
+      const { error: soldErr } = await supabase
+        .from("worksheet_sold_line")
+        .upsert(soldPayload, { onConflict: "session_id,menu_item_id" });
+
+      if (soldErr) {
+        throw new Error(`Gagal menyimpan worksheet_sold_line: ${soldErr.message}`);
+      }
+
+      const menuTheoreticalMap = computeMenuTheoreticalUsage(menuListForCalc, soldItems);
+
+      const ledgerPayload: StockLedgerInsert[] = ingredients.map((ing) => {
+        const line = lines[ing.id] ?? DEFAULT_LINE;
+        const in_qty = parseQty(line.inQty);
+        const closing_stock = parseQty(line.closingStock);
+        const out_qty = parseQty(line.outQty);
+        const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
+        const theoretical_usage = menu_theoretical;
+        const adjustment_qty = out_qty > 0 ? -out_qty : 0;
+        const opening_stock = closing_stock - in_qty + menu_theoretical + out_qty;
+
+        return {
+          business_date: date,
+          ingredient_id: ing.id,
+          opening_stock,
+          in_qty,
+          theoretical_usage,
+          adjustment_qty,
+          closing_stock,
+        };
+      });
+
+      const { error: ledgerErr } = await supabase
+        .from("stock_ledger")
+        .upsert(ledgerPayload, { onConflict: "business_date,ingredient_id" });
+
+      if (ledgerErr) {
+        throw new Error(`Gagal upsert stock_ledger: ${ledgerErr.message}`);
+      }
+
+      for (const ing of ingredients) {
+        const line = lines[ing.id] ?? DEFAULT_LINE;
+        const closing_stock = parseQty(line.closingStock);
+
+        const { error: stockErr } = await supabase
+          .from("ingredient")
+          .update({ current_stock: closing_stock })
+          .eq("id", ing.id);
+
+        if (stockErr) {
+          throw new Error(`Gagal update current_stock ${ing.name}: ${stockErr.message}`);
+        }
+      }
+
+      const { error: dayErr } = await supabase
+        .from("business_day")
+        .update({ status: "SUBMITTED" })
+        .eq("business_date", date);
+
+      if (dayErr) throw new Error(dayErr.message);
+
+      setToast("Laporan closing berhasil dikunci dan disimpan ke Supabase.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal submit laporan closing.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!staff) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
+        <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+      </main>
+    );
+  }
+
+  const showBlockingOverlay =
+    isSubmitting || isSavingReceive || isSavingOutStock || isSavingOpname || isRequestingResubmit;
+
+  const overlayMessage = isSubmitting
+    ? "Mengunci laporan ke Supabase…"
+    : isRequestingResubmit
+      ? "Membuka kembali worksheet…"
+      : isSavingReceive
+        ? "Menyimpan pasokan…"
+        : isSavingOutStock
+          ? "Menyimpan out stock…"
+          : "Menyimpan opname…";
+
+  return (
+    <main className="mx-auto min-h-screen max-w-lg bg-zinc-950 pb-32">
+      <Toast message={toast} onDismiss={() => setToast(null)} />
+
+      {showBlockingOverlay ? (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-zinc-950/85 backdrop-blur-sm"
+        >
+          <Loader2 className="h-10 w-10 animate-spin text-indigo-400" />
+          <p className="text-sm font-medium text-zinc-200">{overlayMessage}</p>
+          <p className="text-xs text-zinc-500">Jangan tutup aplikasi</p>
+        </div>
+      ) : null}
+
+      <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
+              {title}
+            </p>
+            <h1 className="text-lg font-bold text-zinc-50">{staff.name}</h1>
+            {businessDateLabel ? (
+              <p className="mt-1 text-sm text-zinc-300">
+                Hari Bisnis: <span className="font-medium text-zinc-50">{businessDateLabel}</span>
+              </p>
+            ) : null}
+            {sessionId ? (
+              <p className="mt-0.5 text-[10px] text-zinc-500">Session: {sessionId.slice(0, 8)}…</p>
+            ) : null}
+            {worksheetStatus ? (
+              <p className="mt-1 inline-flex items-center gap-1 rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                {locked ? <Lock className="h-3 w-3 text-sky-400" /> : null}
+                Status: {worksheetStatus}
+              </p>
+            ) : null}
+          </div>
+          <LogoutButton className="shrink-0 min-h-10 rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-300 hover:border-zinc-600" />
+        </div>
+      </header>
+
+      <nav
+        className="sticky top-[100px] z-10 border-b border-zinc-800 bg-zinc-950/95 px-2 py-2 backdrop-blur"
+        aria-label="Worksheet tabs"
+      >
+        <ul className="grid grid-cols-4 gap-1">
+          {TAB_CONFIG.map(({ id, label, icon: Icon }) => {
+            const active = activeTab === id;
+            return (
+              <li key={id}>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab(id)}
+                  className={`flex min-h-14 w-full flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-center transition active:scale-[0.98] ${
+                    active
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-900/50"
+                      : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 ${active ? "text-amber-200" : ""}`} />
+                  <span className="text-[10px] font-bold uppercase leading-tight tracking-wide">
+                    {label}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+
+      {!isLoading && (ingredients.length > 0 || menus.length > 0) ? (
+        <div className="px-4 pt-3">
+          <div className="relative mb-4 w-full">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder={
+                activeTab === "sold" ? "Cari menu terjual…" : "Cari bahan baku…"
+              }
+              autoCorrect="off"
+              spellCheck={false}
+              className={SEARCH_INPUT_CLASS}
+              aria-label="Pencarian cepat worksheet"
+            />
+            {searchTerm ? (
+              <button
+                type="button"
+                onClick={() => setSearchTerm("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-200"
+                aria-label="Hapus pencarian"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="px-4 pt-4">
+        {staff.role === "admin" || staff.role === "op_manager" ? (
+          <p className="mb-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs text-indigo-200">
+            Mode Admin/Ops — melihat worksheet {department}.
+          </p>
+        ) : null}
+
+        {locked ? (
+          <div className="mb-4 rounded-xl border border-sky-500/40 bg-sky-500/10 p-4">
+            <div className="flex items-start gap-3">
+              <Lock className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-sky-100">
+                  Worksheet hari ini sudah terkunci
+                </p>
+                <p className="mt-1 text-xs text-sky-200/90">
+                  Status: <span className="font-medium">{worksheetStatus}</span>. Input dinonaktifkan
+                  hingga worksheet dibuka kembali.
+                </p>
+                {showResubmitCta ? (
+                  <button
+                    type="button"
+                    disabled={isRequestingResubmit || isSubmitting}
+                    onClick={() => void handleRequestResubmit()}
+                    className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-amber-400/50 bg-amber-500/20 px-4 text-sm font-bold text-amber-100 active:bg-amber-500/30 disabled:opacity-50"
+                  >
+                    {isRequestingResubmit ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Unlock className="h-4 w-4" />
+                    )}
+                    🔓 Request Resubmit / Koreksi Typo
+                  </button>
+                ) : (
+                  <p className="mt-2 text-xs text-sky-300/80">
+                    Hubungi Admin untuk koreksi status {worksheetStatus}.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {error ? (
+          <p className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            {error}
+          </p>
+        ) : null}
+
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-zinc-400">
+            <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+            Memuat data dari Supabase…
+          </div>
+        ) : ingredients.length === 0 ? (
+          <p className="py-12 text-center text-zinc-400">
+            Belum ada bahan aktif untuk departemen ini. Tambahkan di Master Data Admin.
+          </p>
+        ) : (
+          <>
+            {activeTab === "receive" ? (
+              <section>
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
+                  Kamar 1 — Receive
+                </h2>
+                <p className="mb-4 text-xs text-zinc-500">
+                  Default 0 — hapus lalu isi. Simpan ke Supabase; form tetap bisa diedit untuk koreksi
+                  typo.
+                </p>
+                <ul className="space-y-3">
+                  {filteredIngredients.length === 0 ? (
+                    <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                      Tidak ada bahan cocok dengan &ldquo;{searchTerm}&rdquo;.
+                    </li>
+                  ) : null}
+                  {filteredIngredients.map((ing) => {
+                    const line = lines[ing.id] ?? DEFAULT_LINE;
+                    return (
+                      <li
+                        key={ing.id}
+                        className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
+                      >
+                        <div className="mb-3">
+                          <p className="font-semibold text-zinc-50">{ing.name}</p>
+                          <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
+                        </div>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-zinc-400">
+                            Pasokan masuk (in_qty)
+                          </span>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            step="any"
+                            disabled={locked}
+                            value={line.inQty}
+                            onChange={(e) => updateInQty(ing.id, e.target.value)}
+                            className={INPUT_CLASS}
+                          />
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {!locked ? (
+                  <div className="mt-6">
+                    <button
+                      type="button"
+                      disabled={isSavingReceive || isSubmitting}
+                      onClick={() => void handleSaveReceive()}
+                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:opacity-50"
+                    >
+                      {isSavingReceive ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <Package className="h-5 w-5" />
+                      )}
+                      Simpan Pasokan
+                    </button>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {activeTab === "outstock" ? (
+              <section>
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
+                  Kamar 2 — Out Stock
+                </h2>
+                <p className="mb-4 text-xs text-zinc-500">
+                  Barang keluar/rusak/basi. Isi keterangan jika qty &gt; 0. Simpan draft ke Supabase —
+                  form tetap aktif.
+                </p>
+                <ul className="space-y-3">
+                  {filteredIngredients.length === 0 ? (
+                    <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                      Tidak ada bahan cocok dengan &ldquo;{searchTerm}&rdquo;.
+                    </li>
+                  ) : null}
+                  {filteredIngredients.map((ing) => {
+                    const line = lines[ing.id] ?? DEFAULT_LINE;
+                    const showOutNote = parseQty(line.outQty) > 0;
+                    return (
+                      <li
+                        key={ing.id}
+                        className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
+                      >
+                        <div className="mb-3">
+                          <p className="font-semibold text-zinc-50">{ing.name}</p>
+                          <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
+                        </div>
+                        <label className="mb-3 block">
+                          <span className="mb-1 block text-xs text-zinc-400">
+                            Qty keluar (out_qty)
+                          </span>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            step="any"
+                            disabled={locked}
+                            value={line.outQty}
+                            onChange={(e) => updateOutQty(ing.id, e.target.value)}
+                            className={INPUT_CLASS}
+                          />
+                        </label>
+                        {showOutNote ? (
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-zinc-400">
+                              Keterangan Masalah
+                            </span>
+                            <input
+                              type="text"
+                              disabled={locked}
+                              value={line.outNote}
+                              onChange={(e) => updateOutNote(ing.id, e.target.value)}
+                              placeholder="Contoh: spillage, barang basi, rusak"
+                              autoCorrect="off"
+                              spellCheck={false}
+                              className="min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                          </label>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {!locked ? (
+                  <div className="mt-6">
+                    <button
+                      type="button"
+                      disabled={isSavingOutStock || isSubmitting}
+                      onClick={() => void handleSaveOutStock()}
+                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:opacity-50"
+                    >
+                      {isSavingOutStock ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <PackageMinus className="h-5 w-5" />
+                      )}
+                      Simpan Out Stock
+                    </button>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {activeTab === "opname" ? (
+              <section>
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
+                  Kamar 3 — Stock Opname
+                </h2>
+                <p className="mb-4 text-xs text-zinc-500">
+                  Nilai 0 valid. Simpan sisa fisik ke Supabase — form tetap bisa diedit sebelum submit
+                  final.
+                </p>
+                <ul className="space-y-3">
+                  {filteredIngredients.length === 0 ? (
+                    <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                      Tidak ada bahan cocok dengan &ldquo;{searchTerm}&rdquo;.
+                    </li>
+                  ) : null}
+                  {filteredIngredients.map((ing) => {
+                    const line = lines[ing.id] ?? DEFAULT_LINE;
+                    return (
+                      <li
+                        key={ing.id}
+                        className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
+                      >
+                        <div className="mb-3">
+                          <p className="font-semibold text-zinc-50">{ing.name}</p>
+                          <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
+                        </div>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-zinc-400">
+                            Sisa fisik (closing_stock)
+                          </span>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            step="any"
+                            disabled={locked}
+                            value={line.closingStock}
+                            onChange={(e) => updateClosingStock(ing.id, e.target.value)}
+                            className={INPUT_CLASS}
+                          />
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {!locked ? (
+                  <div className="mt-6">
+                    <button
+                      type="button"
+                      disabled={isSavingOpname || isSubmitting}
+                      onClick={() => void handleSaveOpname()}
+                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-indigo-500/50 bg-indigo-600/20 font-bold text-indigo-100 active:bg-indigo-600/35 disabled:opacity-50"
+                    >
+                      {isSavingOpname ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <ClipboardList className="h-5 w-5" />
+                      )}
+                      Simpan Opname
+                    </button>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {activeTab === "sold" ? (
+              <section>
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
+                  Kamar 4 — Menu Terjual
+                </h2>
+                <p className="mb-4 text-xs text-zinc-500">
+                  Qty default 0. Setelah semua kamar benar, submit laporan closing di bawah.
+                </p>
+                {menus.length === 0 ? (
+                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                    Belum ada menu aktif untuk departemen ini.
+                  </p>
+                ) : filteredMenus.length === 0 ? (
+                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                    Tidak ada menu cocok dengan &ldquo;{searchTerm}&rdquo;.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {filteredMenus.map((menu) => {
+                      const soldValue = soldItems[menu.id] ?? "0";
+                      return (
+                        <li
+                          key={menu.id}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-3"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium text-zinc-50">{menu.menu_name}</p>
+                            <p className="text-xs text-zinc-500">
+                              Rp {Number(menu.price).toLocaleString("id-ID")}
+                              {getActiveRecipeLines(menu).length === 0 ? " · tanpa resep" : ""}
+                            </p>
+                          </div>
+                          <div className="shrink-0">
+                            <span className="mb-1 block text-right text-xs text-zinc-400">
+                              Terjual
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={locked}
+                                onClick={() => adjustSoldQty(menu.id, -1)}
+                                aria-label={`Kurangi ${menu.menu_name}`}
+                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 active:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Minus className="h-5 w-5" />
+                              </button>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                step={1}
+                                disabled={locked}
+                                value={soldValue}
+                                onChange={(e) => updateSoldQty(menu.id, e.target.value)}
+                                className="min-h-12 w-16 rounded-lg border border-zinc-700 bg-zinc-950 px-1 text-center text-lg font-semibold tabular-nums text-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              />
+                              <button
+                                type="button"
+                                disabled={locked}
+                                onClick={() => adjustSoldQty(menu.id, 1)}
+                                aria-label={`Tambah ${menu.menu_name}`}
+                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-indigo-500/50 bg-indigo-600/20 text-indigo-100 active:bg-indigo-600/35 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Plus className="h-5 w-5" />
+                              </button>
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+
+                {!locked && ingredients.length > 0 ? (
+                  <div className="mt-8">
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => void handleSubmit()}
+                      className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:opacity-50"
+                    >
+                      {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
+                      {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}
+                    </button>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+          </>
+        )}
+      </div>
+    </main>
+  );
+}
