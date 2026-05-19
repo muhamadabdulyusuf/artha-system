@@ -34,6 +34,8 @@ import {
   normalizeWhatsAppPhoneNumber,
 } from "@/lib/purchase-order/whatsapp";
 import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
+import { OpnameApprovalPanel } from "@/components/admin/OpnameApprovalPanel";
+import { StockAdjustmentPanel } from "@/components/admin/StockAdjustmentPanel";
 
 const WIB_TIMEZONE = "Asia/Jakarta";
 const SPILLAGE_RATIO_THRESHOLD = 0.15;
@@ -1382,6 +1384,11 @@ export function MonitoringDashboard() {
 
   return (
     <div className="space-y-6">
+      <section className="grid gap-6 lg:grid-cols-2">
+        <OpnameApprovalPanel />
+        <StockAdjustmentPanel />
+      </section>
+
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h2 className="text-xl font-bold text-slate-100">Dashboard Monitoring</h2>

@@ -1,7 +1,21 @@
 export type Department = "bar" | "kitchen";
 export type IngredientUnit = "ml" | "gram" | "pcs";
 export type StaffRole = "admin" | "op_manager" | "bar_staff" | "kitchen_staff";
-export type ClosingStatus = "DRAFT" | "SUBMITTED" | "ADJUSTED" | "LOCKED";
+export type ClosingStatus =
+  | "DRAFT"
+  | "SUBMITTED"
+  | "ADJUSTED"
+  | "LOCKED"
+  | "PENDING_APPROVAL_ADMIN";
+
+export type StockLogEventType =
+  | "RECEIVE"
+  | "OUTSTOCK"
+  | "OPNAME"
+  | "CLOSING"
+  | "ADJUSTMENT";
+
+export type OpnamePendingStatus = "PENDING_APPROVAL_ADMIN" | "APPROVED" | "REJECTED";
 
 export type StaffRow = {
   id: string;
@@ -127,6 +141,38 @@ export type StockLedgerRow = {
   theoretical_usage: number;
   adjustment_qty: number;
   closing_stock: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StockLogRow = {
+  id: string;
+  ingredient_id: string;
+  business_date: string | null;
+  event_type: StockLogEventType;
+  qty_before: number;
+  qty_after: number;
+  reason: string | null;
+  message: string;
+  worksheet_session_id: string | null;
+  created_by_staff_id: string | null;
+  created_at: string;
+};
+
+export type WorksheetOpnamePendingRow = {
+  id: string;
+  session_id: string;
+  business_date: string;
+  ingredient_id: string;
+  system_stock: number;
+  physical_stock: number;
+  variance_qty: number;
+  variance_pct: number;
+  status: OpnamePendingStatus;
+  submitted_by_staff_id: string | null;
+  reviewed_by_staff_id: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -348,6 +394,48 @@ export type Database = {
           theoretical_usage?: number;
           adjustment_qty?: number;
           closing_stock?: number;
+        };
+        Relationships: [];
+      };
+      stock_log: {
+        Row: StockLogRow;
+        Insert: {
+          id?: string;
+          ingredient_id: string;
+          business_date?: string | null;
+          event_type: StockLogEventType;
+          qty_before: number;
+          qty_after: number;
+          reason?: string | null;
+          message: string;
+          worksheet_session_id?: string | null;
+          created_by_staff_id?: string | null;
+        };
+        Update: never;
+        Relationships: [];
+      };
+      worksheet_opname_pending: {
+        Row: WorksheetOpnamePendingRow;
+        Insert: {
+          id?: string;
+          session_id: string;
+          business_date: string;
+          ingredient_id: string;
+          system_stock: number;
+          physical_stock: number;
+          variance_qty: number;
+          variance_pct: number;
+          status?: OpnamePendingStatus;
+          submitted_by_staff_id?: string | null;
+          reviewed_by_staff_id?: string | null;
+          reviewed_at?: string | null;
+          review_note?: string | null;
+        };
+        Update: {
+          status?: OpnamePendingStatus;
+          reviewed_by_staff_id?: string | null;
+          reviewed_at?: string | null;
+          review_note?: string | null;
         };
         Relationships: [];
       };

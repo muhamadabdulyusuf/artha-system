@@ -20,3 +20,12 @@ CREATE POLICY "anon_all_worksheet_out_line" ON worksheet_out_line FOR ALL TO ano
 
 DROP POLICY IF EXISTS "anon_all_stock_ledger" ON stock_ledger;
 CREATE POLICY "anon_all_stock_ledger" ON stock_ledger FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+ALTER TABLE stock_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE worksheet_opname_pending ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "anon_all_stock_log" ON stock_log;
+CREATE POLICY "anon_all_stock_log" ON stock_log FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "anon_all_worksheet_opname_pending" ON worksheet_opname_pending;
+CREATE POLICY "anon_all_worksheet_opname_pending" ON worksheet_opname_pending FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Loader2,
   Lock,
@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { LogoutButton } from "@/components/auth/LogoutButton";
-import { Toast } from "@/components/ui/Toast";
+import { Toast, type ToastVariant } from "@/components/ui/Toast";
+import { translateWorksheetSubmitError } from "@/lib/worksheet/errorTranslator";
 import { getStaffSession, type StaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type {
@@ -35,8 +36,24 @@ import {
   validateOutstockLine,
 } from "@/lib/worksheet/outstockValidation";
 import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
+import { clearWorksheetDraft } from "@/lib/worksheet/draftStorage";
+import { finalizeWorksheetSession } from "@/lib/worksheet/finalizeSession";
+import { syncOpnameStockAndPending } from "@/lib/worksheet/opnameSubmit";
+import { formatSystemStockGuide } from "@/lib/worksheet/opnameVariance";
+import {
+  findTypoGuardWarnings,
+  type TypoGuardWarning,
+} from "@/lib/worksheet/typoGuard";
+import { useWorksheetDraft } from "@/hooks/useWorksheetDraft";
+import { TypoConfirmModal } from "@/components/worksheet/TypoConfirmModal";
+import { WorksheetStickyActionBar } from "@/components/worksheet/WorksheetStickyActionBar";
 
-const SUBMITTED_LOCK_STATUSES: ClosingStatus[] = ["SUBMITTED", "ADJUSTED", "LOCKED"];
+const SUBMITTED_LOCK_STATUSES: ClosingStatus[] = [
+  "SUBMITTED",
+  "ADJUSTED",
+  "LOCKED",
+  "PENDING_APPROVAL_ADMIN",
+];
 
 type WorksheetTab = "receive" | "outstock" | "opname" | "sold";
 
@@ -108,7 +125,7 @@ function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
 }
 
 function canRequestResubmit(status: ClosingStatus | null | undefined): boolean {
-  return status === "SUBMITTED";
+  return status === "SUBMITTED" || status === "PENDING_APPROVAL_ADMIN";
 }
 
 function getActiveRecipeLines(menu: MenuItemWithRecipe): RecipeLineForCalc[] {
@@ -196,10 +213,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRequestingResubmit, setIsRequestingResubmit] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    title?: string;
+    message: string;
+    description?: string;
+    variant: ToastVariant;
+  } | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [typoModalOpen, setTypoModalOpen] = useState(false);
+  const [typoWarnings, setTypoWarnings] = useState<TypoGuardWarning[]>([]);
+  const pendingTypoActionRef = useRef<(() => void) | null>(null);
 
   const locked = isWorksheetLocked(worksheetStatus ?? undefined);
+  const pendingAdminApproval = worksheetStatus === "PENDING_APPROVAL_ADMIN";
   const showResubmitCta = canRequestResubmit(worksheetStatus ?? undefined);
 
   const businessDateLabel = useMemo(
@@ -210,8 +236,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
   const filteredIngredients = useMemo(() => {
-    if (!normalizedSearch) return ingredients;
-    return ingredients.filter((ing) => ing.name.toLowerCase().includes(normalizedSearch));
+    const sorted = [...ingredients].sort((a, b) =>
+      a.name.localeCompare(b.name, "id", { sensitivity: "base" })
+    );
+    if (!normalizedSearch) return sorted;
+    return sorted.filter((ing) => ing.name.toLowerCase().includes(normalizedSearch));
   }, [ingredients, normalizedSearch]);
 
   const filteredMenus = useMemo(() => {
@@ -262,12 +291,39 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     (items: IngredientRow[], preset?: Record<string, Partial<IngredientLineState>>) => {
       const next: Record<string, IngredientLineState> = {};
       for (const ing of items) {
-        next[ing.id] = createDefaultLine(preset?.[ing.id]);
+        const rowPreset = preset?.[ing.id];
+        next[ing.id] = createDefaultLine({
+          ...rowPreset,
+          closingStock:
+            rowPreset?.closingStock ??
+            String(Number.isFinite(Number(ing.current_stock)) ? ing.current_stock : 0),
+        });
       }
       setLines(next);
     },
     []
   );
+
+  const showSuccessToast = (message: string) => {
+    setError(null);
+    setToast({ message, variant: "success" });
+  };
+
+  const showPlainErrorToast = (message: string) => {
+    setError(message);
+    setToast({ message, variant: "error" });
+  };
+
+  const showTranslatedSubmitError = (err: unknown) => {
+    const translated = translateWorksheetSubmitError(err);
+    setError(translated.description);
+    setToast({
+      title: translated.title,
+      message: translated.description,
+      description: translated.description,
+      variant: translated.variant,
+    });
+  };
 
   const initSoldItems = useCallback(
     (menuList: MenuItemWithRecipe[], preset?: Record<string, string>) => {
@@ -417,6 +473,40 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     if (staff) void loadData();
   }, [staff, loadData]);
 
+  useWorksheetDraft({
+    department,
+    businessDate,
+    isLoading,
+    locked,
+    lines,
+    soldItems,
+    activeTab,
+    onRestore: (draft) => {
+      setLines(draft.lines);
+      setSoldItems(draft.soldItems);
+      setActiveTab(draft.activeTab);
+      showSuccessToast("Draft lokal dipulihkan setelah refresh.");
+    },
+  });
+
+  const runWithTypoGuard = (
+    fields: Array<keyof Pick<IngredientLineState, "inQty" | "closingStock" | "outQty">>,
+    action: () => void | Promise<void>
+  ) => {
+    const warnings = findTypoGuardWarnings(ingredients, lines, fields);
+    if (warnings.length === 0) {
+      void action();
+      return;
+    }
+    setTypoWarnings(warnings);
+    pendingTypoActionRef.current = () => void action();
+    setTypoModalOpen(true);
+  };
+
+  const clearDraftAfterSuccess = () => {
+    if (businessDate) clearWorksheetDraft(department, businessDate);
+  };
+
   const ensureDraftSession = async (
     date: string
   ): Promise<{ sessionId: string; status: ClosingStatus }> => {
@@ -524,9 +614,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan pasokan: ${inLineErr.message}`);
       }
 
-      setToast("Pasokan tersimpan. Form tetap bisa diedit untuk koreksi typo.");
+      showSuccessToast(
+        "Pasokan tersimpan. Stok akumulatif (masuk) — tidak perlu isi opname di kamar ini."
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan pasokan.");
+      showTranslatedSubmitError(err);
     } finally {
       setIsSavingReceive(false);
     }
@@ -563,9 +655,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan out stock: ${outLineErr.message}`);
       }
 
-      setToast("Out stock tersimpan. Form tetap bisa diedit untuk koreksi typo.");
+      showSuccessToast("Out stock tersimpan. Form tetap bisa diedit untuk koreksi typo.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan out stock.");
+      showTranslatedSubmitError(err);
       setActiveTab("outstock");
     } finally {
       setIsSavingOutStock(false);
@@ -573,16 +665,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const handleSaveOpname = async () => {
-    if (locked || isSavingOpname) return;
+    if (locked || isSavingOpname || !staff) return;
 
     const date = businessDate || resolveBusinessDate();
     setIsSavingOpname(true);
     setError(null);
 
     try {
-      await ensureDraftSession(date);
+      const freshIngredients = await refreshIngredientStockFromDb();
+      const { sessionId: activeSessionId } = await ensureDraftSession(date);
 
-      const ledgerDraft: StockLedgerInsert[] = ingredients.map((ing) => {
+      const ledgerDraft: StockLedgerInsert[] = freshIngredients.map((ing) => {
         const line = lines[ing.id] ?? DEFAULT_LINE;
         const in_qty = parseQty(line.inQty);
         const closing_stock = parseQty(line.closingStock);
@@ -607,9 +700,35 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan opname: ${ledgerErr.message}`);
       }
 
-      setToast("Opname tersimpan. Form tetap bisa diedit untuk koreksi typo.");
+      const opnameResult = await syncOpnameStockAndPending({
+        supabase,
+        sessionId: activeSessionId,
+        businessDate: date,
+        staffId: staff.id,
+        ingredients: freshIngredients,
+        lines,
+      });
+
+      setIngredients(
+        freshIngredients.map((ing) => {
+          if (opnameResult.pendingIds.includes(ing.id)) {
+            return ing;
+          }
+          return {
+            ...ing,
+            current_stock: parseQty(lines[ing.id]?.closingStock ?? "0"),
+          };
+        })
+      );
+
+      showSuccessToast(
+        opnameResult.hasPendingApproval
+          ? `Opname tersimpan. ${opnameResult.pendingIds.length} bahan selisih >15% akan direview Admin setelah Submit Report Closing — stok utama belum di-override.`
+          : "Opname tersimpan — stok fisik meng-override stok sistem."
+      );
+
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan opname.");
+      showTranslatedSubmitError(err);
     } finally {
       setIsSavingOpname(false);
     }
@@ -641,9 +760,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
 
       setWorksheetStatus("DRAFT");
-      setToast("Worksheet dibuka kembali. Semua kamar bisa diedit.");
+      showSuccessToast("Worksheet dibuka kembali. Semua kamar bisa diedit.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal membuka kembali worksheet.");
+      showTranslatedSubmitError(err);
     } finally {
       setIsRequestingResubmit(false);
     }
@@ -652,16 +771,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const handleSubmit = async () => {
     if (locked || isSubmitting || outstockHasBlockingErrors) return;
 
-    if (!staff) {
-      setError("Sesi staf tidak ditemukan.");
+    if (!staff?.id) {
+      setError("Sesi staf tidak ditemukan. Silakan logout dan login PIN ulang.");
       return;
     }
+
+    const submittingStaffId = staff.id;
 
     try {
       const freshIngredients = await refreshIngredientStockFromDb();
       await assertOutstockPayloadValid(freshIngredients);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Validasi out stock gagal.");
+      showPlainErrorToast(err instanceof Error ? err.message : "Validasi out stock gagal.");
       setActiveTab("outstock");
       return;
     }
@@ -670,36 +791,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     try {
       menuListForCalc = await fetchMenusWithActiveRecipes(supabase, department);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat resep aktif.");
+      showTranslatedSubmitError(err);
       return;
-    }
-
-    const menuTheoreticalPreview = computeMenuTheoreticalUsage(menuListForCalc, soldItems);
-
-    for (const ing of ingredients) {
-      const line = lines[ing.id] ?? DEFAULT_LINE;
-      const inQty = parseQty(line.inQty);
-      const closingStock = parseQty(line.closingStock);
-      const outQty = parseQty(line.outQty);
-      const menuTheoretical = menuTheoreticalPreview.get(ing.id) ?? 0;
-      const theoretical = menuTheoretical + outQty;
-      const openingStock = closingStock - inQty + theoretical;
-
-      if (closingStock < inQty) {
-        setError(
-          `${ing.name}: Sisa opname tidak boleh lebih kecil dari pasokan masuk (min. ${inQty} ${ing.unit}).`
-        );
-        setActiveTab("opname");
-        return;
-      }
-
-      if (openingStock < 0) {
-        setError(
-          `${ing.name}: Data tidak valid — stok awal terhitung negatif. Periksa opname, pasokan, out stock, dan penjualan menu.`
-        );
-        setActiveTab("opname");
-        return;
-      }
     }
 
     const confirmed = window.confirm(
@@ -717,30 +810,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const freshIngredients = await refreshIngredientStockFromDb();
       await assertOutstockPayloadValid(freshIngredients);
 
-      const { data: wsRow, error: wsErr } = await supabase
-        .from("worksheet_session")
-        .upsert(
-          {
-            business_date: date,
-            department,
-            status: "SUBMITTED",
-            submitted_at: submittedAt,
-            submitted_by_staff_id: staff.id,
-            locked_at: null,
-            locked_by_staff_id: null,
-          },
-          { onConflict: "business_date,department" }
-        )
-        .select("id, status")
-        .single();
-
-      if (wsErr || !wsRow) {
-        throw new Error(wsErr?.message ?? "Gagal memperbarui worksheet_session.");
-      }
-
-      const activeSessionId = wsRow.id;
-      setWorksheetStatus("SUBMITTED");
-      setSessionId(activeSessionId);
+      const { sessionId: activeSessionId } = await ensureDraftSession(date);
 
       const inLinePayload = ingredients.map((ing) => ({
         session_id: activeSessionId,
@@ -819,22 +889,34 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal upsert stock_ledger: ${ledgerErr.message}`);
       }
 
-      for (const ing of freshIngredients) {
-        const line = lines[ing.id] ?? DEFAULT_LINE;
-        const closing_stock = parseQty(line.closingStock);
+      const opnameResult = await syncOpnameStockAndPending({
+        supabase,
+        sessionId: activeSessionId,
+        businessDate: date,
+        staffId: submittingStaffId,
+        ingredients: freshIngredients,
+        lines,
+      });
 
-        const { error: stockErr } = await supabase
-          .from("ingredient")
-          .update({ current_stock: closing_stock })
-          .eq("id", ing.id);
+      const finalStatus: ClosingStatus = opnameResult.hasPendingApproval
+        ? "PENDING_APPROVAL_ADMIN"
+        : "SUBMITTED";
 
-        if (stockErr) {
-          throw new Error(`Gagal update current_stock ${ing.name}: ${stockErr.message}`);
-        }
-      }
+      await finalizeWorksheetSession({
+        supabase,
+        sessionId: activeSessionId,
+        staffId: submittingStaffId,
+        submittedAt,
+        status: finalStatus,
+      });
+
+      setWorksheetStatus(finalStatus);
 
       setIngredients(
         freshIngredients.map((ing) => {
+          if (opnameResult.pendingIds.includes(ing.id)) {
+            return ing;
+          }
           const line = lines[ing.id] ?? DEFAULT_LINE;
           return { ...ing, current_stock: parseQty(line.closingStock) };
         })
@@ -847,9 +929,15 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       if (dayErr) throw new Error(dayErr.message);
 
-      setToast("Laporan closing berhasil dikunci dan disimpan ke Supabase.");
+      clearDraftAfterSuccess();
+
+      showSuccessToast(
+        opnameResult.hasPendingApproval
+          ? `Laporan closing berhasil dikirim. ${opnameResult.pendingIds.length} bahan selisih besar masuk antrian review Admin — operasional Anda sudah selesai.`
+          : "Laporan closing berhasil dikunci dan disimpan ke Supabase."
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal submit laporan closing.");
+      showTranslatedSubmitError(err);
     } finally {
       setIsSubmitting(false);
     }
@@ -876,9 +964,39 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           ? "Menyimpan out stock…"
           : "Menyimpan opname…";
 
+  const stickySaveReceive = () =>
+    runWithTypoGuard(["inQty"], () => void handleSaveReceive());
+  const stickySaveOutStock = () =>
+    runWithTypoGuard(["outQty"], () => void handleSaveOutStock());
+  const stickySaveOpname = () =>
+    runWithTypoGuard(["closingStock"], () => void handleSaveOpname());
+  const stickySubmit = () =>
+    runWithTypoGuard(["inQty", "closingStock", "outQty"], () => void handleSubmit());
+
   return (
-    <main className="mx-auto min-h-screen max-w-lg bg-zinc-950 pb-32">
-      <Toast message={toast} onDismiss={() => setToast(null)} />
+    <main className="mx-auto min-h-screen max-w-lg bg-zinc-950 pb-24">
+      <Toast
+        message={toast?.message ?? null}
+        title={toast?.title}
+        description={toast?.description}
+        variant={toast?.variant ?? "success"}
+        onDismiss={() => setToast(null)}
+      />
+
+      <TypoConfirmModal
+        open={typoModalOpen}
+        warnings={typoWarnings}
+        onCancel={() => {
+          setTypoModalOpen(false);
+          pendingTypoActionRef.current = null;
+        }}
+        onConfirm={() => {
+          setTypoModalOpen(false);
+          const action = pendingTypoActionRef.current;
+          pendingTypoActionRef.current = null;
+          if (action) action();
+        }}
+      />
 
       {showBlockingOverlay ? (
         <div
@@ -898,6 +1016,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
               {title}
+            </p>
+            <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+              Penanggung jawab (otomatis dari PIN)
             </p>
             <h1 className="text-lg font-bold text-zinc-50">{staff.name}</h1>
             {businessDateLabel ? (
@@ -985,6 +1106,16 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           </p>
         ) : null}
 
+        {pendingAdminApproval ? (
+          <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+            <p className="text-sm font-semibold text-amber-100">Review Admin berjalan di belakang layar</p>
+            <p className="mt-1 text-xs text-amber-200/90">
+              Laporan closing Anda sudah terkirim. Beberapa opname selisih &gt;15% menunggu tinjauan Admin di
+              dashboard Monitoring — stok utama tidak di-override sampai Admin menyetujui.
+            </p>
+          </div>
+        ) : null}
+
         {locked ? (
           <div className="mb-4 rounded-xl border border-sky-500/40 bg-sky-500/10 p-4">
             <div className="flex items-start gap-3">
@@ -1044,8 +1175,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   Kamar 1 — Receive
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
-                  Default 0 — hapus lalu isi. Simpan ke Supabase; form tetap bisa diedit untuk koreksi
-                  typo.
+                  Catat barang masuk saja (akumulatif). Tidak perlu isi opname di kamar ini — stok baru =
+                  stok lama + qty masuk saat closing.
                 </p>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (
@@ -1083,23 +1214,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     );
                   })}
                 </ul>
-                {!locked ? (
-                  <div className="mt-6">
-                    <button
-                      type="button"
-                      disabled={isSavingReceive || isSubmitting}
-                      onClick={() => void handleSaveReceive()}
-                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:opacity-50"
-                    >
-                      {isSavingReceive ? (
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      ) : (
-                        <Package className="h-5 w-5" />
-                      )}
-                      Simpan Pasokan
-                    </button>
-                  </div>
-                ) : null}
               </section>
             ) : null}
 
@@ -1195,23 +1309,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     );
                   })}
                 </ul>
-                {!locked ? (
-                  <div className="mt-6">
-                    <button
-                      type="button"
-                      disabled={isSavingOutStock || isSubmitting || outstockHasBlockingErrors}
-                      onClick={() => void handleSaveOutStock()}
-                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isSavingOutStock ? (
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      ) : (
-                        <PackageMinus className="h-5 w-5" />
-                      )}
-                      Simpan Out Stock
-                    </button>
-                  </div>
-                ) : null}
               </section>
             ) : null}
 
@@ -1221,8 +1318,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   Kamar 3 — Stock Opname
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
-                  Nilai 0 valid. Simpan sisa fisik ke Supabase — form tetap bisa diedit sebelum submit
-                  final.
+                  Nilai fisik dari staff adalah hukum tertinggi dan akan meng-override stok sistem.
+                  Selisih &gt;15% ditahan untuk persetujuan Admin.
                 </p>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (
@@ -1245,6 +1342,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                           <span className="mb-1 block text-xs text-zinc-400">
                             Sisa fisik (closing_stock)
                           </span>
+                          <p className="mb-2 text-xs font-medium text-sky-300/90">
+                            {formatSystemStockGuide(ing)}
+                          </p>
                           <input
                             type="number"
                             inputMode="decimal"
@@ -1260,23 +1360,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     );
                   })}
                 </ul>
-                {!locked ? (
-                  <div className="mt-6">
-                    <button
-                      type="button"
-                      disabled={isSavingOpname || isSubmitting}
-                      onClick={() => void handleSaveOpname()}
-                      className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-indigo-500/50 bg-indigo-600/20 font-bold text-indigo-100 active:bg-indigo-600/35 disabled:opacity-50"
-                    >
-                      {isSavingOpname ? (
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      ) : (
-                        <ClipboardList className="h-5 w-5" />
-                      )}
-                      Simpan Opname
-                    </button>
-                  </div>
-                ) : null}
               </section>
             ) : null}
 
@@ -1353,24 +1436,75 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   </ul>
                 )}
 
-                {!locked && ingredients.length > 0 ? (
-                  <div className="mt-8">
-                    <button
-                      type="button"
-                      disabled={isSubmitting || outstockHasBlockingErrors}
-                      onClick={() => void handleSubmit()}
-                      className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-                      {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}
-                    </button>
-                  </div>
-                ) : null}
               </section>
             ) : null}
           </>
         )}
       </div>
+
+      {!locked && !isLoading && ingredients.length > 0 ? (
+        <WorksheetStickyActionBar>
+          {activeTab === "receive" ? (
+            <button
+              type="button"
+              disabled={isSavingReceive || isSubmitting}
+              onClick={stickySaveReceive}
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:opacity-50"
+            >
+              {isSavingReceive ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Package className="h-5 w-5" />
+              )}
+              Simpan Pasokan
+            </button>
+          ) : null}
+
+          {activeTab === "outstock" ? (
+            <button
+              type="button"
+              disabled={isSavingOutStock || isSubmitting || outstockHasBlockingErrors}
+              onClick={stickySaveOutStock}
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSavingOutStock ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <PackageMinus className="h-5 w-5" />
+              )}
+              Simpan Out Stock
+            </button>
+          ) : null}
+
+          {activeTab === "opname" ? (
+            <button
+              type="button"
+              disabled={isSavingOpname || isSubmitting}
+              onClick={stickySaveOpname}
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-indigo-500/50 bg-indigo-600/20 font-bold text-indigo-100 active:bg-indigo-600/35 disabled:opacity-50"
+            >
+              {isSavingOpname ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <ClipboardList className="h-5 w-5" />
+              )}
+              Simpan Opname
+            </button>
+          ) : null}
+
+          {activeTab === "sold" ? (
+            <button
+              type="button"
+              disabled={isSubmitting || outstockHasBlockingErrors}
+              onClick={stickySubmit}
+              className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
+              {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}
+            </button>
+          ) : null}
+        </WorksheetStickyActionBar>
+      ) : null}
     </main>
   );
 }

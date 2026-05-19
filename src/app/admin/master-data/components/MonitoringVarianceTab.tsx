@@ -48,6 +48,11 @@ function StatusBadge({ status }: { status: ClosingStatus | "NONE" }) {
       className: "bg-amber-500/20 text-amber-300 ring-amber-500/40",
       Icon: Send,
     },
+    PENDING_APPROVAL_ADMIN: {
+      label: "Pending Admin",
+      className: "bg-rose-500/20 text-rose-300 ring-rose-500/40",
+      Icon: AlertTriangle,
+    },
     ADJUSTED: {
       label: "Adjusted",
       className: "bg-orange-500/20 text-orange-300 ring-orange-500/40",

@@ -2,31 +2,72 @@
 
 import { useEffect } from "react";
 
+export type ToastVariant = "success" | "error" | "warning";
+
 type ToastProps = {
+  /** Teks tunggal (mode sederhana, kompatibel komponen lama) */
   message: string | null;
-  variant?: "success" | "error";
+  title?: string | null;
+  description?: string | null;
+  variant?: ToastVariant;
+  /** Durasi tampil (ms). Default: sukses 3,2s; error/warning 6s */
+  durationMs?: number;
+  /** Tailwind position classes; default clears sticky worksheet action bar */
+  positionClassName?: string;
   onDismiss: () => void;
 };
 
-export function Toast({ message, variant = "success", onDismiss }: ToastProps) {
-  useEffect(() => {
-    if (!message) return;
-    const timer = window.setTimeout(onDismiss, 3200);
-    return () => window.clearTimeout(timer);
-  }, [message, onDismiss]);
+const VARIANT_STYLES: Record<ToastVariant, string> = {
+  success: "border border-emerald-500/40 bg-emerald-950 text-emerald-200",
+  error: "border border-red-500/50 bg-red-950 text-red-100",
+  warning: "border border-amber-500/50 bg-amber-950 text-amber-100",
+};
 
-  if (!message) return null;
+function defaultDuration(variant: ToastVariant): number {
+  return variant === "success" ? 3200 : 6000;
+}
+
+export function Toast({
+  message,
+  title,
+  description,
+  variant = "success",
+  durationMs,
+  positionClassName = "bottom-24",
+  onDismiss,
+}: ToastProps) {
+  const visible = Boolean(message || title || description);
+
+  useEffect(() => {
+    if (!visible) return;
+    const ms = durationMs ?? defaultDuration(variant);
+    const timer = window.setTimeout(onDismiss, ms);
+    return () => window.clearTimeout(timer);
+  }, [visible, message, title, description, durationMs, variant, onDismiss]);
+
+  if (!visible) return null;
+
+  const body = description ?? message ?? "";
+  const heading = title ?? (!description && message ? null : title);
 
   return (
     <div
       role="status"
-      className={`fixed bottom-6 left-1/2 z-[100] max-w-sm -translate-x-1/2 rounded-xl px-4 py-3 text-center text-sm font-medium shadow-lg ${
-        variant === "success"
-          ? "border border-emerald-500/40 bg-emerald-950 text-emerald-200"
-          : "border border-red-500/40 bg-red-950 text-red-200"
-      }`}
+      aria-live="assertive"
+      className={`fixed left-1/2 z-[100] w-[min(100%,22rem)] -translate-x-1/2 rounded-xl px-4 py-3 shadow-lg ${positionClassName} ${VARIANT_STYLES[variant]}`}
     >
-      {message}
+      {heading ? (
+        <p className="text-left text-sm font-bold leading-snug">{heading}</p>
+      ) : null}
+      {body ? (
+        <p
+          className={`text-left text-sm leading-snug ${
+            heading ? "mt-1.5 font-normal opacity-95" : "font-medium"
+          }`}
+        >
+          {body}
+        </p>
+      ) : null}
     </div>
   );
 }
