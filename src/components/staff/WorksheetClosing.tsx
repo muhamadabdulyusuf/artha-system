@@ -38,8 +38,12 @@ import {
 import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
 import { clearWorksheetDraft } from "@/lib/worksheet/draftStorage";
 import { finalizeWorksheetSession } from "@/lib/worksheet/finalizeSession";
-import { syncOpnameStockAndPending } from "@/lib/worksheet/opnameSubmit";
+import {
+  enqueueOpnamePendingRecords,
+  evaluateOpnameSubmission,
+} from "@/lib/worksheet/opnameSubmit";
 import { formatSystemStockGuide } from "@/lib/worksheet/opnameVariance";
+import { ledgerRowToSnapshot } from "@/lib/worksheet/stockLedgerSnapshot";
 import {
   findTypoGuardWarnings,
   type TypoGuardWarning,
@@ -445,10 +449,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         );
 
       for (const row of ledgers ?? []) {
+        const snapshot = ledgerRowToSnapshot(row);
         const existing = ingredientPreset[row.ingredient_id];
         ingredientPreset[row.ingredient_id] = {
-          inQty: existing?.inQty ?? String(row.in_qty),
-          closingStock: String(row.closing_stock),
+          inQty: existing?.inQty ?? String(snapshot?.in_qty ?? 0),
+          closingStock: String(snapshot?.closing_stock ?? 0),
           outQty: existing?.outQty,
           outNote: existing?.outNote,
         };
@@ -700,32 +705,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan opname: ${ledgerErr.message}`);
       }
 
-      const opnameResult = await syncOpnameStockAndPending({
-        supabase,
-        sessionId: activeSessionId,
-        businessDate: date,
-        staffId: staff.id,
-        ingredients: freshIngredients,
-        lines,
-      });
-
-      setIngredients(
-        freshIngredients.map((ing) => {
-          if (opnameResult.pendingIds.includes(ing.id)) {
-            return ing;
-          }
-          return {
-            ...ing,
-            current_stock: parseQty(lines[ing.id]?.closingStock ?? "0"),
-          };
-        })
-      );
-
-      showSuccessToast(
-        opnameResult.hasPendingApproval
-          ? `Opname tersimpan. ${opnameResult.pendingIds.length} bahan selisih >15% akan direview Admin setelah Submit Report Closing — stok utama belum di-override.`
-          : "Opname tersimpan — stok fisik meng-override stok sistem."
-      );
+      showSuccessToast("Opname tersimpan. Lanjutkan tab Menu lalu Submit Report Closing.");
 
     } catch (err) {
       showTranslatedSubmitError(err);
@@ -805,15 +785,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     const date = businessDate || resolveBusinessDate();
     const submittedAt = new Date().toISOString();
+    let activeSessionId: string | null = null;
+    let opnameEvalForAsync: ReturnType<typeof evaluateOpnameSubmission> | null = null;
 
     try {
       const freshIngredients = await refreshIngredientStockFromDb();
       await assertOutstockPayloadValid(freshIngredients);
 
-      const { sessionId: activeSessionId } = await ensureDraftSession(date);
+      const { sessionId: ensuredSessionId } = await ensureDraftSession(date);
+      activeSessionId = ensuredSessionId;
 
       const inLinePayload = ingredients.map((ing) => ({
-        session_id: activeSessionId,
+        session_id: ensuredSessionId,
         ingredient_id: ing.id,
         quantity: parseQty(lines[ing.id]?.inQty ?? "0"),
       }));
@@ -829,7 +812,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const outLinePayload = freshIngredients.map((ing) => {
         const line = lines[ing.id] ?? DEFAULT_LINE;
         return {
-          session_id: activeSessionId,
+          session_id: ensuredSessionId,
           ingredient_id: ing.id,
           quantity: parseQty(line.outQty),
           note: line.outNote.trim(),
@@ -845,7 +828,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
 
       const soldPayload = menuListForCalc.map((menu) => ({
-        session_id: activeSessionId,
+        session_id: ensuredSessionId,
         menu_item_id: menu.id,
         quantity_sold: parseQty(soldItems[menu.id] ?? "0"),
       }));
@@ -889,38 +872,32 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal upsert stock_ledger: ${ledgerErr.message}`);
       }
 
-      const opnameResult = await syncOpnameStockAndPending({
-        supabase,
-        sessionId: activeSessionId,
-        businessDate: date,
-        staffId: submittingStaffId,
+      opnameEvalForAsync = evaluateOpnameSubmission({
         ingredients: freshIngredients,
         lines,
+        ledgerRows: ledgerPayload.map((row) => ({
+          ingredient_id: row.ingredient_id,
+          opening_stock: row.opening_stock,
+          in_qty: row.in_qty,
+          theoretical_usage: row.theoretical_usage,
+          adjustment_qty: row.adjustment_qty,
+          closing_stock: row.closing_stock,
+        })),
       });
 
-      const finalStatus: ClosingStatus = opnameResult.hasPendingApproval
+      const finalStatus: ClosingStatus = opnameEvalForAsync.hasPendingApproval
         ? "PENDING_APPROVAL_ADMIN"
         : "SUBMITTED";
 
       await finalizeWorksheetSession({
         supabase,
-        sessionId: activeSessionId,
+        sessionId: ensuredSessionId,
         staffId: submittingStaffId,
         submittedAt,
         status: finalStatus,
       });
 
       setWorksheetStatus(finalStatus);
-
-      setIngredients(
-        freshIngredients.map((ing) => {
-          if (opnameResult.pendingIds.includes(ing.id)) {
-            return ing;
-          }
-          const line = lines[ing.id] ?? DEFAULT_LINE;
-          return { ...ing, current_stock: parseQty(line.closingStock) };
-        })
-      );
 
       const { error: dayErr } = await supabase
         .from("business_day")
@@ -930,16 +907,21 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       if (dayErr) throw new Error(dayErr.message);
 
       clearDraftAfterSuccess();
-
-      showSuccessToast(
-        opnameResult.hasPendingApproval
-          ? `Laporan closing berhasil dikirim. ${opnameResult.pendingIds.length} bahan selisih besar masuk antrian review Admin — operasional Anda sudah selesai.`
-          : "Laporan closing berhasil dikunci dan disimpan ke Supabase."
-      );
+      showSuccessToast("Laporan Closing Berhasil Dikirim!");
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
       setIsSubmitting(false);
+    }
+
+    if (activeSessionId && opnameEvalForAsync?.hasPendingApproval) {
+      enqueueOpnamePendingRecords({
+        supabase,
+        sessionId: activeSessionId,
+        businessDate: date,
+        staffId: submittingStaffId,
+        evaluation: opnameEvalForAsync,
+      });
     }
   };
 
@@ -955,7 +937,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     isSubmitting || isSavingReceive || isSavingOutStock || isSavingOpname || isRequestingResubmit;
 
   const overlayMessage = isSubmitting
-    ? "Mengunci laporan ke Supabase…"
+    ? "Mengirim laporan closing…"
     : isRequestingResubmit
       ? "Membuka kembali worksheet…"
       : isSavingReceive
@@ -1107,11 +1089,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         ) : null}
 
         {pendingAdminApproval ? (
-          <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
-            <p className="text-sm font-semibold text-amber-100">Review Admin berjalan di belakang layar</p>
-            <p className="mt-1 text-xs text-amber-200/90">
-              Laporan closing Anda sudah terkirim. Beberapa opname selisih &gt;15% menunggu tinjauan Admin di
-              dashboard Monitoring — stok utama tidak di-override sampai Admin menyetujui.
+          <div className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4">
+            <p className="text-sm font-semibold text-emerald-100">Laporan Closing Berhasil Dikirim!</p>
+            <p className="mt-1 text-xs text-emerald-200/90">
+              Sesi Anda sudah selesai. Tim Admin akan meninjau data di dashboard Monitoring jika diperlukan.
             </p>
           </div>
         ) : null}
@@ -1318,8 +1299,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   Kamar 3 — Stock Opname
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
-                  Nilai fisik dari staff adalah hukum tertinggi dan akan meng-override stok sistem.
-                  Selisih &gt;15% ditahan untuk persetujuan Admin.
+                  Catat sisa fisik di rak. Setelah Submit Report Closing di tab Menu, data dikirim apa adanya —
+                  tidak perlu menunggu atau menyelesaikan selisih di sini.
                 </p>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (

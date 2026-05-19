@@ -1,8 +1,16 @@
 import type { IngredientRow } from "@/lib/types/database";
 import { parseWorksheetQty } from "@/lib/worksheet/outstockValidation";
+import {
+  ledgerRowToSnapshot,
+  resolveSystemStockForVariance,
+  type StockLedgerSnapshot,
+} from "@/lib/worksheet/stockLedgerSnapshot";
 
-/** Variance above this ratio of system stock requires admin approval */
+/** Variance above this ratio of system stock — penanda prioritas di dashboard Admin */
 export const OPNAME_VARIANCE_APPROVAL_THRESHOLD = 0.15;
+
+/** Selisih di bawah ini dianggap nol (floating point) */
+export const OPNAME_VARIANCE_EPSILON = 0.0001;
 
 export type OpnameVarianceResult = {
   ingredientId: string;
@@ -27,15 +35,18 @@ export function formatSystemStockGuide(
 
 export function computeOpnameVariance(
   ingredient: Pick<IngredientRow, "id" | "name" | "unit" | "current_stock">,
-  physicalStockRaw: string
+  physicalStockRaw: string,
+  ledgerSnapshot?: StockLedgerSnapshot | null
 ): OpnameVarianceResult {
-  const systemStock = Number(ingredient.current_stock);
-  const safeSystem = Number.isFinite(systemStock) ? systemStock : 0;
+  const systemStock = resolveSystemStockForVariance(
+    ingredient.current_stock,
+    ledgerSnapshot ?? null
+  );
   const physicalStock = parseWorksheetQty(physicalStockRaw);
-  const varianceQty = physicalStock - safeSystem;
+  const varianceQty = physicalStock - systemStock;
   const variancePct =
-    safeSystem > 0
-      ? Math.abs(varianceQty) / safeSystem
+    systemStock > 0
+      ? Math.abs(varianceQty) / systemStock
       : physicalStock > 0
         ? 1
         : 0;
@@ -44,7 +55,7 @@ export function computeOpnameVariance(
     ingredientId: ingredient.id,
     ingredientName: ingredient.name,
     unit: ingredient.unit,
-    systemStock: safeSystem,
+    systemStock,
     physicalStock,
     varianceQty,
     variancePct,
@@ -54,13 +65,49 @@ export function computeOpnameVariance(
 
 export function analyzeOpnameVariances(
   ingredients: IngredientRow[],
-  lines: Record<string, { closingStock: string }>
+  lines: Record<string, { closingStock: string }>,
+  ledgerByIngredientId?: Map<string, StockLedgerSnapshot | null>
 ): OpnameVarianceResult[] {
-  return ingredients.map((ing) =>
-    computeOpnameVariance(ing, lines[ing.id]?.closingStock ?? "0")
-  );
+  return ingredients.map((ing) => {
+    const rawLedger = ledgerByIngredientId?.get(ing.id);
+    const snapshot =
+      rawLedger === undefined ? null : rawLedger === null ? null : rawLedger;
+    return computeOpnameVariance(
+      ing,
+      lines[ing.id]?.closingStock ?? "0",
+      snapshot
+    );
+  });
 }
 
+export function hasOpnameVarianceRequiringAdmin(results: OpnameVarianceResult[]): boolean {
+  return results.some((r) => Math.abs(r.varianceQty) > OPNAME_VARIANCE_EPSILON);
+}
+
+/** @deprecated Gunakan hasOpnameVarianceRequiringAdmin */
 export function hasPendingApprovalVariances(results: OpnameVarianceResult[]): boolean {
-  return results.some((r) => r.requiresApproval && r.physicalStock !== r.systemStock);
+  return hasOpnameVarianceRequiringAdmin(results);
+}
+
+export function variancesNeedingAdminQueue(
+  results: OpnameVarianceResult[]
+): OpnameVarianceResult[] {
+  return results.filter((r) => Math.abs(r.varianceQty) > OPNAME_VARIANCE_EPSILON);
+}
+
+export function buildLedgerMapFromRows(
+  rows: Array<{
+    ingredient_id: string;
+    opening_stock?: unknown;
+    in_qty?: unknown;
+    theoretical_usage?: unknown;
+    adjustment_qty?: unknown;
+    closing_stock?: unknown;
+  }> | null
+): Map<string, StockLedgerSnapshot | null> {
+  const map = new Map<string, StockLedgerSnapshot | null>();
+  for (const row of rows ?? []) {
+    map.set(row.ingredient_id, ledgerRowToSnapshot(row));
+  }
+  return map;
 }
