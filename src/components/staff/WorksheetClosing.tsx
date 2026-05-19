@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { LogoutButton } from "@/components/auth/LogoutButton";
 import { Toast, type ToastVariant } from "@/components/ui/Toast";
 import { translateWorksheetSubmitError } from "@/lib/worksheet/errorTranslator";
+import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession, type StaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type {
@@ -32,6 +33,7 @@ import {
   OUTSTOCK_LOGICAL_FALLACY_MESSAGE,
   findOutstockValidationErrors,
   formatStockAvailability,
+  getClosingSubmitBlocker,
   hasOutstockValidationErrors,
   validateOutstockLine,
 } from "@/lib/worksheet/outstockValidation";
@@ -231,6 +233,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const locked = isWorksheetLocked(worksheetStatus ?? undefined);
   const pendingAdminApproval = worksheetStatus === "PENDING_APPROVAL_ADMIN";
   const showResubmitCta = canRequestResubmit(worksheetStatus ?? undefined);
+  const canEdit = canEditStaffData(staff?.role);
 
   const businessDateLabel = useMemo(
     () => (businessDate ? formatBusinessDateLabel(businessDate) : ""),
@@ -328,6 +331,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       variant: translated.variant,
     });
   };
+
+  const focusWorksheetField = useCallback(
+    (tab: WorksheetTab, ingredientId?: string) => {
+      setActiveTab(tab);
+      if (!ingredientId) return;
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById(`worksheet-${tab}-${ingredientId}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    },
+    []
+  );
 
   const initSoldItems = useCallback(
     (menuList: MenuItemWithRecipe[], preset?: Record<string, string>) => {
@@ -749,10 +765,20 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const handleSubmit = async () => {
-    if (locked || isSubmitting || outstockHasBlockingErrors) return;
+    if (isSubmitting) {
+      showPlainErrorToast("Laporan sedang dikirim, tunggu sebentar ya.");
+      return;
+    }
+
+    const blocker = getClosingSubmitBlocker(ingredients, lines, { locked });
+    if (blocker) {
+      showPlainErrorToast(blocker.message);
+      focusWorksheetField(blocker.tab, blocker.ingredientId);
+      return;
+    }
 
     if (!staff?.id) {
-      setError("Sesi staf tidak ditemukan. Silakan logout dan login PIN ulang.");
+      showPlainErrorToast("Sesi staf tidak ditemukan. Silakan logout dan login PIN ulang.");
       return;
     }
 
@@ -762,8 +788,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const freshIngredients = await refreshIngredientStockFromDb();
       await assertOutstockPayloadValid(freshIngredients);
     } catch (err) {
-      showPlainErrorToast(err instanceof Error ? err.message : "Validasi out stock gagal.");
-      setActiveTab("outstock");
+      const message = err instanceof Error ? err.message : "Validasi out stock gagal.";
+      showPlainErrorToast(message);
+      const retryBlocker = getClosingSubmitBlocker(ingredients, lines, { locked });
+      focusWorksheetField(retryBlocker?.tab ?? "outstock", retryBlocker?.ingredientId);
       return;
     }
 
@@ -1109,7 +1137,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   Status: <span className="font-medium">{worksheetStatus}</span>. Input dinonaktifkan
                   hingga worksheet dibuka kembali.
                 </p>
-                {showResubmitCta ? (
+                {showResubmitCta && canEdit ? (
                   <button
                     type="button"
                     disabled={isRequestingResubmit || isSubmitting}
@@ -1222,6 +1250,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
                     return (
                       <li
+                        id={`worksheet-outstock-${ing.id}`}
                         key={ing.id}
                         className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
                       >
@@ -1423,7 +1452,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         )}
       </div>
 
-      {!locked && !isLoading && ingredients.length > 0 ? (
+      {!locked && canEdit && !isLoading && ingredients.length > 0 ? (
         <WorksheetStickyActionBar>
           {activeTab === "receive" ? (
             <button
@@ -1476,9 +1505,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           {activeTab === "sold" ? (
             <button
               type="button"
-              disabled={isSubmitting || outstockHasBlockingErrors}
               onClick={stickySubmit}
-              className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500"
             >
               {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
               {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}

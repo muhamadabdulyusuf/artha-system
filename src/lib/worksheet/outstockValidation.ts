@@ -84,3 +84,43 @@ export function hasOutstockValidationErrors(
 ): boolean {
   return findOutstockValidationErrors(ingredients, lines).length > 0;
 }
+
+export type ClosingSubmitBlocker = {
+  message: string;
+  tab: "receive" | "outstock" | "opname" | "sold";
+  ingredientId?: string;
+};
+
+/** Validasi sebelum Submit Report Closing — tidak memanggil Supabase. */
+export function getClosingSubmitBlocker(
+  ingredients: IngredientRow[],
+  lines: Record<string, OutstockLineInput>,
+  options?: { locked?: boolean }
+): ClosingSubmitBlocker | null {
+  if (options?.locked) {
+    return {
+      message:
+        "Worksheet sudah terkunci. Gunakan Request Resubmit di tab Menu jika perlu koreksi.",
+      tab: "sold",
+    };
+  }
+
+  const outErrors = findOutstockValidationErrors(ingredients, lines);
+  if (outErrors.length > 0) {
+    const first = outErrors[0];
+    if (first.exceedsStock) {
+      return {
+        message: OUTSTOCK_LOGICAL_FALLACY_MESSAGE,
+        tab: "outstock",
+        ingredientId: first.ingredientId,
+      };
+    }
+    return {
+      message: `Isi dulu keterangan Out Stock untuk "${first.ingredientName}" ya!`,
+      tab: "outstock",
+      ingredientId: first.ingredientId,
+    };
+  }
+
+  return null;
+}

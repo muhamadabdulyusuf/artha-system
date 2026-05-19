@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Check, Loader2, X } from "lucide-react";
+import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { Department, WorksheetOpnamePendingRow } from "@/lib/types/database";
@@ -14,6 +15,7 @@ type PendingWithIngredient = WorksheetOpnamePendingRow & {
 
 export function OpnameApprovalPanel() {
   const supabase = getSupabaseClient();
+  const canEdit = canEditStaffData(getStaffSession()?.role);
   const [pending, setPending] = useState<PendingWithIngredient[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actingId, setActingId] = useState<string | null>(null);
@@ -182,30 +184,34 @@ export function OpnameApprovalPanel() {
                     </dd>
                   </div>
                 </dl>
-                <div className="mt-4 flex gap-2">
-                  <button
-                    type="button"
-                    disabled={actingId === row.id}
-                    onClick={() => void handleReview(row, "APPROVED")}
-                    className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg bg-emerald-600/80 text-sm font-bold text-white disabled:opacity-50"
-                  >
-                    {actingId === row.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Check className="h-4 w-4" />
-                    )}
-                    Setujui
-                  </button>
-                  <button
-                    type="button"
-                    disabled={actingId === row.id}
-                    onClick={() => void handleReview(row, "REJECTED")}
-                    className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg border border-red-500/50 bg-red-500/10 text-sm font-bold text-red-200 disabled:opacity-50"
-                  >
-                    <X className="h-4 w-4" />
-                    Tolak
-                  </button>
-                </div>
+                {canEdit ? (
+                  <div className="mt-4 flex gap-2">
+                    <button
+                      type="button"
+                      disabled={actingId === row.id}
+                      onClick={() => void handleReview(row, "APPROVED")}
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg bg-emerald-600/80 text-sm font-bold text-white disabled:opacity-50"
+                    >
+                      {actingId === row.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Check className="h-4 w-4" />
+                      )}
+                      Setujui
+                    </button>
+                    <button
+                      type="button"
+                      disabled={actingId === row.id}
+                      onClick={() => void handleReview(row, "REJECTED")}
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg border border-red-500/50 bg-red-500/10 text-sm font-bold text-red-200 disabled:opacity-50"
+                    >
+                      <X className="h-4 w-4" />
+                      Tolak
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-xs text-zinc-500">Mode penonton: tidak dapat menyetujui atau menolak.</p>
+                )}
               </li>
             );
           })}

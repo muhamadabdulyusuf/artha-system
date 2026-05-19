@@ -1,6 +1,12 @@
 export type Department = "bar" | "kitchen";
+export type IngredientKind = "raw" | "premix";
 export type IngredientUnit = "ml" | "gram" | "pcs";
-export type StaffRole = "admin" | "op_manager" | "bar_staff" | "kitchen_staff";
+export type StaffRole =
+  | "admin"
+  | "op_manager"
+  | "bar_staff"
+  | "kitchen_staff"
+  | "viewer";
 export type ClosingStatus =
   | "DRAFT"
   | "SUBMITTED"
@@ -13,7 +19,8 @@ export type StockLogEventType =
   | "OUTSTOCK"
   | "OPNAME"
   | "CLOSING"
-  | "ADJUSTMENT";
+  | "ADJUSTMENT"
+  | "PRODUCTION";
 
 export type OpnamePendingStatus = "PENDING_APPROVAL_ADMIN" | "APPROVED" | "REJECTED";
 
@@ -33,12 +40,41 @@ export type IngredientRow = {
   name: string;
   department: Department;
   unit: string;
+  kind: IngredientKind;
   current_stock: number;
   minimum_stock: number;
   slow_moving_threshold_days: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type RecipeRow = {
+  id: string;
+  output_ingredient_id: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RecipeComponentRow = {
+  id: string;
+  recipe_id: string;
+  ingredient_id: string;
+  qty_per_batch: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProductionLogRow = {
+  id: string;
+  business_date: string;
+  department: Department;
+  output_ingredient_id: string;
+  recipe_id: string;
+  batch_quantity: number;
+  produced_by_staff_id: string;
+  created_at: string;
 };
 
 export type MenuItemRow = {
@@ -250,6 +286,7 @@ export type Database = {
           name: string;
           department: Department;
           unit: string;
+          kind?: IngredientKind;
           current_stock?: number;
           minimum_stock?: number;
           slow_moving_threshold_days?: number;
@@ -259,6 +296,7 @@ export type Database = {
           name?: string;
           department?: Department;
           unit?: string;
+          kind?: IngredientKind;
           current_stock?: number;
           minimum_stock?: number;
           slow_moving_threshold_days?: number;
@@ -505,9 +543,76 @@ export type Database = {
         };
         Relationships: [];
       };
+      recipes: {
+        Row: RecipeRow;
+        Insert: {
+          id?: string;
+          output_ingredient_id: string;
+          is_active?: boolean;
+        };
+        Update: {
+          output_ingredient_id?: string;
+          is_active?: boolean;
+        };
+        Relationships: [];
+      };
+      recipe_component: {
+        Row: RecipeComponentRow;
+        Insert: {
+          id?: string;
+          recipe_id: string;
+          ingredient_id: string;
+          qty_per_batch: number;
+        };
+        Update: {
+          recipe_id?: string;
+          ingredient_id?: string;
+          qty_per_batch?: number;
+        };
+        Relationships: [];
+      };
+      production_logs: {
+        Row: ProductionLogRow;
+        Insert: {
+          id?: string;
+          business_date: string;
+          department: Department;
+          output_ingredient_id: string;
+          recipe_id: string;
+          batch_quantity: number;
+          produced_by_staff_id: string;
+        };
+        Update: never;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      verify_staff_pin: {
+        Args: { p_pin: string };
+        Returns: {
+          id: string;
+          name: string;
+          role: StaffRole;
+          department: Department | null;
+        }[];
+      };
+      produce_premix: {
+        Args: {
+          p_ingredient_id: string;
+          p_quantity: number;
+          p_department: Department;
+          p_staff_id: string;
+          p_business_date?: string;
+        };
+        Returns: {
+          ok: boolean;
+          output_ingredient_id: string;
+          batch_quantity: number;
+          business_date: string;
+        };
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

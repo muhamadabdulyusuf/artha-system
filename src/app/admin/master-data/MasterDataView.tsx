@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { LayoutDashboard, LogOut, Package, Shield, Truck } from "lucide-react";
 import { LogoutButton } from "@/components/auth/LogoutButton";
-import { getStaffSession, type StaffSession } from "@/lib/auth/session";
+import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { ADMIN_ROLES } from "@/lib/auth/routeAccess";
+import { isViewerRole } from "@/lib/auth/permissions";
+import { getStaffSession } from "@/lib/auth/session";
 import { IngredientsTab } from "@/components/admin/IngredientsTab";
 import { MenuRecipeTab } from "@/components/admin/MenuRecipeTab";
 import { MonitoringDashboard } from "@/components/admin/MonitoringDashboard";
@@ -20,28 +22,31 @@ const TABS: { id: TabId; label: string; icon: typeof Package }[] = [
 ];
 
 export default function MasterDataView() {
-  const router = useRouter();
+  return (
+    <ProtectedRoute allowedRoles={ADMIN_ROLES}>
+      <MasterDataContent />
+    </ProtectedRoute>
+  );
+}
+
+function MasterDataContent() {
+  const session = getStaffSession();
   const [activeTab, setActiveTab] = useState<TabId>("ingredients");
-  const [session, setSession] = useState<StaffSession | null>(null);
 
   useEffect(() => {
-    const current = getStaffSession();
-    if (!current || (current.role !== "admin" && current.role !== "op_manager")) {
-      router.replace("/");
-      return;
+    if (session && isViewerRole(session.role)) {
+      setActiveTab("monitoring");
     }
-    setSession(current);
-  }, [router]);
+  }, [session]);
 
-  if (!session) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
-        Memuat…
-      </div>
-    );
-  }
+  if (!session) return null;
 
-  const roleLabel = session.role === "admin" ? "Administrator" : "Operational Manager";
+  const roleLabel =
+    session.role === "admin"
+      ? "Administrator"
+      : session.role === "viewer"
+        ? "Viewer (Read-Only)"
+        : "Operational Manager";
 
   return (
     <div className="min-h-screen bg-zinc-950">

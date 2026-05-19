@@ -50,6 +50,8 @@ export function PinGate() {
 
   const verifyPin = useCallback(
     async (code: string) => {
+      const pinCode = String(code).trim();
+
       const supabase = getSupabaseClientOrNull();
       if (!supabase) {
         showError("Koneksi database belum siap.");
@@ -59,12 +61,11 @@ export function PinGate() {
       setChecking(true);
       setError(null);
 
-      const { data, error: queryError } = await supabase
-        .from("staff")
-        .select("id, name, role, department")
-        .eq("pin_code", code)
-        .eq("is_active", true)
-        .maybeSingle();
+      // RPC memakai TRIM(pin_code) di PostgreSQL agar CHAR(6) (blank-padding) cocok dengan input string.
+      const { data: matches, error: queryError } = await supabase.rpc(
+        "verify_staff_pin",
+        { p_pin: pinCode }
+      );
 
       setChecking(false);
 
@@ -72,6 +73,8 @@ export function PinGate() {
         showError("Gagal memverifikasi PIN. Coba lagi.");
         return;
       }
+
+      const data = matches?.[0] ?? null;
 
       if (!data) {
         showError("PIN salah atau staf nonaktif.");
@@ -92,8 +95,9 @@ export function PinGate() {
   );
 
   useEffect(() => {
-    if (pin.length !== PIN_LENGTH || checking) return;
-    void verifyPin(pin);
+    const pinCode = String(pin).trim();
+    if (pinCode.length !== PIN_LENGTH || checking) return;
+    void verifyPin(pinCode);
   }, [pin, checking, verifyPin]);
 
   const handleKey = (key: KeypadKey) => {

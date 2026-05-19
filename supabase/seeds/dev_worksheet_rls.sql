@@ -29,3 +29,16 @@ CREATE POLICY "anon_all_stock_log" ON stock_log FOR ALL TO anon, authenticated U
 
 DROP POLICY IF EXISTS "anon_all_worksheet_opname_pending" ON worksheet_opname_pending;
 CREATE POLICY "anon_all_worksheet_opname_pending" ON worksheet_opname_pending FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recipe_component ENABLE ROW LEVEL SECURITY;
+ALTER TABLE production_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "anon_all_recipes" ON recipes;
+CREATE POLICY "anon_all_recipes" ON recipes FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "anon_all_recipe_component" ON recipe_component;
+CREATE POLICY "anon_all_recipe_component" ON recipe_component FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "anon_all_production_logs" ON production_logs;
+CREATE POLICY "anon_all_production_logs" ON production_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);

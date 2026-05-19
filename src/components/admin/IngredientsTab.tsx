@@ -4,13 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Edit, Loader2, Plus, Search, Trash2, X } from "lucide-react";
 import { IngredientModal, type IngredientDepartment, type IngredientRecord, type IngredientUnit } from "@/components/admin/IngredientModal";
 import { Toast } from "@/components/ui/Toast";
+import { canEditStaffData } from "@/lib/auth/permissions";
+import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import type { IngredientKind } from "@/lib/types/database";
 
 interface Ingredient {
   id: string;
   name: string;
   unit: IngredientUnit;
   department: IngredientDepartment;
+  kind: IngredientKind;
   minimum_stock: number;
   is_active: boolean;
   created_at?: string;
@@ -22,7 +26,7 @@ type DeptFilter = "all" | FormDepartment;
 const SEARCH_INPUT_CLASS =
   "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
 
-const TABLE_COL_COUNT = 5;
+const TABLE_COL_COUNT = 6;
 
 function mapRow(row: Record<string, unknown>): Ingredient {
   return {
@@ -30,6 +34,7 @@ function mapRow(row: Record<string, unknown>): Ingredient {
     name: String(row.name),
     unit: (row.unit ? String(row.unit) : "gr") as Ingredient["unit"],
     department: (row.department as FormDepartment) || "bar",
+    kind: (row.kind === "premix" ? "premix" : "raw") as IngredientKind,
     minimum_stock: Number(row.minimum_stock ?? 0),
     is_active: row.is_active !== undefined && row.is_active !== null ? Boolean(row.is_active) : true,
     created_at: row.created_at ? String(row.created_at) : undefined,
@@ -42,6 +47,7 @@ function toModalRecord(item: Ingredient): IngredientRecord {
     name: item.name,
     unit: item.unit,
     department: item.department,
+    kind: item.kind,
     minimum_stock: item.minimum_stock,
     is_active: item.is_active,
   };
@@ -49,6 +55,7 @@ function toModalRecord(item: Ingredient): IngredientRecord {
 
 export function IngredientsTab() {
   const supabase = getSupabaseClient();
+  const canEdit = canEditStaffData(getStaffSession()?.role);
 
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -192,14 +199,16 @@ export function IngredientsTab() {
             ) : null}
           </div>
 
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-500"
-          >
-            <Plus className="h-4 w-4" />
-            Tambah Bahan Baku
-          </button>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={openCreateModal}
+              className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-500"
+            >
+              <Plus className="h-4 w-4" />
+              Tambah Bahan Baku
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -220,6 +229,7 @@ export function IngredientsTab() {
                 <th className="w-14 px-4 py-3 font-medium">No</th>
                 <th className="px-4 py-3 font-medium">Nama Bahan</th>
                 <th className="px-4 py-3 font-medium">Satuan Unit</th>
+                <th className="px-4 py-3 font-medium">Jenis</th>
                 <th className="px-4 py-3 font-medium">Departemen</th>
                 <th className="px-4 py-3 text-right font-medium">Aksi</th>
               </tr>
@@ -243,28 +253,43 @@ export function IngredientsTab() {
                     <td className="px-4 py-3 tabular-nums text-zinc-500">{index + 1}</td>
                     <td className="px-4 py-3 font-medium text-white">{item.name}</td>
                     <td className="px-4 py-3 text-zinc-300">{item.unit}</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-block rounded-full px-2 py-0.5 text-xs capitalize ${
+                          item.kind === "premix"
+                            ? "bg-amber-500/20 text-amber-300"
+                            : "bg-emerald-500/15 text-emerald-300"
+                        }`}
+                      >
+                        {item.kind}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-zinc-300">{departmentLabel(item.department)}</td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(item)}
-                          disabled={!item.is_active}
-                          className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10 disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label={`Edit ${item.name}`}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleDeactivate(item)}
-                          disabled={!item.is_active}
-                          className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-red-400 ring-1 ring-zinc-600 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label={`Nonaktifkan ${item.name}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                      {canEdit ? (
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(item)}
+                            disabled={!item.is_active}
+                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            aria-label={`Edit ${item.name}`}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeactivate(item)}
+                            disabled={!item.is_active}
+                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-red-400 ring-1 ring-zinc-600 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            aria-label={`Nonaktifkan ${item.name}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="block text-right text-xs text-zinc-500">—</span>
+                      )}
                     </td>
                   </tr>
                 ))

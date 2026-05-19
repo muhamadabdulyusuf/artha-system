@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, PenLine } from "lucide-react";
+import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { Department, IngredientRow, StockLogRow } from "@/lib/types/database";
@@ -10,6 +11,7 @@ import { resolveBusinessDate } from "@/lib/utils/dateHelper";
 
 export function StockAdjustmentPanel() {
   const supabase = getSupabaseClient();
+  const canEdit = canEditStaffData(getStaffSession()?.role);
   const [ingredients, setIngredients] = useState<IngredientRow[]>([]);
   const [logs, setLogs] = useState<StockLogRow[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -175,7 +177,7 @@ export function StockAdjustmentPanel() {
           </select>
         </label>
 
-        {selected ? (
+        {selected && canEdit ? (
           <>
             <label className="block text-xs text-zinc-400">
               Stok baru
@@ -208,6 +210,8 @@ export function StockAdjustmentPanel() {
               Simpan Koreksi & Catat Audit
             </button>
           </>
+        ) : selected && !canEdit ? (
+          <p className="text-sm text-zinc-500">Mode penonton: koreksi stok tidak tersedia.</p>
         ) : null}
       </div>
 

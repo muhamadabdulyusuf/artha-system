@@ -5,6 +5,8 @@ import {
   type SupplierRecord,
 } from "@/components/admin/SupplierModal";
 import { Toast } from "@/components/ui/Toast";
+import { canEditStaffData } from "@/lib/auth/permissions";
+import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { SupplierRow } from "@/lib/types/database";
 import { Edit, Loader2, Plus, Search, Truck, X } from "lucide-react";
@@ -42,6 +44,7 @@ function toModalRecord(item: SupplierListItem): SupplierRecord {
 
 export function SuppliersTab() {
   const supabase = getSupabaseClient();
+  const canEdit = canEditStaffData(getStaffSession()?.role);
 
   const [suppliers, setSuppliers] = useState<SupplierListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -154,14 +157,16 @@ export function SuppliersTab() {
             ) : null}
           </div>
 
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-500"
-          >
-            <Plus className="h-4 w-4" />
-            Tambah Supplier
-          </button>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={openCreateModal}
+              className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-500"
+            >
+              <Plus className="h-4 w-4" />
+              Tambah Supplier
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -215,17 +220,21 @@ export function SuppliersTab() {
                       {formatRupiah(Number(item.min_order_amount))}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(item)}
-                          disabled={!item.is_active}
-                          className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10 disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label={`Edit ${item.name}`}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </button>
-                      </div>
+                      {canEdit ? (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(item)}
+                            disabled={!item.is_active}
+                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            aria-label={`Edit ${item.name}`}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="block text-right text-xs text-zinc-500">—</span>
+                      )}
                     </td>
                   </tr>
                 ))

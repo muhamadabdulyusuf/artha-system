@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChefHat, Loader2, Pencil, Plus, Search, X } from "lucide-react";
+import { Beaker, ChefHat, Loader2, Pencil, Plus, Search, Wand2, X } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
+import { canEditStaffData } from "@/lib/auth/permissions";
+import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
-import type { Department, MenuItemRow } from "@/lib/types/database";
-import { RecipeBuilderModal } from "./RecipeBuilderModal";
+import type { Department, IngredientRow, MenuItemRow } from "@/lib/types/database";
+import { RecipeBuilder, type RecipeBuilderInitialTarget } from "./RecipeBuilder";
 
 const DEPARTMENTS: { value: Department; label: string }[] = [
   { value: "bar", label: "Bar" },
@@ -28,7 +30,7 @@ const emptyMenuForm = (): MenuForm => ({
 const SEARCH_INPUT_CLASS =
   "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
 
-type ViewMode = "menu" | "recipe";
+type ViewMode = "menu" | "recipe" | "premix";
 
 type RecipeIngredientSummary = {
   id: string;
@@ -42,23 +44,32 @@ type MenuRecipeSummary = MenuItemRow & {
   hasRecipe: boolean;
 };
 
+type PremixRecipeSummary = IngredientRow & {
+  components: RecipeIngredientSummary[];
+  hasRecipe: boolean;
+};
+
 export function MenuRecipeTab() {
   const supabase = getSupabaseClient();
+  const canEdit = canEditStaffData(getStaffSession()?.role);
 
   const [menus, setMenus] = useState<MenuItemRow[]>([]);
   const [recipeSummaries, setRecipeSummaries] = useState<MenuRecipeSummary[]>([]);
+  const [premixSummaries, setPremixSummaries] = useState<PremixRecipeSummary[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("menu");
   const [filter, setFilter] = useState<"all" | Department>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingRecipes, setIsLoadingRecipes] = useState(false);
+  const [isLoadingPremix, setIsLoadingPremix] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMenu, setEditingMenu] = useState<MenuItemRow | null>(null);
   const [menuForm, setMenuForm] = useState<MenuForm>(emptyMenuForm);
-  const [recipeMenu, setRecipeMenu] = useState<MenuItemRow | null>(null);
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [recipeTarget, setRecipeTarget] = useState<RecipeBuilderInitialTarget | null>(null);
 
   const fetchMenus = useCallback(async () => {
     setIsLoading(true);
@@ -110,7 +121,7 @@ export function MenuRecipeTab() {
       if (fetchError) throw fetchError;
 
       const summaries: MenuRecipeSummary[] = (data ?? []).map((row) => {
-        const menu = row as MenuItemRow & {
+        const menu = row as unknown as MenuItemRow & {
           menu_recipe_version?: {
             is_active: boolean;
             recipe_line?: {
@@ -153,10 +164,103 @@ export function MenuRecipeTab() {
     setIsLoadingRecipes(false);
   }, [supabase]);
 
+  const fetchPremixSummaries = useCallback(async () => {
+    setIsLoadingPremix(true);
+
+    try {
+      const { data: premixRows, error: premixErr } = await supabase
+        .from("ingredient")
+        .select("*")
+        .eq("kind", "premix")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+
+      if (premixErr) throw premixErr;
+
+      const premixList = (premixRows ?? []) as IngredientRow[];
+      if (premixList.length === 0) {
+        setPremixSummaries([]);
+        setIsLoadingPremix(false);
+        return;
+      }
+
+      const outputIds = premixList.map((p) => p.id);
+      const { data: recipeRows, error: recipeErr } = await supabase
+        .from("recipes")
+        .select("id, output_ingredient_id")
+        .in("output_ingredient_id", outputIds)
+        .eq("is_active", true);
+
+      if (recipeErr) throw recipeErr;
+
+      const recipeByOutput = new Map(
+        (recipeRows ?? []).map((r) => [r.output_ingredient_id, r.id] as const)
+      );
+
+      const recipeIds = [...recipeByOutput.values()];
+      const componentsByRecipe = new Map<string, RecipeIngredientSummary[]>();
+
+      if (recipeIds.length > 0) {
+        const { data: componentRows, error: compErr } = await supabase
+          .from("recipe_component")
+          .select("recipe_id, qty_per_batch, ingredient_id")
+          .in("recipe_id", recipeIds);
+
+        if (compErr) throw compErr;
+
+        const ingredientIds = [
+          ...new Set((componentRows ?? []).map((c) => c.ingredient_id)),
+        ];
+
+        const { data: ingredientMeta, error: metaErr } = await supabase
+          .from("ingredient")
+          .select("id, name, unit")
+          .in("id", ingredientIds);
+
+        if (metaErr) throw metaErr;
+
+        const metaById = new Map((ingredientMeta ?? []).map((i) => [i.id, i]));
+
+        for (const comp of componentRows ?? []) {
+          const meta = metaById.get(comp.ingredient_id);
+          if (!meta) continue;
+          const list = componentsByRecipe.get(comp.recipe_id) ?? [];
+          list.push({
+            id: meta.id,
+            name: meta.name,
+            unit: meta.unit,
+            quantity_per_serving: Number(comp.qty_per_batch),
+          });
+          componentsByRecipe.set(comp.recipe_id, list);
+        }
+      }
+
+      const summaries: PremixRecipeSummary[] = premixList.map((premix) => {
+        const recipeId = recipeByOutput.get(premix.id);
+        const components = recipeId ? (componentsByRecipe.get(recipeId) ?? []) : [];
+        return {
+          ...premix,
+          components,
+          hasRecipe: components.length > 0,
+        };
+      });
+
+      setPremixSummaries(summaries);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Gagal memuat daftar premix dari Supabase.";
+      setError(message);
+      setPremixSummaries([]);
+    }
+
+    setIsLoadingPremix(false);
+  }, [supabase]);
+
   useEffect(() => {
     void fetchMenus();
     void fetchRecipeSummaries();
-  }, [fetchMenus, fetchRecipeSummaries]);
+    void fetchPremixSummaries();
+  }, [fetchMenus, fetchRecipeSummaries, fetchPremixSummaries]);
 
   const normalizedSearch = searchTerm.trim().toLowerCase();
 
@@ -168,6 +272,16 @@ export function MenuRecipeTab() {
       return matchesDept && matchesSearch;
     });
   }, [filter, menus, normalizedSearch]);
+
+  const filteredPremixSummaries = useMemo(() => {
+    return premixSummaries.filter((item) => {
+      const matchesDept = filter === "all" || item.department === filter;
+      if (!matchesDept) return false;
+      if (!normalizedSearch) return true;
+      if (item.name.toLowerCase().includes(normalizedSearch)) return true;
+      return item.components.some((c) => c.name.toLowerCase().includes(normalizedSearch));
+    });
+  }, [filter, normalizedSearch, premixSummaries]);
 
   const filteredRecipeSummaries = useMemo(() => {
     return recipeSummaries.filter((menu) => {
@@ -190,11 +304,17 @@ export function MenuRecipeTab() {
         : filter === "all"
           ? "Belum ada menu jualan."
           : `Belum ada menu departemen ${filter === "bar" ? "Bar" : "Kitchen"}.`
-      : normalizedSearch
-        ? `Resep dengan kata kunci "${searchTerm.trim()}" tidak ditemukan.`
-        : filter === "all"
-          ? "Belum ada resep terdaftar."
-          : `Belum ada resep departemen ${filter === "bar" ? "Bar" : "Kitchen"}.`;
+      : viewMode === "premix"
+        ? normalizedSearch
+          ? `Premix dengan kata kunci "${searchTerm.trim()}" tidak ditemukan.`
+          : filter === "all"
+            ? "Belum ada bahan premix. Tandai bahan di tab Ingredients."
+            : `Belum ada premix departemen ${filter === "bar" ? "Bar" : "Kitchen"}.`
+        : normalizedSearch
+          ? `Resep dengan kata kunci "${searchTerm.trim()}" tidak ditemukan.`
+          : filter === "all"
+            ? "Belum ada resep terdaftar."
+            : `Belum ada resep departemen ${filter === "bar" ? "Bar" : "Kitchen"}.`;
 
   const openCreateModal = () => {
     setEditingMenu(null);
@@ -297,7 +417,18 @@ export function MenuRecipeTab() {
                 : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
             }`}
           >
-            Daftar Resep
+            Resep Menu
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("premix")}
+            className={`min-h-10 rounded-full px-4 text-sm font-semibold transition ${
+              viewMode === "premix"
+                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/30"
+                : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
+            }`}
+          >
+            Resep Premix
           </button>
         </div>
 
@@ -327,7 +458,11 @@ export function MenuRecipeTab() {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder={
-                  viewMode === "menu" ? "Cari nama menu…" : "Cari menu atau bahan resep…"
+                  viewMode === "menu"
+                    ? "Cari nama menu…"
+                    : viewMode === "premix"
+                      ? "Cari premix atau bahan…"
+                      : "Cari menu atau bahan resep…"
                 }
                 autoCorrect="off"
                 spellCheck={false}
@@ -346,7 +481,7 @@ export function MenuRecipeTab() {
               ) : null}
             </div>
 
-            {viewMode === "menu" ? (
+            {viewMode === "menu" && canEdit ? (
               <button
                 type="button"
                 onClick={openCreateModal}
@@ -354,6 +489,19 @@ export function MenuRecipeTab() {
               >
                 <Plus className="h-4 w-4" />
                 Tambah Menu Baru
+              </button>
+            ) : null}
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setRecipeTarget(null);
+                  setBuilderOpen(true);
+                }}
+                className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-indigo-500/50 bg-indigo-600/15 px-4 font-semibold text-indigo-200 transition hover:bg-indigo-600/25"
+              >
+                <Wand2 className="h-4 w-4" />
+                Recipe Builder
               </button>
             ) : null}
           </div>
@@ -406,29 +554,98 @@ export function MenuRecipeTab() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setRecipeMenu(menu)}
-                          className="flex min-h-9 items-center gap-1 rounded-lg bg-indigo-600/20 px-3 text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
-                        >
-                          <ChefHat className="h-4 w-4" />
-                          Kelola Resep
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(menu)}
-                          className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-zinc-400 ring-1 ring-zinc-600 hover:text-white"
-                        >
-                          <Pencil className="h-4 w-4" />
-                          Edit
-                        </button>
-                      </div>
+                      {canEdit ? (
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRecipeTarget({ type: "menu", item: menu });
+                              setBuilderOpen(true);
+                            }}
+                            className="flex min-h-9 items-center gap-1 rounded-lg bg-indigo-600/20 px-3 text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
+                          >
+                            <ChefHat className="h-4 w-4" />
+                            Kelola Resep
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(menu)}
+                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-zinc-400 ring-1 ring-zinc-600 hover:text-white"
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="block text-right text-xs text-zinc-500">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        )
+      ) : viewMode === "premix" ? (
+        isLoadingPremix ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-zinc-500">
+            <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+            Memuat resep premix…
+          </div>
+        ) : filteredPremixSummaries.length === 0 ? (
+          <p className="py-12 text-center text-zinc-500">{emptyListMessage}</p>
+        ) : (
+          <div className="space-y-3">
+            {filteredPremixSummaries.map((premix) => (
+              <article
+                key={premix.id}
+                className="rounded-xl border border-amber-500/20 bg-zinc-900/50 p-4"
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="flex items-center gap-2 font-semibold text-white">
+                      <Beaker className="h-4 w-4 text-amber-400" />
+                      {premix.name}
+                    </h3>
+                    <p className="mt-1 text-xs capitalize text-zinc-500">
+                      {premix.department} · {premix.unit} ·{" "}
+                      {premix.hasRecipe
+                        ? `${premix.components.length} bahan baku`
+                        : "Belum ada resep produksi"}
+                    </p>
+                  </div>
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecipeTarget({ type: "premix", ingredient: premix });
+                        setBuilderOpen(true);
+                      }}
+                      className="flex min-h-9 shrink-0 items-center gap-1 self-start rounded-lg bg-amber-600/20 px-3 text-sm text-amber-200 ring-1 ring-amber-500/40 hover:bg-amber-600/30"
+                    >
+                      <Beaker className="h-4 w-4" />
+                      Kelola Bahan Baku
+                    </button>
+                  ) : null}
+                </div>
+                {premix.components.length > 0 ? (
+                  <ul className="mt-3 space-y-1 border-t border-zinc-800 pt-3 text-sm text-zinc-300">
+                    {premix.components.map((component) => (
+                      <li key={component.id} className="flex justify-between gap-3">
+                        <span>{component.name}</span>
+                        <span className="tabular-nums text-zinc-500">
+                          {component.quantity_per_serving} {component.unit} / batch
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-3 border-t border-zinc-800 pt-3 text-sm text-zinc-500">
+                    Resep produksi belum disusun. Contoh: Mont Blanc Cream dari bahan raw.
+                  </p>
+                )}
+              </article>
+            ))}
           </div>
         )
       ) : isLoadingRecipes ? (
@@ -452,14 +669,19 @@ export function MenuRecipeTab() {
                     {menu.department} · {menu.hasRecipe ? `${menu.recipeIngredients.length} bahan` : "Belum ada resep"}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setRecipeMenu(menu)}
-                  className="flex min-h-9 shrink-0 items-center gap-1 self-start rounded-lg bg-indigo-600/20 px-3 text-sm text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
-                >
-                  <ChefHat className="h-4 w-4" />
-                  Kelola Resep
-                </button>
+                {canEdit ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecipeTarget({ type: "menu", item: menu });
+                      setBuilderOpen(true);
+                    }}
+                    className="flex min-h-9 shrink-0 items-center gap-1 self-start rounded-lg bg-indigo-600/20 px-3 text-sm text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
+                  >
+                    <ChefHat className="h-4 w-4" />
+                    Kelola Resep
+                  </button>
+                ) : null}
               </div>
               {menu.recipeIngredients.length > 0 ? (
                 <ul className="mt-3 space-y-1 border-t border-zinc-800 pt-3 text-sm text-zinc-300">
@@ -549,11 +771,15 @@ export function MenuRecipeTab() {
         </form>
       </Modal>
 
-      <RecipeBuilderModal
-        menu={recipeMenu}
-        onClose={() => setRecipeMenu(null)}
+      <RecipeBuilder
+        open={builderOpen}
+        initialTarget={recipeTarget}
+        onClose={() => {
+          setBuilderOpen(false);
+          setRecipeTarget(null);
+        }}
         onSaved={async () => {
-          await Promise.all([fetchMenus(), fetchRecipeSummaries()]);
+          await Promise.all([fetchMenus(), fetchRecipeSummaries(), fetchPremixSummaries()]);
         }}
       />
     </div>

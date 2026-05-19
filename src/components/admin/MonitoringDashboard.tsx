@@ -17,6 +17,7 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
+import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClientOrNull } from "@/lib/supabase/client";
 import type {
@@ -34,6 +35,7 @@ import {
   normalizeWhatsAppPhoneNumber,
 } from "@/lib/purchase-order/whatsapp";
 import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
+import { InventoryHealthPanel } from "@/components/admin/InventoryHealthPanel";
 import { OpnameApprovalPanel } from "@/components/admin/OpnameApprovalPanel";
 import { StockAdjustmentPanel } from "@/components/admin/StockAdjustmentPanel";
 
@@ -539,6 +541,7 @@ function DepartmentLedgerTable({
 
 export function MonitoringDashboard() {
   const supabase = useMemo(() => getSupabaseClientOrNull(), []);
+  const canEdit = canEditStaffData(getStaffSession()?.role);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [startDate, setStartDate] = useState(() => resolveBusinessDate());
@@ -1384,6 +1387,8 @@ export function MonitoringDashboard() {
 
   return (
     <div className="space-y-6">
+      <InventoryHealthPanel />
+
       <section className="grid gap-6 lg:grid-cols-2">
         <OpnameApprovalPanel />
         <StockAdjustmentPanel />
@@ -1804,14 +1809,16 @@ export function MonitoringDashboard() {
                             {item.ingredient.name}{" "}
                             <span className="text-xs text-slate-500">({item.ingredient.unit})</span>
                           </span>
-                          <button
-                            type="button"
-                            disabled={thursdayOrderClosed}
-                            onClick={() => handleAddPoLine(item)}
-                            className="shrink-0 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
-                          >
-                            + Tambah
-                          </button>
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              disabled={thursdayOrderClosed}
+                              onClick={() => handleAddPoLine(item)}
+                              className="shrink-0 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+                            >
+                              + Tambah
+                            </button>
+                          ) : null}
                         </li>
                       ))}
                     </ul>
@@ -1846,14 +1853,16 @@ export function MonitoringDashboard() {
                                 @ {formatRupiah(line.unitPrice)} / {line.unit}
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => handleRemovePoLine(line.ingredientId)}
-                              className="text-slate-500 hover:text-red-400"
-                              aria-label={`Hapus ${line.ingredientName}`}
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
+                            {canEdit ? (
+                              <button
+                                type="button"
+                                onClick={() => handleRemovePoLine(line.ingredientId)}
+                                className="text-slate-500 hover:text-red-400"
+                                aria-label={`Hapus ${line.ingredientName}`}
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            ) : null}
                           </div>
                           <div className="flex items-center gap-2">
                             <input
@@ -1884,29 +1893,35 @@ export function MonitoringDashboard() {
                   </p>
                 )}
 
-                <button
-                  type="button"
-                  disabled={poSubmitDisabled}
-                  onClick={() => void handleSendPO()}
-                  className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {thursdayOrderClosed ? (
-                    <>
-                      <Lock className="h-4 w-4" />
-                      PO Dikunci (Thursday Last Order)
-                    </>
-                  ) : poSubmitting ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Mengirim…
-                    </>
-                  ) : (
-                    <>
-                      <Send className="h-4 w-4" />
-                      Kirim PO ke Supplier
-                    </>
-                  )}
-                </button>
+                {canEdit ? (
+                  <button
+                    type="button"
+                    disabled={poSubmitDisabled}
+                    onClick={() => void handleSendPO()}
+                    className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {thursdayOrderClosed ? (
+                      <>
+                        <Lock className="h-4 w-4" />
+                        PO Dikunci (Thursday Last Order)
+                      </>
+                    ) : poSubmitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Mengirim…
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4" />
+                        Kirim PO ke Supplier
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <p className="text-center text-xs text-slate-500">
+                    Mode penonton: pembuatan PO tidak tersedia.
+                  </p>
+                )}
               </div>
             </div>
           </section>

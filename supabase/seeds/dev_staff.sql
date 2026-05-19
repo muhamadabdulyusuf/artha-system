@@ -14,10 +14,11 @@ CREATE POLICY "anon_select_staff_pin_login"
 
 -- Hapus seed lama (aman di-run ulang)
 DELETE FROM staff
-WHERE pin_code IN ('100001', '100002', '200001', '300001');
+WHERE pin_code IN ('100001', '100002', '200001', '300001', '400001');
 
 INSERT INTO staff (name, pin_code, role, department) VALUES
   ('Admin Bos',     '100001', 'admin',          NULL),
   ('Ops Manager',   '100002', 'op_manager',     NULL),
   ('Staff Bar',     '200001', 'bar_staff',      'bar'),
-  ('Staff Kitchen', '300001', 'kitchen_staff',  'kitchen');
+  ('Staff Kitchen', '300001', 'kitchen_staff',  'kitchen'),
+  ('Viewer Demo',   '400001', 'viewer',         NULL);

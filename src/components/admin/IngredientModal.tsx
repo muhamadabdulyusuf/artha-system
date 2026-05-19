@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import type { IngredientKind } from "@/lib/types/database";
 
 export type IngredientUnit =
   | "gr"
@@ -35,6 +36,7 @@ export type IngredientRecord = {
   unit: IngredientUnit;
   department: IngredientDepartment;
   minimum_stock: number;
+  kind: IngredientKind;
   is_active: boolean;
 };
 
@@ -52,6 +54,7 @@ type FormData = {
   unit: IngredientUnit;
   department: IngredientDepartment;
   minimum_stock: string;
+  kind: IngredientKind;
 };
 
 const FORM_UNITS: IngredientUnit[] = [
@@ -93,6 +96,7 @@ const EMPTY_FORM: FormData = {
   unit: "gr",
   department: "bar",
   minimum_stock: "",
+  kind: "raw",
 };
 
 function parseMinimumStock(raw: string): number | null {
@@ -126,6 +130,7 @@ export function IngredientModal({
         unit: ingredient.unit,
         department: ingredient.department,
         minimum_stock: String(ingredient.minimum_stock ?? 0),
+        kind: ingredient.kind ?? "raw",
       });
     } else {
       setFormData(EMPTY_FORM);
@@ -158,6 +163,7 @@ export function IngredientModal({
             unit: formData.unit,
             department: formData.department,
             minimum_stock,
+            kind: formData.kind,
           })
           .eq("id", ingredient.id);
 
@@ -170,6 +176,7 @@ export function IngredientModal({
             unit: formData.unit,
             department: formData.department,
             minimum_stock,
+            kind: formData.kind,
             is_active: true,
           },
         ]);
@@ -222,6 +229,23 @@ export function IngredientModal({
               </option>
             ))}
           </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-zinc-400">Jenis Bahan</span>
+          <select
+            value={formData.kind}
+            onChange={(e) =>
+              setFormData((prev) => ({ ...prev, kind: e.target.value as IngredientKind }))
+            }
+            className={SELECT_CLASS}
+          >
+            <option value="raw">Bahan Baku (Raw)</option>
+            <option value="premix">Premix / WIP (bisa punya resep produksi)</option>
+          </select>
+          <p className="mt-1 text-xs text-zinc-500">
+            Premix diproduksi di dapur/bar dan bisa dipakai sebagai komponen menu atau premix lain.
+          </p>
         </label>
 
         <label className="block">
