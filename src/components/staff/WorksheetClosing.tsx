@@ -178,6 +178,8 @@ async function fetchMenusWithActiveRecipes(
         department,
         price,
         is_active,
+        created_at,
+        updated_at,
         menu_recipe_version (
           id,
           is_active,
@@ -196,7 +198,9 @@ async function fetchMenusWithActiveRecipes(
     throw new Error(`Gagal memuat resep aktif: ${error.message}`);
   }
 
-  return (data ?? []) as MenuItemWithRecipe[];
+  // Gunakan 'as unknown as' untuk memberitahu TypeScript bahwa 
+  // hasil query ini sudah pasti memiliki field yang diperlukan
+  return (data ?? []) as unknown as MenuItemWithRecipe[];
 }
 
 export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
