@@ -1,44 +1,44 @@
--- RLS untuk worksheet closing (anon) — jalankan jika submit/query gagal permission denied
+-- DEV ONLY: permissive RLS for the current prototype.
+-- The app still uses the public anon Supabase client plus client-side PIN session,
+-- so every table used by the UI needs anon write access while we are rebuilding.
+-- Do not run this for production.
 
-ALTER TABLE business_day ENABLE ROW LEVEL SECURITY;
-ALTER TABLE worksheet_session ENABLE ROW LEVEL SECURITY;
-ALTER TABLE worksheet_in_line ENABLE ROW LEVEL SECURITY;
-ALTER TABLE worksheet_out_line ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stock_ledger ENABLE ROW LEVEL SECURITY;
+DO $$
+DECLARE
+  tbl text;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY[
+    'staff',
+    'ingredient',
+    'menu_item',
+    'menu_recipe_version',
+    'recipe_line',
+    'supplier',
+    'supplier_ingredient_price',
+    'purchase_order',
+    'purchase_order_line',
+    'business_day',
+    'worksheet_session',
+    'worksheet_in_line',
+    'worksheet_out_line',
+    'worksheet_opname_line',
+    'worksheet_premix_line',
+    'worksheet_sold_line',
+    'stock_ledger',
+    'stock_log',
+    'worksheet_opname_pending',
+    'recipes',
+    'recipe_component',
+    'production_logs'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tbl);
 
-DROP POLICY IF EXISTS "anon_all_business_day" ON business_day;
-CREATE POLICY "anon_all_business_day" ON business_day FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_worksheet_session" ON worksheet_session;
-CREATE POLICY "anon_all_worksheet_session" ON worksheet_session FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_worksheet_in_line" ON worksheet_in_line;
-CREATE POLICY "anon_all_worksheet_in_line" ON worksheet_in_line FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_worksheet_out_line" ON worksheet_out_line;
-CREATE POLICY "anon_all_worksheet_out_line" ON worksheet_out_line FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_stock_ledger" ON stock_ledger;
-CREATE POLICY "anon_all_stock_ledger" ON stock_ledger FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-ALTER TABLE stock_log ENABLE ROW LEVEL SECURITY;
-ALTER TABLE worksheet_opname_pending ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "anon_all_stock_log" ON stock_log;
-CREATE POLICY "anon_all_stock_log" ON stock_log FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_worksheet_opname_pending" ON worksheet_opname_pending;
-CREATE POLICY "anon_all_worksheet_opname_pending" ON worksheet_opname_pending FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE recipe_component ENABLE ROW LEVEL SECURITY;
-ALTER TABLE production_logs ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "anon_all_recipes" ON recipes;
-CREATE POLICY "anon_all_recipes" ON recipes FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_recipe_component" ON recipe_component;
-CREATE POLICY "anon_all_recipe_component" ON recipe_component FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "anon_all_production_logs" ON production_logs;
-CREATE POLICY "anon_all_production_logs" ON production_logs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+    EXECUTE format('DROP POLICY IF EXISTS anon_all_%I ON public.%I', tbl, tbl);
+    EXECUTE format(
+      'CREATE POLICY anon_all_%I ON public.%I FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)',
+      tbl,
+      tbl
+    );
+  END LOOP;
+END $$;

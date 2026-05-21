@@ -68,15 +68,14 @@ export function analyzeOpnameVariances(
   lines: Record<string, { closingStock: string }>,
   ledgerByIngredientId?: Map<string, StockLedgerSnapshot | null>
 ): OpnameVarianceResult[] {
-  return ingredients.map((ing) => {
+  return ingredients.flatMap((ing) => {
+    const physicalStockRaw = lines[ing.id]?.closingStock ?? "";
+    if (String(physicalStockRaw).trim() === "") return [];
+
     const rawLedger = ledgerByIngredientId?.get(ing.id);
     const snapshot =
       rawLedger === undefined ? null : rawLedger === null ? null : rawLedger;
-    return computeOpnameVariance(
-      ing,
-      lines[ing.id]?.closingStock ?? "0",
-      snapshot
-    );
+    return [computeOpnameVariance(ing, physicalStockRaw, snapshot)];
   });
 }
 

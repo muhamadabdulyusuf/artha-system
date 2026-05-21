@@ -16,6 +16,9 @@ interface Ingredient {
   department: IngredientDepartment;
   kind: IngredientKind;
   minimum_stock: number;
+  is_stock_tracked: boolean;
+  primary_supplier_id: string | null;
+  supplier_name: string | null;
   is_active: boolean;
   created_at?: string;
 }
@@ -26,7 +29,7 @@ type DeptFilter = "all" | FormDepartment;
 const SEARCH_INPUT_CLASS =
   "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
 
-const TABLE_COL_COUNT = 6;
+const TABLE_COL_COUNT = 8;
 
 function mapRow(row: Record<string, unknown>): Ingredient {
   return {
@@ -36,6 +39,15 @@ function mapRow(row: Record<string, unknown>): Ingredient {
     department: (row.department as FormDepartment) || "bar",
     kind: (row.kind === "premix" ? "premix" : "raw") as IngredientKind,
     minimum_stock: Number(row.minimum_stock ?? 0),
+    is_stock_tracked:
+      row.is_stock_tracked !== undefined && row.is_stock_tracked !== null
+        ? Boolean(row.is_stock_tracked)
+        : true,
+    primary_supplier_id: row.primary_supplier_id ? String(row.primary_supplier_id) : null,
+    supplier_name:
+      row.supplier && typeof row.supplier === "object" && !Array.isArray(row.supplier)
+        ? String((row.supplier as Record<string, unknown>).name ?? "")
+        : null,
     is_active: row.is_active !== undefined && row.is_active !== null ? Boolean(row.is_active) : true,
     created_at: row.created_at ? String(row.created_at) : undefined,
   };
@@ -49,6 +61,8 @@ function toModalRecord(item: Ingredient): IngredientRecord {
     department: item.department,
     kind: item.kind,
     minimum_stock: item.minimum_stock,
+    is_stock_tracked: item.is_stock_tracked,
+    primary_supplier_id: item.primary_supplier_id,
     is_active: item.is_active,
   };
 }
@@ -73,7 +87,7 @@ export function IngredientsTab() {
     try {
       const { data, error } = await supabase
         .from("ingredient")
-        .select("*")
+        .select("*, supplier:primary_supplier_id ( name )")
         .order("name", { ascending: true });
 
       if (error) throw error;
@@ -230,6 +244,8 @@ export function IngredientsTab() {
                 <th className="px-4 py-3 font-medium">Nama Bahan</th>
                 <th className="px-4 py-3 font-medium">Satuan Unit</th>
                 <th className="px-4 py-3 font-medium">Jenis</th>
+                <th className="px-4 py-3 font-medium">Tracking</th>
+                <th className="px-4 py-3 font-medium">Supplier</th>
                 <th className="px-4 py-3 font-medium">Departemen</th>
                 <th className="px-4 py-3 text-right font-medium">Aksi</th>
               </tr>
@@ -263,6 +279,24 @@ export function IngredientsTab() {
                       >
                         {item.kind}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-block rounded-full px-2 py-0.5 text-xs ${
+                          item.is_stock_tracked
+                            ? "bg-sky-500/15 text-sky-300"
+                            : "bg-zinc-700 text-zinc-300"
+                        }`}
+                      >
+                        {item.is_stock_tracked ? "Stok" : "Non-stok"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-zinc-300">
+                      {item.supplier_name ? (
+                        item.supplier_name
+                      ) : (
+                        <span className="text-zinc-600">Belum ada</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-zinc-300">{departmentLabel(item.department)}</td>
                     <td className="px-4 py-3">

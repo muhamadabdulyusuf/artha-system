@@ -14,7 +14,8 @@ CREATE TYPE staff_role AS ENUM (
   'admin',
   'op_manager',
   'bar_staff',
-  'kitchen_staff'
+  'kitchen_staff',
+  'viewer'
 );
 
 CREATE TYPE department_type AS ENUM (
@@ -26,7 +27,8 @@ CREATE TYPE closing_status AS ENUM (
   'DRAFT',
   'SUBMITTED',
   'ADJUSTED',
-  'LOCKED'
+  'LOCKED',
+  'PENDING_APPROVAL_ADMIN'
 );
 
 -- -----------------------------------------------------------------------------
@@ -36,7 +38,7 @@ CREATE TYPE closing_status AS ENUM (
 CREATE TABLE staff (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name          TEXT NOT NULL,
-  pin_code      CHAR(6) NOT NULL,
+  pin_code      TEXT NOT NULL,
   role          staff_role NOT NULL,
   department    department_type,
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
@@ -45,7 +47,7 @@ CREATE TABLE staff (
 
   CONSTRAINT staff_pin_code_numeric CHECK (pin_code ~ '^[0-9]{6}$'),
   CONSTRAINT staff_department_role_check CHECK (
-    (role IN ('admin', 'op_manager') AND department IS NULL)
+    (role IN ('admin', 'op_manager', 'viewer') AND department IS NULL)
     OR
     (role = 'bar_staff' AND department = 'bar')
     OR

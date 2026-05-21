@@ -44,6 +44,8 @@ export type IngredientRow = {
   current_stock: number;
   minimum_stock: number;
   slow_moving_threshold_days: number;
+  is_stock_tracked: boolean;
+  primary_supplier_id: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -52,6 +54,7 @@ export type IngredientRow = {
 export type RecipeRow = {
   id: string;
   output_ingredient_id: string;
+  yield_quantity: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -75,6 +78,16 @@ export type ProductionLogRow = {
   batch_quantity: number;
   produced_by_staff_id: string;
   created_at: string;
+};
+
+export type WorksheetPremixLineRow = {
+  id: string;
+  session_id: string;
+  output_ingredient_id: string;
+  recipe_id: string;
+  batch_quantity: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type MenuItemRow = {
@@ -154,6 +167,17 @@ export type WorksheetOutLineRow = {
   ingredient_id: string;
   quantity: number;
   note: string;
+  photo_url: string | null;
+  photo_public_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorksheetOpnameLineRow = {
+  id: string;
+  session_id: string;
+  ingredient_id: string;
+  closing_stock: number;
   created_at: string;
   updated_at: string;
 };
@@ -290,6 +314,8 @@ export type Database = {
           current_stock?: number;
           minimum_stock?: number;
           slow_moving_threshold_days?: number;
+          is_stock_tracked?: boolean;
+          primary_supplier_id?: string | null;
           is_active?: boolean;
         };
         Update: {
@@ -300,6 +326,8 @@ export type Database = {
           current_stock?: number;
           minimum_stock?: number;
           slow_moving_threshold_days?: number;
+          is_stock_tracked?: boolean;
+          primary_supplier_id?: string | null;
           is_active?: boolean;
         };
         Relationships: [];
@@ -410,8 +438,38 @@ export type Database = {
           ingredient_id: string;
           quantity: number;
           note?: string;
+          photo_url?: string | null;
+          photo_public_id?: string | null;
         };
-        Update: { quantity?: number; note?: string };
+        Update: {
+          quantity?: number;
+          note?: string;
+          photo_url?: string | null;
+          photo_public_id?: string | null;
+        };
+        Relationships: [];
+      };
+      worksheet_opname_line: {
+        Row: WorksheetOpnameLineRow;
+        Insert: {
+          id?: string;
+          session_id: string;
+          ingredient_id: string;
+          closing_stock: number;
+        };
+        Update: { closing_stock?: number };
+        Relationships: [];
+      };
+      worksheet_premix_line: {
+        Row: WorksheetPremixLineRow;
+        Insert: {
+          id?: string;
+          session_id: string;
+          output_ingredient_id: string;
+          recipe_id: string;
+          batch_quantity: number;
+        };
+        Update: { batch_quantity?: number; recipe_id?: string };
         Relationships: [];
       };
       stock_ledger: {
@@ -548,10 +606,12 @@ export type Database = {
         Insert: {
           id?: string;
           output_ingredient_id: string;
+          yield_quantity?: number;
           is_active?: boolean;
         };
         Update: {
           output_ingredient_id?: string;
+          yield_quantity?: number;
           is_active?: boolean;
         };
         Relationships: [];

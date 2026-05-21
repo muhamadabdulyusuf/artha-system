@@ -14,7 +14,7 @@ AS $$
   SELECT COALESCE(
     auth.jwt() -> 'app_metadata' ->> 'staff_role',
     auth.jwt() ->> 'staff_role',
-    current_setting('request.jwt.claims', true)::jsonb ->> 'staff_role',
+    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'staff_role',
     ''
   );
 $$;
@@ -46,13 +46,14 @@ BEGIN
     'menu_recipe_version',
     'recipe_line',
     'supplier',
-    'supplier_catalog',
+    'supplier_ingredient_price',
     'purchase_order',
     'purchase_order_line',
     'business_day',
     'worksheet_session',
     'worksheet_in_line',
     'worksheet_out_line',
+    'worksheet_opname_line',
     'worksheet_sold_line',
     'stock_ledger',
     'stock_log',

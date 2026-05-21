@@ -31,6 +31,7 @@ export function StockAdjustmentPanel() {
       .from("ingredient")
       .select("*")
       .eq("is_active", true)
+      .eq("is_stock_tracked", true)
       .order("name", { ascending: true });
 
     if (ingErr) {

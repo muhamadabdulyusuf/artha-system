@@ -1,11 +1,5 @@
--- Role penonton (read-only) untuk Artha System
-
-DO $$
-BEGIN
-  ALTER TYPE staff_role ADD VALUE 'viewer';
-EXCEPTION
-  WHEN duplicate_object THEN NULL;
-END $$;
+-- Role penonton (read-only) untuk Artha System.
+-- staff_role.viewer is defined in 001_initial_schema.sql for clean rebuild safety.
 
 ALTER TABLE staff DROP CONSTRAINT IF EXISTS staff_department_role_check;
 

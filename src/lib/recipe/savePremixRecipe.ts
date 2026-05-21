@@ -15,8 +15,13 @@ export async function savePremixRecipe(
   supabase: SupabaseClient<Database>,
   outputIngredientId: string,
   components: PremixComponentInput[],
-  premixComponentIds: string[]
+  premixComponentIds: string[],
+  yieldQuantity = 1
 ): Promise<void> {
+  if (!Number.isFinite(yieldQuantity) || yieldQuantity <= 0) {
+    throw new Error("Yield premix per batch harus lebih dari 0.");
+  }
+
   const recipeMap = await loadPremixRecipeMap(
     supabase,
     outputIngredientId,
@@ -41,13 +46,20 @@ export async function savePremixRecipe(
   if (!recipeId) {
     const { data: created, error: createErr } = await supabase
       .from("recipes")
-      .insert({ output_ingredient_id: outputIngredientId, is_active: true })
+      .insert({ output_ingredient_id: outputIngredientId, yield_quantity: yieldQuantity, is_active: true })
       .select("id")
       .single();
 
     if (createErr) throw new Error(createErr.message);
     if (!created?.id) throw new Error("Gagal membuat resep premix.");
     recipeId = created.id;
+  } else {
+    const { error: updateYieldErr } = await supabase
+      .from("recipes")
+      .update({ yield_quantity: yieldQuantity })
+      .eq("id", recipeId);
+
+    if (updateYieldErr) throw new Error(updateYieldErr.message);
   }
 
   const { error: deleteErr } = await supabase

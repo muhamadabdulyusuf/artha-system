@@ -47,6 +47,7 @@ type MenuRecipeSummary = MenuItemRow & {
 type PremixRecipeSummary = IngredientRow & {
   components: RecipeIngredientSummary[];
   hasRecipe: boolean;
+  yieldQuantity: number;
 };
 
 export function MenuRecipeTab() {
@@ -187,17 +188,17 @@ export function MenuRecipeTab() {
       const outputIds = premixList.map((p) => p.id);
       const { data: recipeRows, error: recipeErr } = await supabase
         .from("recipes")
-        .select("id, output_ingredient_id")
+        .select("id, output_ingredient_id, yield_quantity")
         .in("output_ingredient_id", outputIds)
         .eq("is_active", true);
 
       if (recipeErr) throw recipeErr;
 
       const recipeByOutput = new Map(
-        (recipeRows ?? []).map((r) => [r.output_ingredient_id, r.id] as const)
+        (recipeRows ?? []).map((r) => [r.output_ingredient_id, r] as const)
       );
 
-      const recipeIds = [...recipeByOutput.values()];
+      const recipeIds = [...recipeByOutput.values()].map((recipe) => recipe.id);
       const componentsByRecipe = new Map<string, RecipeIngredientSummary[]>();
 
       if (recipeIds.length > 0) {
@@ -236,11 +237,13 @@ export function MenuRecipeTab() {
       }
 
       const summaries: PremixRecipeSummary[] = premixList.map((premix) => {
-        const recipeId = recipeByOutput.get(premix.id);
+        const recipe = recipeByOutput.get(premix.id);
+        const recipeId = recipe?.id;
         const components = recipeId ? (componentsByRecipe.get(recipeId) ?? []) : [];
         return {
           ...premix,
           components,
+          yieldQuantity: Number(recipe?.yield_quantity ?? 1),
           hasRecipe: components.length > 0,
         };
       });
@@ -610,7 +613,7 @@ export function MenuRecipeTab() {
                     <p className="mt-1 text-xs capitalize text-zinc-500">
                       {premix.department} · {premix.unit} ·{" "}
                       {premix.hasRecipe
-                        ? `${premix.components.length} bahan baku`
+                        ? `${premix.components.length} bahan baku · 1 batch = ${premix.yieldQuantity} ${premix.unit}`
                         : "Belum ada resep produksi"}
                     </p>
                   </div>

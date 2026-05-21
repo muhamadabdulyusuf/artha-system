@@ -106,7 +106,21 @@ CREATE INDEX production_logs_business_date_idx ON production_logs (business_date
 CREATE INDEX production_logs_department_idx ON production_logs (department);
 CREATE INDEX production_logs_output_idx ON production_logs (output_ingredient_id);
 
-ALTER TYPE stock_log_event_type ADD VALUE 'PRODUCTION';
+CREATE OR REPLACE FUNCTION public.jwt_staff_role()
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE(
+    auth.jwt() -> 'app_metadata' ->> 'staff_role',
+    auth.jwt() ->> 'staff_role',
+    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'staff_role',
+    ''
+  );
+$$;
+
+COMMENT ON FUNCTION public.jwt_staff_role() IS
+  'Staff role from JWT claims; returns empty string for anon prototype sessions.';
 
 -- Staff id from JWT (app_metadata.staff_id) or auth.uid()
 CREATE OR REPLACE FUNCTION public.auth_staff_id()

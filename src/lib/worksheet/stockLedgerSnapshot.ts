@@ -26,21 +26,21 @@ export function ledgerRowToSnapshot(
   };
 }
 
-/** Stok buku untuk perbandingan opname: current_stock bahan, dengan fallback ledger (0 jika kosong). */
+/** Stok buku untuk perbandingan opname: current_stock bahan, dengan fallback ledger jika tersedia. */
 export function resolveSystemStockForVariance(
   ingredientCurrentStock: unknown,
   ledger: StockLedgerSnapshot | null | undefined
 ): number {
-  const book = safeLedgerQty(ingredientCurrentStock);
   if (ledger) {
     const fromLedger =
       ledger.opening_stock +
-      ledger.in_qty +
+      ledger.in_qty -
       ledger.theoretical_usage +
       ledger.adjustment_qty;
     if (Number.isFinite(fromLedger)) {
       return fromLedger;
     }
   }
+  const book = safeLedgerQty(ingredientCurrentStock);
   return book;
 }

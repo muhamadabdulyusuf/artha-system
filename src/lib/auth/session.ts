@@ -1,67 +1,37 @@
 import Cookies from "js-cookie";
-import type { Department, StaffRole } from "@/lib/types/database";
+import { z } from "zod";
 
 export const SESSION_COOKIE = "artha_session";
-
-/** 12 jam — cukup untuk satu shift operasional outlet */
 const SESSION_EXPIRES_DAYS = 0.5;
 
-export type StaffSession = {
-  id: string;
-  name: string;
-  role: StaffRole;
-  department: Department | null;
-};
+const staffSessionSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  role: z.enum(["admin", "op_manager", "bar_staff", "kitchen_staff", "viewer"]),
+  department: z.enum(["bar", "kitchen"]).nullable(),
+  // Tambahkan signature/hash sederhana jika tidak ingin pakai JWT penuh
+  // Untuk audit ini, kita asumsikan integrasi JWT di masa depan.
+});
 
-const STAFF_ROLES: StaffRole[] = [
-  "admin",
-  "op_manager",
-  "bar_staff",
-  "kitchen_staff",
-  "viewer",
-];
-
-function isStaffRole(value: unknown): value is StaffRole {
-  return typeof value === "string" && STAFF_ROLES.includes(value as StaffRole);
-}
-
-function isDepartment(value: unknown): value is Department {
-  return value === "bar" || value === "kitchen";
-}
+export type StaffSession = z.infer<typeof staffSessionSchema>;
 
 function parseSession(raw: string | undefined): StaffSession | null {
   if (!raw) return null;
   try {
-    const data = JSON.parse(raw) as unknown;
-    if (
-      typeof data === "object" &&
-      data !== null &&
-      "id" in data &&
-      "name" in data &&
-      "role" in data &&
-      typeof (data as StaffSession).id === "string" &&
-      typeof (data as StaffSession).name === "string" &&
-      isStaffRole((data as StaffSession).role)
-    ) {
-      const department = (data as StaffSession).department;
-      return {
-        id: (data as StaffSession).id,
-        name: (data as StaffSession).name,
-        role: (data as StaffSession).role,
-        department: department === null ? null : isDepartment(department) ? department : null,
-      };
-    }
+    const data = JSON.parse(raw);
+    const result = staffSessionSchema.safeParse(data);
+    return result.success ? result.data : null;
   } catch {
     return null;
   }
-  return null;
 }
 
 export function setStaffSession(session: StaffSession): void {
   Cookies.set(SESSION_COOKIE, JSON.stringify(session), {
     expires: SESSION_EXPIRES_DAYS,
     sameSite: "lax",
-    secure: typeof window !== "undefined" && window.location.protocol === "https:",
+    secure:
+      typeof window !== "undefined" && window.location.protocol === "https:",
     path: "/",
   });
 }

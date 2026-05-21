@@ -1,13 +1,14 @@
--- Worksheet opname approval, stock audit log, extended closing status
-
-ALTER TYPE closing_status ADD VALUE 'PENDING_APPROVAL_ADMIN';
+-- Worksheet opname approval and stock audit log.
+-- closing_status.PENDING_APPROVAL_ADMIN is defined in 001_initial_schema.sql so it can
+-- be used safely in constraints when rebuilding from zero via Supabase SQL Editor.
 
 CREATE TYPE stock_log_event_type AS ENUM (
   'RECEIVE',
   'OUTSTOCK',
   'OPNAME',
   'CLOSING',
-  'ADJUSTMENT'
+  'ADJUSTMENT',
+  'PRODUCTION'
 );
 
 CREATE TYPE opname_pending_status AS ENUM (

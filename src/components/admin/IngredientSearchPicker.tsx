@@ -59,7 +59,7 @@ export function IngredientSearchPicker({
       const { data, error } = await supabase
         .from("ingredient")
         .select(
-          "id, name, unit, department, current_stock, minimum_stock, slow_moving_threshold_days, is_active, created_at, updated_at"
+          "id, name, unit, department, kind, current_stock, minimum_stock, slow_moving_threshold_days, is_stock_tracked, is_active, created_at, updated_at"
         )
         .eq("id", value)
         .maybeSingle();

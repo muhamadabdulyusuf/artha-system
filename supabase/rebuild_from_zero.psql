@@ -1,0 +1,29 @@
+-- Rebuild Artha database from zero using psql/Supabase CLI connection.
+-- This file uses psql \ir include commands, so it is not supported by Supabase SQL Editor.
+-- For SQL Editor, run reset_public_schema.sql first, then paste each migration file in order.
+
+\ir reset_public_schema.sql
+\ir migrations/001_initial_schema.sql
+\ir migrations/002_worksheet_out_line.sql
+\ir migrations/003_supplier_po.sql
+\ir migrations/004_supplier_phone_number.sql
+\ir migrations/005_ingredient_minimum_stock.sql
+\ir migrations/006_worksheet_out_line_validation.sql
+\ir migrations/007_worksheet_opname_approval_stock_log.sql
+\ir migrations/008_staff_verify_pin.sql
+\ir migrations/009_staff_role_viewer.sql
+\ir migrations/010_premix_production.sql
+\ir migrations/011_worksheet_opname_line.sql
+\ir migrations/012_ingredient_stock_tracking.sql
+\ir migrations/013_outstock_photo_optional_note.sql
+\ir migrations/014_ingredient_primary_supplier.sql
+\ir migrations/015_worksheet_premix_line.sql
+\ir migrations/016_premix_recipe_yield.sql
+\ir migrations/017_bar_indogrosir_ingredients.sql
+
+-- Prototype access policies. Keep this for development only while the app still uses anon Supabase client.
+\ir seeds/dev_worksheet_rls.sql
+\ir seeds/dev_staff.sql
+
+-- Optional JWT-only read-only viewer policies. Do not run for the current anon-client prototype.
+-- \ir seeds/viewer_rls_policies.sql

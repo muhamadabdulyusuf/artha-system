@@ -68,6 +68,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
   const [premixItems, setPremixItems] = useState<IngredientRow[]>([]);
   const [targetMenuId, setTargetMenuId] = useState("");
   const [targetPremixId, setTargetPremixId] = useState("");
+  const [premixYieldQty, setPremixYieldQty] = useState("1");
   const [rows, setRows] = useState<RecipeDraftRow[]>([newDraftRow()]);
   const [versionId, setVersionId] = useState<string | null>(null);
   const [recipeId, setRecipeId] = useState<string | null>(null);
@@ -103,6 +104,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
     setRows([newDraftRow()]);
     setVersionId(null);
     setRecipeId(null);
+    setPremixYieldQty("1");
     setError(null);
   }, []);
 
@@ -208,7 +210,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
       try {
         const { data: recipe, error: recipeErr } = await supabase
           .from("recipes")
-          .select("id")
+          .select("id, yield_quantity")
           .eq("output_ingredient_id", outputId)
           .eq("is_active", true)
           .maybeSingle();
@@ -220,6 +222,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
         }
 
         setRecipeId(recipe.id);
+        setPremixYieldQty(String(Number(recipe.yield_quantity ?? 1)));
 
         const { data: components, error: compErr } = await supabase
           .from("recipe_component")
@@ -424,6 +427,11 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
           .filter((p) => p.kind === "premix")
           .map((p) => p.ingredient_id);
 
+        const yieldQty = parseQuantity(premixYieldQty);
+        if (!Number.isFinite(yieldQty) || yieldQty <= 0) {
+          throw new Error("Yield/output premix per batch harus lebih dari 0.");
+        }
+
         await savePremixRecipe(
           supabase,
           targetPremixId,
@@ -431,7 +439,8 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
             ingredient_id: p.ingredient_id,
             qty_per_batch: p.quantity,
           })),
-          premixComponentIds
+          premixComponentIds,
+          yieldQty
         );
 
         setToast("Resep premix (bahan baku) berhasil disimpan.");
@@ -551,6 +560,29 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                 ke sini untuk menyusun bahan bakunya.
               </p>
             </div>
+          ) : null}
+
+          {targetType === "premix" && department ? (
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                Output / 1 Batch
+              </span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={premixYieldQty}
+                  onChange={(e) => setPremixYieldQty(e.target.value)}
+                  disabled={saving}
+                  className="min-h-11 flex-1 rounded-lg border border-zinc-600 bg-zinc-950 px-3 tabular-nums text-white focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  placeholder="Contoh: 1100"
+                />
+                <span className="min-w-14 text-sm text-zinc-400">{selectedPremix?.unit ?? ""}</span>
+              </div>
+              <p className="mt-1 text-xs text-zinc-500">
+                Contoh: 1 batch Base Tea menghasilkan 1100 ml.
+              </p>
+            </label>
           ) : null}
         </div>
 

@@ -6,6 +6,9 @@ export const OUTSTOCK_LOGICAL_FALLACY_MESSAGE =
 export type OutstockLineInput = {
   outQty: string;
   outNote: string;
+  closingStock?: string;
+  outPhotoUrl?: string;
+  outPhotoPublicId?: string;
 };
 
 export type OutstockLineValidation = {
@@ -37,8 +40,8 @@ export function validateOutstockLine(
   const availableStock = Number(ingredient.current_stock);
   const safeStock = Number.isFinite(availableStock) ? availableStock : 0;
   const exceedsStock = outQty > safeStock;
-  const noteRequired = outQty > 0;
-  const noteMissing = noteRequired && line.outNote.trim().length === 0;
+  const noteRequired = false;
+  const noteMissing = false;
 
   return {
     outQty,

@@ -3,10 +3,18 @@ import type { Department } from "@/lib/types/database";
 export type WorksheetDraftPayload = {
   lines: Record<
     string,
-    { inQty: string; closingStock: string; outQty: string; outNote: string }
+    {
+      inQty: string;
+      closingStock: string;
+      outQty: string;
+      outNote: string;
+      outPhotoUrl?: string;
+      outPhotoPublicId?: string;
+    }
   >;
   soldItems: Record<string, string>;
-  activeTab: "receive" | "outstock" | "opname" | "sold";
+  premixQuantities?: Record<string, string>;
+  activeTab: "receive" | "outstock" | "opname" | "premix" | "sold";
   savedAt: string;
 };
 

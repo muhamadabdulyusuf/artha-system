@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { getSupabaseClient } from "@/lib/supabase/client";
-import type { IngredientKind } from "@/lib/types/database";
+import type { IngredientKind, SupplierRow } from "@/lib/types/database";
 
 export type IngredientUnit =
   | "gr"
@@ -37,6 +37,8 @@ export type IngredientRecord = {
   department: IngredientDepartment;
   minimum_stock: number;
   kind: IngredientKind;
+  is_stock_tracked: boolean;
+  primary_supplier_id: string | null;
   is_active: boolean;
 };
 
@@ -55,6 +57,8 @@ type FormData = {
   department: IngredientDepartment;
   minimum_stock: string;
   kind: IngredientKind;
+  is_stock_tracked: boolean;
+  primary_supplier_id: string;
 };
 
 const FORM_UNITS: IngredientUnit[] = [
@@ -97,6 +101,8 @@ const EMPTY_FORM: FormData = {
   department: "bar",
   minimum_stock: "",
   kind: "raw",
+  is_stock_tracked: true,
+  primary_supplier_id: "",
 };
 
 function parseMinimumStock(raw: string): number | null {
@@ -119,10 +125,20 @@ export function IngredientModal({
   const isEditing = ingredient !== null;
 
   const [formData, setFormData] = useState<FormData>(EMPTY_FORM);
+  const [suppliers, setSuppliers] = useState<Pick<SupplierRow, "id" | "name">[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+
+    void supabase
+      .from("supplier")
+      .select("id, name")
+      .eq("is_active", true)
+      .order("name", { ascending: true })
+      .then(({ data, error }) => {
+        if (!error) setSuppliers(data ?? []);
+      });
 
     if (ingredient) {
       setFormData({
@@ -131,6 +147,8 @@ export function IngredientModal({
         department: ingredient.department,
         minimum_stock: String(ingredient.minimum_stock ?? 0),
         kind: ingredient.kind ?? "raw",
+        is_stock_tracked: ingredient.is_stock_tracked ?? true,
+        primary_supplier_id: ingredient.primary_supplier_id ?? "",
       });
     } else {
       setFormData(EMPTY_FORM);
@@ -164,6 +182,8 @@ export function IngredientModal({
             department: formData.department,
             minimum_stock,
             kind: formData.kind,
+            is_stock_tracked: formData.is_stock_tracked,
+            primary_supplier_id: formData.primary_supplier_id || null,
           })
           .eq("id", ingredient.id);
 
@@ -177,6 +197,8 @@ export function IngredientModal({
             department: formData.department,
             minimum_stock,
             kind: formData.kind,
+            is_stock_tracked: formData.is_stock_tracked,
+            primary_supplier_id: formData.primary_supplier_id || null,
             is_active: true,
           },
         ]);
@@ -269,6 +291,27 @@ export function IngredientModal({
         </label>
 
         <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-zinc-400">Supplier Utama</span>
+          <select
+            value={formData.primary_supplier_id}
+            onChange={(e) =>
+              setFormData((prev) => ({ ...prev, primary_supplier_id: e.target.value }))
+            }
+            className={SELECT_CLASS}
+          >
+            <option value="">Belum ditentukan</option>
+            {suppliers.map((supplier) => (
+              <option key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-zinc-500">
+            Dipakai untuk mengelompokkan list order low stock ke purchasing.
+          </p>
+        </label>
+
+        <label className="block">
           <span className="mb-1.5 block text-sm font-medium text-zinc-400">
             Batas Stok Minimum (Warning Low Stock)
           </span>
@@ -284,6 +327,26 @@ export function IngredientModal({
             placeholder="Contoh: 1000"
             className={INPUT_CLASS}
           />
+        </label>
+
+        <label className="flex items-start gap-3 rounded-xl border border-zinc-700 bg-zinc-950/60 p-3">
+          <input
+            type="checkbox"
+            checked={formData.is_stock_tracked}
+            onChange={(e) =>
+              setFormData((prev) => ({ ...prev, is_stock_tracked: e.target.checked }))
+            }
+            className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-950 text-indigo-600 focus:ring-indigo-500"
+          />
+          <span>
+            <span className="block text-sm font-medium text-zinc-200">
+              Dilacak sebagai stok
+            </span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">
+              Matikan untuk bahan unlimited/non-inventory seperti air keran. Bahan tetap bisa
+              dipakai di resep, tapi tidak muncul di worksheet, ledger, low stock, atau adjustment.
+            </span>
+          </span>
         </label>
 
         <button

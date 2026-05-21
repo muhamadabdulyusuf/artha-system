@@ -38,6 +38,7 @@ export function ProductionForm({ department }: ProductionFormProps) {
       .eq("department", department)
       .eq("kind", "premix")
       .eq("is_active", true)
+      .eq("is_stock_tracked", true)
       .order("name", { ascending: true });
 
     if (fetchErr) {

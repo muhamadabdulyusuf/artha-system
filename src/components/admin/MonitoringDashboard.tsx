@@ -35,7 +35,7 @@ import {
   normalizeWhatsAppPhoneNumber,
 } from "@/lib/purchase-order/whatsapp";
 import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
-import { InventoryHealthPanel } from "@/components/admin/InventoryHealthPanel";
+import { MenuMovementPanel } from "@/components/admin/MenuMovementPanel";
 import { OpnameApprovalPanel } from "@/components/admin/OpnameApprovalPanel";
 import { StockAdjustmentPanel } from "@/components/admin/StockAdjustmentPanel";
 
@@ -56,8 +56,12 @@ type StockLedgerExportRow = {
   closing_stock: number;
   current_stock: number;
   minimum_stock: number;
+  primary_supplier_id: string | null;
+  primary_supplier_name: string;
   variance_qty: number;
   Catatan_Out_Stock: string;
+  Foto_Out_Stock: string;
+  Bukti_Foto_Excel: string;
 };
 
 type SalesExportRow = {
@@ -79,6 +83,7 @@ type OutLineJoined = {
   ingredient_id: string;
   quantity: number;
   note: string;
+  photo_url: string | null;
   worksheet_session: { business_date: string; department: Department };
 };
 
@@ -128,9 +133,38 @@ type SupplierPriceJoinRow = SupplierIngredientPriceRow & {
 
 type SupplierPriceCogsJoinRow = {
   ingredient_id: string;
+  supplier_id: string;
   unit_price: number;
   valid_from: string;
   ingredient: { name: string } | { name: string }[] | null;
+  supplier: { id: string; name: string; phone_number: string | null } | { id: string; name: string; phone_number: string | null }[] | null;
+};
+
+type PrimarySupplierAssignment = {
+  supplierId: string;
+  supplierName: string;
+  phoneNumber: string | null;
+  unitPrice: number;
+};
+
+type LowStockOrderLine = {
+  ingredientId: string;
+  ingredientName: string;
+  unit: string;
+  quantity: number;
+  currentStock: number;
+  minimumStock: number;
+};
+
+type LowStockOrderGroup = {
+  supplierId: string;
+  supplierName: string;
+  phoneNumber: string | null;
+  lines: LowStockOrderLine[];
+};
+
+type IngredientWithPrimarySupplier = IngredientRow & {
+  supplier?: { id: string; name: string; phone_number: string | null } | null;
 };
 
 function departmentToCategory(department: Department): MenuCategory {
@@ -186,7 +220,7 @@ function escapeCsvField(value: string | number): string {
   return raw;
 }
 
-function rowsToCsv<T extends Record<string, string | number>>(rows: T[], columns: (keyof T)[]): string {
+function rowsToCsv<T extends Record<string, string | number | null>>(rows: T[], columns: (keyof T)[]): string {
   const header = columns.map((col) => escapeCsvField(String(col))).join(",");
   const body = rows
     .map((row) => columns.map((col) => escapeCsvField(row[col] ?? "")).join(","))
@@ -194,8 +228,271 @@ function rowsToCsv<T extends Record<string, string | number>>(rows: T[], columns
   return `${header}\n${body}`;
 }
 
+function firstCsvUrl(value: string): string {
+  return value
+    .split(";")
+    .map((url) => url.trim())
+    .find(Boolean) ?? "";
+}
+
+function excelHyperlinkFormula(url: string): string {
+  if (!url) return "";
+  const safeUrl = url.replace(/"/g, '""');
+  return `=HYPERLINK("${safeUrl}","Lihat Foto")`;
+}
+
 function downloadCsvFile(filename: string, csvContent: string): void {
   const blob = new Blob([`\uFEFF${csvContent}`], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+function escapeHtml(value: string | number): string {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function downloadHtmlExcelFile(filename: string, htmlContent: string): void {
+  const blob = new Blob([`\uFEFF${htmlContent}`], {
+    type: "application/vnd.ms-excel;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+function buildStockEvidenceExcelHtml(rows: StockLedgerExportRow[]): string {
+  const bodyRows = rows
+    .flatMap((row) => {
+      const photoUrls = row.Foto_Out_Stock.split(";")
+        .map((url) => url.trim())
+        .filter(Boolean);
+      if (photoUrls.length === 0) {
+        return [
+          `
+          <tr>
+            <td>${escapeHtml(row.business_date)}</td>
+            <td>${escapeHtml(row.ingredient_name)}</td>
+            <td>${escapeHtml(row.department)}</td>
+            <td>${escapeHtml(row.unit)}</td>
+            <td>${escapeHtml(row.adjustment_qty)}</td>
+            <td>${escapeHtml(row.Catatan_Out_Stock)}</td>
+            <td></td>
+          </tr>`,
+        ];
+      }
+
+      return photoUrls.map(
+        (url, index) => `
+          <tr>
+            <td>${escapeHtml(row.business_date)}</td>
+            <td>${escapeHtml(row.ingredient_name)}</td>
+            <td>${escapeHtml(row.department)}</td>
+            <td>${escapeHtml(row.unit)}</td>
+            <td>${escapeHtml(row.adjustment_qty)}</td>
+            <td>${escapeHtml(row.Catatan_Out_Stock)}</td>
+            <td>
+              <img src="${escapeHtml(url)}" width="120" height="120" alt="Bukti ${escapeHtml(
+                row.ingredient_name
+              )} ${index + 1}" />
+            </td>
+          </tr>`
+      );
+    })
+    .join("");
+
+  return `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          table { border-collapse: collapse; font-family: Arial, sans-serif; font-size: 12px; }
+          th, td { border: 1px solid #999; padding: 8px; vertical-align: top; }
+          th { background: #111827; color: #fff; }
+          img { object-fit: cover; }
+        </style>
+      </head>
+      <body>
+        <table>
+          <thead>
+            <tr>
+              <th>Tanggal</th>
+              <th>Bahan</th>
+              <th>Dept</th>
+              <th>Unit</th>
+              <th>Adjustment</th>
+              <th>Catatan Out Stock</th>
+              <th>Foto Bukti</th>
+            </tr>
+          </thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
+      </body>
+    </html>`;
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Gagal membaca file gambar."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function resolveExcelImageExtension(contentType: string): "jpeg" | "png" | "gif" {
+  if (contentType.includes("png")) return "png";
+  if (contentType.includes("gif")) return "gif";
+  return "jpeg";
+}
+
+async function downloadInventoryXlsx(filename: string, rows: StockLedgerExportRow[]): Promise<void> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Inventory Ledger");
+
+  sheet.columns = [
+    { header: "Tanggal", key: "date", width: 14 },
+    { header: "Bahan", key: "ingredient", width: 28 },
+    { header: "Dept", key: "department", width: 12 },
+    { header: "Unit", key: "unit", width: 10 },
+    { header: "Opening", key: "opening", width: 14 },
+    { header: "Receive", key: "receive", width: 14 },
+    { header: "Menu Usage", key: "usage", width: 14 },
+    { header: "Adjustment", key: "adjustment", width: 14 },
+    { header: "Closing", key: "closing", width: 14 },
+    { header: "Variance", key: "variance", width: 14 },
+    { header: "Min Stock", key: "minimum", width: 14 },
+    { header: "Supplier", key: "supplier", width: 22 },
+    { header: "Catatan Out Stock", key: "note", width: 36 },
+    { header: "Foto Bukti", key: "photo", width: 20 },
+  ];
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const ledger of rows) {
+    const photoUrls = ledger.Foto_Out_Stock.split(";")
+      .map((url) => url.trim())
+      .filter(Boolean);
+    const rowPhotoUrls = photoUrls.length > 0 ? photoUrls : [""];
+
+    for (const photoUrl of rowPhotoUrls) {
+      const excelRow = sheet.addRow({
+        date: ledger.business_date,
+        ingredient: ledger.ingredient_name,
+        department: ledger.department,
+        unit: ledger.unit,
+        opening: ledger.opening_stock,
+        receive: ledger.in_qty,
+        usage: ledger.theoretical_usage,
+        adjustment: ledger.adjustment_qty,
+        closing: ledger.closing_stock,
+        variance: ledger.variance_qty,
+        minimum: ledger.minimum_stock,
+        supplier: ledger.primary_supplier_name || "Belum ada",
+        note: ledger.Catatan_Out_Stock,
+        photo: photoUrl ? "" : "Tidak ada foto",
+      });
+      excelRow.height = 92;
+      excelRow.alignment = { vertical: "middle", wrapText: true };
+      if (!photoUrl) continue;
+
+      try {
+        const imageResponse = await fetch(photoUrl);
+        if (!imageResponse.ok) throw new Error("Foto tidak bisa diambil.");
+        const imageBlob = await imageResponse.blob();
+        const base64 = await blobToDataUrl(imageBlob);
+        const imageId = workbook.addImage({
+          base64,
+          extension: resolveExcelImageExtension(imageBlob.type),
+        });
+        const rowNumber = excelRow.number;
+        sheet.addImage(imageId, {
+          tl: { col: 13.15, row: rowNumber - 0.85 },
+          ext: { width: 110, height: 110 },
+        });
+      } catch {
+        excelRow.getCell("photo").value = "Gambar gagal dimuat.";
+      }
+    }
+  }
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+async function downloadSalesXlsx(filename: string, rows: SalesExportRow[]): Promise<void> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Laporan Penjualan");
+
+  sheet.columns = [
+    { header: "Tanggal", key: "date", width: 14 },
+    { header: "Menu", key: "menu", width: 30 },
+    { header: "Kategori", key: "category", width: 14 },
+    { header: "Qty Terjual", key: "quantity", width: 14 },
+    { header: "Harga Satuan", key: "unitPrice", width: 16 },
+    { header: "Gross Revenue", key: "revenue", width: 18 },
+  ];
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const row of rows) {
+    sheet.addRow({
+      date: row.session_date,
+      menu: row.menu_name,
+      category: row.category,
+      quantity: row.quantity_sold,
+      unitPrice: row.unit_price,
+      revenue: row.total_gross_revenue,
+    });
+  }
+
+  sheet.getColumn("unitPrice").numFmt = '"Rp" #,##0';
+  sheet.getColumn("revenue").numFmt = '"Rp" #,##0';
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -300,6 +597,30 @@ function openSupplierWhatsAppChat(supplierPhone: string, messageText: string): v
   const phone = normalizeWhatsAppPhoneNumber(supplierPhone);
   const encodedText = encodeURIComponent(messageText);
   window.open(`https://api.whatsapp.com/send?phone=${phone}&text=${encodedText}`, "_blank");
+}
+
+function buildPurchasingLowStockMessage(params: {
+  groups: LowStockOrderGroup[];
+  dateLabel: string;
+}): string {
+  const { groups, dateLabel } = params;
+  if (groups.length === 0) {
+    return `*LOW STOCK ORDER - ARTHA SYSTEM*\nTanggal: ${dateLabel}\n\nTidak ada bahan low stock.`;
+  }
+
+  return [
+    "*LOW STOCK ORDER - ARTHA SYSTEM*",
+    `Tanggal: ${dateLabel}`,
+    "",
+    ...groups.flatMap((group) => [
+      `${group.supplierName}:`,
+      ...group.lines.map(
+        (line) => `- ${line.ingredientName} ${formatPoWaQuantity(line.quantity)} ${line.unit}`
+      ),
+      "",
+    ]),
+    "Mohon diproses sesuai supplier masing-masing.",
+  ].join("\n");
 }
 
 function TopSellingWidget({
@@ -567,6 +888,9 @@ export function MonitoringDashboard() {
   const [ingredientStockById, setIngredientStockById] = useState<
     Record<string, { currentStock: number; minimumStock: number }>
   >({});
+  const [primarySupplierByIngredientId, setPrimarySupplierByIngredientId] = useState<
+    Record<string, PrimarySupplierAssignment>
+  >({});
   const [poSubmitting, setPoSubmitting] = useState(false);
   const [poSuccess, setPoSuccess] = useState<string | null>(null);
   const [poError, setPoError] = useState<string | null>(null);
@@ -613,7 +937,8 @@ export function MonitoringDashboard() {
       (row) =>
         row.ingredient_name.toLowerCase().includes(normalizedSearch) ||
         row.department.toLowerCase().includes(normalizedSearch) ||
-        row.Catatan_Out_Stock.toLowerCase().includes(normalizedSearch)
+        row.Catatan_Out_Stock.toLowerCase().includes(normalizedSearch) ||
+        row.Foto_Out_Stock.toLowerCase().includes(normalizedSearch)
     );
   }, [ledgerExportRows, normalizedSearch]);
 
@@ -641,7 +966,7 @@ export function MonitoringDashboard() {
       filteredLedgerRows.map((row) => ({
         ...row,
         outStockNote: row.Catatan_Out_Stock,
-        isLowStock: isLowStockCondition(row.current_stock, row.minimum_stock),
+        isLowStock: isLowStockCondition(row.closing_stock, row.minimum_stock),
         spillageAlert:
           row.adjustment_qty < 0 &&
           Math.abs(row.adjustment_qty) > Math.max(row.theoretical_usage * SPILLAGE_RATIO_THRESHOLD, 1),
@@ -655,13 +980,89 @@ export function MonitoringDashboard() {
     for (const row of ledgerExportRows) {
       if (row.business_date !== endDate) continue;
       if (seen.has(row.ingredient_id)) continue;
-      if (isLowStockCondition(row.current_stock, row.minimum_stock)) {
+      if (isLowStockCondition(row.closing_stock, row.minimum_stock)) {
         seen.add(row.ingredient_id);
         count += 1;
       }
     }
     return count;
   }, [ledgerExportRows, endDate]);
+
+  const lowStockOrderGroups = useMemo<LowStockOrderGroup[]>(() => {
+    const seen = new Set<string>();
+    const grouped = new Map<string, LowStockOrderGroup>();
+
+    for (const row of ledgerExportRows) {
+      if (row.business_date !== endDate) continue;
+      if (seen.has(row.ingredient_id)) continue;
+      seen.add(row.ingredient_id);
+
+      const currentStock = Number(row.closing_stock) || 0;
+      const minimumStock = Number(row.minimum_stock) || 0;
+      if (!isLowStockCondition(currentStock, minimumStock)) continue;
+
+      const supplier = row.primary_supplier_id
+        ? {
+            supplierId: row.primary_supplier_id,
+            supplierName: row.primary_supplier_name || "Belum ada supplier",
+            phoneNumber: null,
+            unitPrice: 0,
+          }
+        : (primarySupplierByIngredientId[row.ingredient_id] ?? {
+            supplierId: "unassigned",
+            supplierName: "Belum ada supplier",
+            phoneNumber: null,
+            unitPrice: 0,
+          });
+      const dailyNeed = ingredientDailyUsageById[row.ingredient_id] ?? 0;
+      const quantity = Math.max(
+        computeRecommendedPoQuantity(dailyNeed, coverageDays, minimumStock, currentStock),
+        1
+      );
+
+      const existing = grouped.get(supplier.supplierId) ?? {
+        supplierId: supplier.supplierId,
+        supplierName: supplier.supplierName,
+        phoneNumber: supplier.phoneNumber,
+        lines: [],
+      };
+      existing.lines.push({
+        ingredientId: row.ingredient_id,
+        ingredientName: row.ingredient_name,
+        unit: row.unit,
+        quantity,
+        currentStock,
+        minimumStock,
+      });
+      grouped.set(supplier.supplierId, existing);
+    }
+
+    return Array.from(grouped.values())
+      .map((group) => ({
+        ...group,
+        lines: group.lines.sort((a, b) => a.ingredientName.localeCompare(b.ingredientName)),
+      }))
+      .sort((a, b) => {
+        if (a.supplierId === "unassigned") return 1;
+        if (b.supplierId === "unassigned") return -1;
+        return a.supplierName.localeCompare(b.supplierName);
+      });
+  }, [
+    coverageDays,
+    endDate,
+    ingredientDailyUsageById,
+    ledgerExportRows,
+    primarySupplierByIngredientId,
+  ]);
+
+  const lowStockPurchasingText = useMemo(
+    () =>
+      buildPurchasingLowStockMessage({
+        groups: lowStockOrderGroups,
+        dateLabel: formatBusinessDateLabel(endDate),
+      }),
+    [endDate, lowStockOrderGroups]
+  );
 
   const barLedgerRows = useMemo(
     () => ledgerTableRows.filter((row) => row.department === "bar"),
@@ -748,8 +1149,9 @@ export function MonitoringDashboard() {
 
     const { data: ingredients, error: ingErr } = await supabase
       .from("ingredient")
-      .select("*")
+      .select("*, supplier:primary_supplier_id ( id, name, phone_number )")
       .eq("is_active", true)
+      .eq("is_stock_tracked", true)
       .order("name");
 
     if (ingErr) {
@@ -758,7 +1160,9 @@ export function MonitoringDashboard() {
       return;
     }
 
-    const ingredientMap = new Map((ingredients ?? []).map((i) => [i.id, i]));
+    const ingredientMap = new Map(
+      ((ingredients ?? []) as IngredientWithPrimarySupplier[]).map((i) => [i.id, i])
+    );
 
     const { data: sessionsInRange, error: sessionRangeErr } = await supabase
       .from("worksheet_session")
@@ -775,6 +1179,7 @@ export function MonitoringDashboard() {
     const sessionIds = (sessionsInRange ?? []).map((s) => s.id);
 
     const outNoteByLedgerKey = new Map<string, string>();
+    const outPhotoByLedgerKey = new Map<string, string>();
 
     if (sessionIds.length > 0) {
       const { data: outLinesRaw, error: outErr } = await supabase
@@ -784,6 +1189,7 @@ export function MonitoringDashboard() {
           ingredient_id,
           quantity,
           note,
+          photo_url,
           worksheet_session:session_id ( business_date, department )
         `
         )
@@ -808,6 +1214,13 @@ export function MonitoringDashboard() {
         if (note) {
           const existing = outNoteByLedgerKey.get(key);
           outNoteByLedgerKey.set(key, existing ? `${existing}; ${note}` : note);
+        }
+        if (line.photo_url) {
+          const existingPhoto = outPhotoByLedgerKey.get(key);
+          outPhotoByLedgerKey.set(
+            key,
+            existingPhoto ? `${existingPhoto}; ${line.photo_url}` : line.photo_url
+          );
         }
       }
     }
@@ -835,6 +1248,8 @@ export function MonitoringDashboard() {
 
       const noteKey = `${ledger.business_date}|${ledger.ingredient_id}`;
       const outNote = outNoteByLedgerKey.get(noteKey) ?? "";
+      const outPhoto = outPhotoByLedgerKey.get(noteKey) ?? "";
+      const firstOutPhoto = firstCsvUrl(outPhoto);
 
       exportLedger.push({
         business_date: ledger.business_date,
@@ -849,8 +1264,12 @@ export function MonitoringDashboard() {
         closing_stock: Number(ledger.closing_stock),
         current_stock: Number(ingredient.current_stock ?? 0),
         minimum_stock: Number(ingredient.minimum_stock ?? 0),
+        primary_supplier_id: ingredient.primary_supplier_id ?? null,
+        primary_supplier_name: ingredient.supplier?.name ?? "",
         variance_qty: computeVarianceQty(ledger),
         Catatan_Out_Stock: outNote,
+        Foto_Out_Stock: outPhoto,
+        Bukti_Foto_Excel: excelHyperlinkFormula(firstOutPhoto),
       });
     }
 
@@ -913,7 +1332,7 @@ export function MonitoringDashboard() {
     const dailyUsageById: Record<string, number> = {};
     const stockById: Record<string, { currentStock: number; minimumStock: number }> = {};
 
-    for (const [ingredientId] of closingByIngredient) {
+    for (const [ingredientId, closing] of closingByIngredient) {
       const ingredient = ingredientMap.get(ingredientId);
       if (!ingredient) continue;
 
@@ -923,7 +1342,7 @@ export function MonitoringDashboard() {
       }
 
       stockById[ingredientId] = {
-        currentStock: Number(ingredient.current_stock ?? 0),
+        currentStock: closing,
         minimumStock: Number(ingredient.minimum_stock ?? 0),
       };
     }
@@ -935,7 +1354,7 @@ export function MonitoringDashboard() {
       }
       if (!stockById[row.ingredient_id]) {
         stockById[row.ingredient_id] = {
-          currentStock: row.current_stock,
+          currentStock: row.closing_stock,
           minimumStock: row.minimum_stock,
         };
       }
@@ -1016,29 +1435,45 @@ export function MonitoringDashboard() {
       .select(
         `
         ingredient_id,
+        supplier_id,
         unit_price,
         valid_from,
-        ingredient:ingredient_id ( name )
+        ingredient:ingredient_id ( name ),
+        supplier:supplier_id ( id, name, phone_number )
       `
       )
       .order("valid_from", { ascending: false });
 
     if (priceErr) {
       setCogsAlerts([]);
+      setPrimarySupplierByIngredientId({});
     } else {
       const alerts: CogsAlert[] = [];
       const pricesByIngredient = new Map<string, { name: string; prices: number[] }>();
+      const primarySupplierMap: Record<string, PrimarySupplierAssignment> = {};
 
       for (const row of (priceRows ?? []) as SupplierPriceCogsJoinRow[]) {
         const ingRaw = row.ingredient;
         const ingName = Array.isArray(ingRaw) ? ingRaw[0]?.name : ingRaw?.name;
         if (!ingName) continue;
+        const supplierRaw = row.supplier;
+        const supplier = Array.isArray(supplierRaw) ? supplierRaw[0] : supplierRaw;
+        if (supplier && !primarySupplierMap[row.ingredient_id]) {
+          primarySupplierMap[row.ingredient_id] = {
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            phoneNumber: supplier.phone_number ?? null,
+            unitPrice: Number(row.unit_price) || 0,
+          };
+        }
         const bucket = pricesByIngredient.get(row.ingredient_id) ?? { name: ingName, prices: [] };
         if (bucket.prices.length < 2) {
           bucket.prices.push(Number(row.unit_price));
         }
         pricesByIngredient.set(row.ingredient_id, bucket);
       }
+
+      setPrimarySupplierByIngredientId(primarySupplierMap);
 
       for (const bucket of pricesByIngredient.values()) {
         if (bucket.prices.length < 2) continue;
@@ -1123,35 +1558,37 @@ export function MonitoringDashboard() {
 
   const csvDateSuffix = `${startDate}_to_${endDate}`;
 
-  const handleExportStockLedger = () => {
+  const handleExportInventory = async () => {
     const rows = normalizedSearch ? filteredLedgerRows : ledgerExportRows;
-    const csv = rowsToCsv(rows, [
-      "business_date",
-      "ingredient_name",
-      "department",
-      "unit",
-      "opening_stock",
-      "in_qty",
-      "theoretical_usage",
-      "adjustment_qty",
-      "Catatan_Out_Stock",
-      "closing_stock",
-      "variance_qty",
-    ]);
-    downloadCsvFile(`stock-ledger-${csvDateSuffix}.csv`, csv);
+    await downloadInventoryXlsx(`inventory-ledger-${csvDateSuffix}.xlsx`, rows);
   };
 
-  const handleExportSales = () => {
+  const handleExportSales = async () => {
     const rows = normalizedSearch ? filteredSalesRows : salesExportRows;
-    const csv = rowsToCsv(rows, [
-      "session_date",
-      "menu_name",
-      "category",
-      "quantity_sold",
-      "unit_price",
-      "total_gross_revenue",
-    ]);
-    downloadCsvFile(`laporan-penjualan-${csvDateSuffix}.csv`, csv);
+    await downloadSalesXlsx(`laporan-penjualan-${csvDateSuffix}.xlsx`, rows);
+  };
+
+  const handleShareLowStockToPurchasing = async () => {
+    if (lowStockOrderGroups.length === 0) {
+      window.alert("Belum ada bahan low stock untuk dikirim ke purchasing.");
+      return;
+    }
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "Low Stock Order - Artha System",
+          text: lowStockPurchasingText,
+        });
+      } else {
+        await navigator.clipboard.writeText(lowStockPurchasingText);
+        window.alert("List order per supplier sudah disalin. Kirim ke purchasing via WhatsApp.");
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      await navigator.clipboard.writeText(lowStockPurchasingText);
+      window.alert("List order per supplier sudah disalin. Kirim ke purchasing via WhatsApp.");
+    }
   };
 
   const handleStartDateChange = (value: string) => {
@@ -1221,35 +1658,8 @@ export function MonitoringDashboard() {
       })
       .filter((line) => line.quantity > 0);
 
-    const seenBahanIds = new Set<string>();
-    const lowStockTableRows: {
-      ingredientId: string;
-      name: string;
-      unit: string;
-      current_stock: number;
-      minimum_stock: number;
-    }[] = [];
-
-    for (const row of ledgerExportRows) {
-      if (row.business_date !== endDate) continue;
-      if (seenBahanIds.has(row.ingredient_id)) continue;
-      seenBahanIds.add(row.ingredient_id);
-
-      const currentStock = Number(row.current_stock) || 0;
-      const minimumStock = Number(row.minimum_stock) || 0;
-      if (!isLowStockCondition(currentStock, minimumStock)) continue;
-
-      lowStockTableRows.push({
-        ingredientId: row.ingredient_id,
-        name: row.ingredient_name ?? "",
-        unit: row.unit ?? "",
-        current_stock: currentStock,
-        minimum_stock: minimumStock,
-      });
-    }
-
     const hasManualCart = cartItems.length > 0;
-    const hasLowStock = lowStockTableRows.length > 0;
+    const hasLowStock = lowStockOrderGroups.length > 0;
 
     let waTextArray: string[] = [];
 
@@ -1275,28 +1685,31 @@ export function MonitoringDashboard() {
         "---------------------------------------------",
       ];
     } else if (hasLowStock) {
+      const totalLowStockItems = lowStockOrderGroups.reduce(
+        (sum, group) => sum + group.lines.length,
+        0
+      );
       waTextArray = [
         "*PURCHASE ORDER - AUTO REPLENISHMENT*",
         "---------------------------------------------",
         `*Tanggal:* ${formattedDate}`,
         `*Kepada:* ${supplierName}`,
+        `*Coverage:* ${coverageDays} hari`,
+        `*Total Item:* ${totalLowStockItems} bahan`,
         "",
-        "*DAFTAR PESANAN (URGENT LOW STOCK):*",
-        ...lowStockTableRows.map((item, i) => {
-          const dailyNeed = ingredientDailyUsageById[item.ingredientId] ?? 0;
-          const orderQty = Math.max(
-            computeRecommendedPoQuantity(
-              dailyNeed,
-              coverageDays,
-              item.minimum_stock,
-              item.current_stock
-            ),
-            1
-          );
-          return `${i + 1}. ${item.name} - ${formatPoWaQuantity(orderQty)} ${item.unit}`;
-        }),
+        "*DAFTAR PESANAN PER SUPPLIER:*",
+        ...lowStockOrderGroups.flatMap((group, groupIndex) => [
+          "",
+          `${groupIndex + 1}. *${group.supplierName}*`,
+          ...group.lines.map(
+            (line) =>
+              `   - ${line.ingredientName}: ${formatPoWaQuantity(line.quantity)} ${line.unit} ` +
+              `(stok ${formatPoWaQuantity(line.currentStock)} / min ${formatPoWaQuantity(line.minimumStock)})`
+          ),
+        ]),
         "",
-        "*Total Nilai Pesanan:* Menunggu Konfirmasi Harga",
+        "*Catatan:* Supplier 'Belum ada supplier' perlu dilengkapi di Master Ingredients.",
+        "*Total Nilai Pesanan:* Menunggu konfirmasi harga masing-masing supplier.",
         "---------------------------------------------",
       ];
     } else {
@@ -1377,7 +1790,7 @@ export function MonitoringDashboard() {
 
     if (hasLowStock) {
       setPoSuccess(
-        `PO Auto Replenishment (${lowStockTableRows.length} bahan low stock) dibuka untuk ${supplierName} via WhatsApp.`
+        `PO Auto Replenishment (${lowStockOrderGroups.length} supplier) dibuka untuk ${supplierName} via WhatsApp.`
       );
       return;
     }
@@ -1387,8 +1800,6 @@ export function MonitoringDashboard() {
 
   return (
     <div className="space-y-6">
-      <InventoryHealthPanel />
-
       <section className="grid gap-6 lg:grid-cols-2">
         <OpnameApprovalPanel />
         <StockAdjustmentPanel />
@@ -1470,6 +1881,8 @@ export function MonitoringDashboard() {
       {error && (
         <p className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</p>
       )}
+
+      <MenuMovementPanel startDate={startDate} endDate={endDate} refreshKey={refreshKey} />
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-20 text-slate-500">
@@ -1608,27 +2021,27 @@ export function MonitoringDashboard() {
               <div>
                 <h3 className="text-base font-semibold text-slate-100">Log & Data Export Center</h3>
                 <p className="text-xs text-slate-500">
-                  Ekspor CSV client-side — data mengikuti rentang tanggal ({dateRangeLabel}) & filter pencarian aktif.
+                  Ekspor XLSX client-side — data mengikuti rentang tanggal ({dateRangeLabel}) & filter pencarian aktif.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={handleExportStockLedger}
+                  onClick={() => void handleExportInventory()}
                   disabled={ledgerExportRows.length === 0}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Download className="h-4 w-4" />
-                  Download CSV: Stock Ledger
+                  Download XLSX: Inventory
                 </button>
                 <button
                   type="button"
-                  onClick={handleExportSales}
+                  onClick={() => void handleExportSales()}
                   disabled={salesExportRows.length === 0}
                   className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Download className="h-4 w-4" />
-                  Download CSV: Laporan Penjualan
+                  Download XLSX: Penjualan
                 </button>
               </div>
             </div>
@@ -1664,6 +2077,44 @@ export function MonitoringDashboard() {
                 {isSingleDayRange ? "hari ini" : `per ${formatBusinessDateLabel(endDate)}`}.
               </p>
             </div>
+
+            {lowStockOrderGroups.length > 0 ? (
+              <div className="mb-4 rounded-xl border border-slate-800 bg-zinc-950/60 p-4">
+                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-100">Order Low Stock per Supplier</h4>
+                    <p className="text-xs text-slate-500">
+                      Otomatis dikelompokkan dari supplier terbaru di katalog harga bahan.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleShareLowStockToPurchasing()}
+                    className="flex min-h-10 items-center justify-center gap-2 rounded-lg border border-indigo-500/40 bg-indigo-600/15 px-3 text-sm font-semibold text-indigo-200 hover:bg-indigo-600/25"
+                  >
+                    <Send className="h-4 w-4" />
+                    Share ke Purchasing
+                  </button>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {lowStockOrderGroups.map((group) => (
+                    <div key={group.supplierId} className="rounded-lg border border-slate-800 bg-zinc-900/70 p-3">
+                      <p className="mb-2 text-sm font-semibold text-slate-100">{group.supplierName}</p>
+                      <ul className="space-y-1 text-sm text-slate-300">
+                        {group.lines.map((line) => (
+                          <li key={line.ingredientId} className="flex justify-between gap-3">
+                            <span>{line.ingredientName}</span>
+                            <span className="shrink-0 tabular-nums text-slate-100">
+                              {formatPoWaQuantity(line.quantity)} {line.unit}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="space-y-4">
               <DepartmentLedgerTable
