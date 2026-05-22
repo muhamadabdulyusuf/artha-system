@@ -89,7 +89,10 @@ type MenuItemWithRecipe = MenuItemRow & {
 type PremixRecipeComponent = {
   ingredient_id: string;
   qty_per_batch: number;
-  ingredient: Pick<IngredientRow, "id" | "name" | "unit" | "current_stock" | "is_stock_tracked"> | null;
+  ingredient: Pick<
+    IngredientRow,
+    "id" | "name" | "unit" | "purchase_to_stock_factor" | "current_stock" | "is_stock_tracked"
+  > | null;
 };
 
 type PremixRecipeNested = {
@@ -156,6 +159,33 @@ function formatQty(value: number): string {
   if (!Number.isFinite(value)) return "0";
   const rounded = Math.round(value * 10000) / 10000;
   return String(rounded);
+}
+
+function getPurchaseUnit(ingredient: Pick<IngredientRow, "unit" | "purchase_unit">): string {
+  return ingredient.purchase_unit?.trim() || ingredient.unit;
+}
+
+function getPurchaseToStockFactor(
+  ingredient: Pick<IngredientRow, "purchase_to_stock_factor">
+): number {
+  const factor = Number(ingredient.purchase_to_stock_factor);
+  return Number.isFinite(factor) && factor > 0 ? factor : 1;
+}
+
+function receiveInputToStockQty(
+  ingredient: Pick<IngredientRow, "purchase_to_stock_factor">,
+  receiveInputQty: string
+): number {
+  return parseQty(receiveInputQty) * getPurchaseToStockFactor(ingredient);
+}
+
+function stockQtyToReceiveInput(
+  ingredient: Pick<IngredientRow, "purchase_to_stock_factor"> | undefined,
+  stockQty: number
+): string {
+  if (!ingredient || stockQty === 0) return "";
+  const factor = getPurchaseToStockFactor(ingredient);
+  return formatQty(stockQty / factor);
 }
 
 function blankZero(value: string | undefined): string {
@@ -347,6 +377,7 @@ async function fetchPremixWithActiveRecipes(
               id,
               name,
               unit,
+              purchase_to_stock_factor,
               current_stock,
               is_stock_tracked
             )
@@ -648,6 +679,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     const ingredientList = ingRows ?? [];
     setIngredients(ingredientList);
     const ingredientIds = ingredientList.map((i) => i.id);
+    const ingredientById = new Map(ingredientList.map((ingredient) => [ingredient.id, ingredient]));
 
     let menuList: MenuItemWithRecipe[];
     let premixList: PremixItemWithRecipe[];
@@ -759,7 +791,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         ingredientPreset[row.ingredient_id] = {
           inQty:
             existing?.inQty ??
-            (Number(snapshot?.in_qty ?? 0) === 0 ? "" : String(snapshot?.in_qty ?? 0)),
+            stockQtyToReceiveInput(ingredientById.get(row.ingredient_id), snapshot?.in_qty ?? 0),
           closingStock: existing?.closingStock ?? String(snapshot?.closing_stock ?? 0),
           outQty: existing?.outQty,
           outNote: existing?.outNote,
@@ -1436,7 +1468,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       for (const [ingredientId, requiredQty] of premixUsageMap) {
         const ing = freshById.get(ingredientId);
         if (!ing) continue;
-        const receiveQty = parseQty(lines[ingredientId]?.inQty ?? "");
+        const receiveQty = receiveInputToStockQty(ing, lines[ingredientId]?.inQty ?? "");
         const premixOutputQty = premixOutputMap.get(ingredientId) ?? 0;
         const bookStock = previousClosingMap.get(ingredientId) ?? Number(ing.current_stock) ?? 0;
         const available = Math.max(0, bookStock) + receiveQty + premixOutputQty;
@@ -1453,7 +1485,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           0,
           previousClosingMap.get(ing.id) ?? Number(ing.current_stock) ?? 0
         );
-        const receive_qty = parseQty(line.inQty);
+        const receive_qty = receiveInputToStockQty(ing, line.inQty);
         const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
         const in_qty = receive_qty + premix_output_qty;
         const out_qty = parseQty(line.outQty);
@@ -1880,6 +1912,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   ) : null}
                   {filteredReceiveIngredients.map((ing) => {
                     const line = lines[ing.id] ?? DEFAULT_LINE;
+                    const purchaseUnit = getPurchaseUnit(ing);
+                    const factor = getPurchaseToStockFactor(ing);
+                    const stockQty = receiveInputToStockQty(ing, line.inQty);
                     return (
                       <li
                         key={ing.id}
@@ -1887,11 +1922,16 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                       >
                         <div className="mb-3">
                           <p className="font-semibold text-zinc-50">{ing.name}</p>
-                          <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
+                          <p className="text-xs text-zinc-500">
+                            Stok: {ing.unit}
+                            {purchaseUnit !== ing.unit
+                              ? ` · Receive: 1 ${purchaseUnit} = ${factor} ${ing.unit}`
+                              : ""}
+                          </p>
                         </div>
                         <label className="block">
                           <span className="mb-1 block text-xs text-zinc-400">
-                            Pasokan masuk (in_qty)
+                            Pasokan masuk ({purchaseUnit})
                           </span>
                           <input
                             type="number"
@@ -1905,6 +1945,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             className={INPUT_CLASS}
                           />
                         </label>
+                        {purchaseUnit !== ing.unit && parseQty(line.inQty) > 0 ? (
+                          <p className="mt-2 text-xs text-emerald-300">
+                            Masuk ledger: {formatQty(stockQty)} {ing.unit}
+                          </p>
+                        ) : null}
                       </li>
                     );
                   })}
@@ -2205,7 +2250,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                 {recipe.recipe_component.map((component) => {
                                   const componentIng = component.ingredient;
                                   const required = Number(component.qty_per_batch) * qty;
-                                  const receive = componentIng ? parseQty(lines[componentIng.id]?.inQty ?? "") : 0;
+                                  const receive = componentIng
+                                    ? receiveInputToStockQty(componentIng, lines[componentIng.id]?.inQty ?? "")
+                                    : 0;
                                   const available = componentIng
                                     ? Number(componentIng.current_stock ?? 0) + receive
                                     : 0;

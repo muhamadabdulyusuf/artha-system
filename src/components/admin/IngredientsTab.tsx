@@ -13,6 +13,8 @@ interface Ingredient {
   id: string;
   name: string;
   unit: IngredientUnit;
+  purchase_unit: IngredientUnit | null;
+  purchase_to_stock_factor: number;
   department: IngredientDepartment;
   kind: IngredientKind;
   minimum_stock: number;
@@ -29,13 +31,15 @@ type DeptFilter = "all" | FormDepartment;
 const SEARCH_INPUT_CLASS =
   "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
 
-const TABLE_COL_COUNT = 8;
+const TABLE_COL_COUNT = 9;
 
 function mapRow(row: Record<string, unknown>): Ingredient {
   return {
     id: String(row.id),
     name: String(row.name),
     unit: (row.unit ? String(row.unit) : "gr") as Ingredient["unit"],
+    purchase_unit: row.purchase_unit ? (String(row.purchase_unit) as Ingredient["unit"]) : null,
+    purchase_to_stock_factor: Number(row.purchase_to_stock_factor ?? 1),
     department: (row.department as FormDepartment) || "bar",
     kind: (row.kind === "premix" ? "premix" : "raw") as IngredientKind,
     minimum_stock: Number(row.minimum_stock ?? 0),
@@ -58,6 +62,8 @@ function toModalRecord(item: Ingredient): IngredientRecord {
     id: item.id,
     name: item.name,
     unit: item.unit,
+    purchase_unit: item.purchase_unit,
+    purchase_to_stock_factor: item.purchase_to_stock_factor,
     department: item.department,
     kind: item.kind,
     minimum_stock: item.minimum_stock,
@@ -242,7 +248,8 @@ export function IngredientsTab() {
               <tr>
                 <th className="w-14 px-4 py-3 font-medium">No</th>
                 <th className="px-4 py-3 font-medium">Nama Bahan</th>
-                <th className="px-4 py-3 font-medium">Satuan Unit</th>
+                <th className="px-4 py-3 font-medium">Satuan Stok</th>
+                <th className="px-4 py-3 font-medium">Receive</th>
                 <th className="px-4 py-3 font-medium">Jenis</th>
                 <th className="px-4 py-3 font-medium">Tracking</th>
                 <th className="px-4 py-3 font-medium">Supplier</th>
@@ -269,6 +276,15 @@ export function IngredientsTab() {
                     <td className="px-4 py-3 tabular-nums text-zinc-500">{index + 1}</td>
                     <td className="px-4 py-3 font-medium text-white">{item.name}</td>
                     <td className="px-4 py-3 text-zinc-300">{item.unit}</td>
+                    <td className="px-4 py-3 text-zinc-300">
+                      {item.purchase_unit ? (
+                        <span>
+                          1 {item.purchase_unit} = {item.purchase_to_stock_factor} {item.unit}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-600">Sama</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-block rounded-full px-2 py-0.5 text-xs capitalize ${

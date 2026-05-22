@@ -34,6 +34,8 @@ export type IngredientRecord = {
   id: string;
   name: string;
   unit: IngredientUnit;
+  purchase_unit: IngredientUnit | null;
+  purchase_to_stock_factor: number;
   department: IngredientDepartment;
   minimum_stock: number;
   kind: IngredientKind;
@@ -54,6 +56,8 @@ type IngredientModalProps = {
 type FormData = {
   name: string;
   unit: IngredientUnit;
+  purchase_unit: "" | IngredientUnit;
+  purchase_to_stock_factor: string;
   department: IngredientDepartment;
   minimum_stock: string;
   kind: IngredientKind;
@@ -98,6 +102,8 @@ const INPUT_CLASS =
 const EMPTY_FORM: FormData = {
   name: "",
   unit: "gr",
+  purchase_unit: "",
+  purchase_to_stock_factor: "1",
   department: "bar",
   minimum_stock: "",
   kind: "raw",
@@ -110,6 +116,14 @@ function parseMinimumStock(raw: string): number | null {
   if (trimmed === "") return 0;
   const value = Number(trimmed);
   if (!Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+function parseConversionFactor(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return 1;
+  const value = Number(trimmed.replace(",", "."));
+  if (!Number.isFinite(value) || value <= 0) return null;
   return value;
 }
 
@@ -144,6 +158,8 @@ export function IngredientModal({
       setFormData({
         name: ingredient.name,
         unit: ingredient.unit,
+        purchase_unit: ingredient.purchase_unit ?? "",
+        purchase_to_stock_factor: String(ingredient.purchase_to_stock_factor ?? 1),
         department: ingredient.department,
         minimum_stock: String(ingredient.minimum_stock ?? 0),
         kind: ingredient.kind ?? "raw",
@@ -170,6 +186,14 @@ export function IngredientModal({
       return;
     }
 
+    const purchase_to_stock_factor = parseConversionFactor(formData.purchase_to_stock_factor);
+    if (purchase_to_stock_factor === null) {
+      onError("Isi per satuan beli harus angka lebih dari 0.");
+      return;
+    }
+
+    const purchase_unit = formData.purchase_unit || null;
+
     setIsSubmitting(true);
 
     try {
@@ -179,6 +203,8 @@ export function IngredientModal({
           .update({
             name: trimmedName,
             unit: formData.unit,
+            purchase_unit,
+            purchase_to_stock_factor,
             department: formData.department,
             minimum_stock,
             kind: formData.kind,
@@ -194,6 +220,8 @@ export function IngredientModal({
           {
             name: trimmedName,
             unit: formData.unit,
+            purchase_unit,
+            purchase_to_stock_factor,
             department: formData.department,
             minimum_stock,
             kind: formData.kind,
@@ -237,7 +265,9 @@ export function IngredientModal({
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">Satuan Unit</span>
+          <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+            Satuan Stok
+          </span>
           <select
             value={formData.unit}
             onChange={(e) =>
@@ -251,7 +281,59 @@ export function IngredientModal({
               </option>
             ))}
           </select>
+          <p className="mt-1 text-xs text-zinc-500">
+            Dipakai untuk resep, out stock, opname, dan ledger stok.
+          </p>
         </label>
+
+        <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+              Satuan Beli / Receive
+            </span>
+            <select
+              value={formData.purchase_unit}
+              onChange={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  purchase_unit: e.target.value as "" | IngredientUnit,
+                }))
+              }
+              className={SELECT_CLASS}
+            >
+              <option value="">Sama dengan stok</option>
+              {FORM_UNITS.map((u) => (
+                <option key={u} value={u}>
+                  {u}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+              Isi per Satuan Beli
+            </span>
+            <input
+              type="number"
+              inputMode="decimal"
+              min={0.0001}
+              step="any"
+              value={formData.purchase_to_stock_factor}
+              onChange={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  purchase_to_stock_factor: e.target.value,
+                }))
+              }
+              placeholder="Contoh: 50"
+              className={INPUT_CLASS}
+            />
+          </label>
+        </div>
+        <p className="-mt-2 text-xs text-zinc-500">
+          Contoh: stok pcs, receive pack, isi 50 berarti 1 pack masuk sebagai 50 pcs.
+        </p>
 
         <label className="block">
           <span className="mb-1.5 block text-sm font-medium text-zinc-400">Jenis Bahan</span>

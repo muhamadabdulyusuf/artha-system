@@ -40,6 +40,8 @@ export type IngredientRow = {
   name: string;
   department: Department;
   unit: string;
+  purchase_unit: string | null;
+  purchase_to_stock_factor: number;
   kind: IngredientKind;
   current_stock: number;
   minimum_stock: number;
@@ -310,6 +312,8 @@ export type Database = {
           name: string;
           department: Department;
           unit: string;
+          purchase_unit?: string | null;
+          purchase_to_stock_factor?: number;
           kind?: IngredientKind;
           current_stock?: number;
           minimum_stock?: number;
@@ -322,6 +326,8 @@ export type Database = {
           name?: string;
           department?: Department;
           unit?: string;
+          purchase_unit?: string | null;
+          purchase_to_stock_factor?: number;
           kind?: IngredientKind;
           current_stock?: number;
           minimum_stock?: number;
