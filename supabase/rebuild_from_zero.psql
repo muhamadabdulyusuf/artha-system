@@ -23,6 +23,7 @@
 \ir migrations/018_ingredient_purchase_unit_conversion.sql
 \ir migrations/019_active_only_name_uniques.sql
 \ir migrations/020_allow_cross_department_menu_recipes.sql
+\ir migrations/021_receive_prices.sql
 
 -- Prototype access policies. Keep this for development only while the app still uses anon Supabase client.
 \ir seeds/dev_worksheet_rls.sql

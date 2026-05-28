@@ -36,6 +36,7 @@ export type IngredientRecord = {
   unit: IngredientUnit;
   purchase_unit: IngredientUnit | null;
   purchase_to_stock_factor: number;
+  default_unit_price: number;
   department: IngredientDepartment;
   minimum_stock: number;
   kind: IngredientKind;
@@ -58,6 +59,7 @@ type FormData = {
   unit: IngredientUnit;
   purchase_unit: "" | IngredientUnit;
   purchase_to_stock_factor: string;
+  default_unit_price: string;
   department: IngredientDepartment;
   minimum_stock: string;
   kind: IngredientKind;
@@ -104,6 +106,7 @@ const EMPTY_FORM: FormData = {
   unit: "gr",
   purchase_unit: "",
   purchase_to_stock_factor: "1",
+  default_unit_price: "",
   department: "bar",
   minimum_stock: "",
   kind: "raw",
@@ -124,6 +127,14 @@ function parseConversionFactor(raw: string): number | null {
   if (trimmed === "") return 1;
   const value = Number(trimmed.replace(",", "."));
   if (!Number.isFinite(value) || value <= 0) return null;
+  return value;
+}
+
+function parseUnitPrice(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return 0;
+  const value = Number(trimmed.replace(",", "."));
+  if (!Number.isFinite(value) || value < 0) return null;
   return value;
 }
 
@@ -160,6 +171,10 @@ export function IngredientModal({
         unit: ingredient.unit,
         purchase_unit: ingredient.purchase_unit ?? "",
         purchase_to_stock_factor: String(ingredient.purchase_to_stock_factor ?? 1),
+        default_unit_price:
+          Number(ingredient.default_unit_price ?? 0) === 0
+            ? ""
+            : String(ingredient.default_unit_price),
         department: ingredient.department,
         minimum_stock: String(ingredient.minimum_stock ?? 0),
         kind: ingredient.kind ?? "raw",
@@ -193,6 +208,11 @@ export function IngredientModal({
     }
 
     const purchase_unit = formData.purchase_unit || null;
+    const default_unit_price = parseUnitPrice(formData.default_unit_price);
+    if (default_unit_price === null) {
+      onError("Harga default harus angka ≥ 0.");
+      return;
+    }
 
     setIsSubmitting(true);
 
@@ -205,6 +225,7 @@ export function IngredientModal({
             unit: formData.unit,
             purchase_unit,
             purchase_to_stock_factor,
+            default_unit_price,
             department: formData.department,
             minimum_stock,
             kind: formData.kind,
@@ -222,6 +243,7 @@ export function IngredientModal({
             unit: formData.unit,
             purchase_unit,
             purchase_to_stock_factor,
+            default_unit_price,
             department: formData.department,
             minimum_stock,
             kind: formData.kind,
@@ -334,6 +356,27 @@ export function IngredientModal({
         <p className="-mt-2 text-xs text-zinc-500">
           Contoh: stok pcs, receive pack, isi 50 berarti 1 pack masuk sebagai 50 pcs.
         </p>
+
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+            Harga Default / Satuan Receive (Rp)
+          </span>
+          <input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="any"
+            value={formData.default_unit_price}
+            onChange={(e) =>
+              setFormData((prev) => ({ ...prev, default_unit_price: e.target.value }))
+            }
+            placeholder="Kosong = 0, bisa dioverride saat receive"
+            className={INPUT_CLASS}
+          />
+          <p className="mt-1 text-xs text-zinc-500">
+            Dipakai untuk hitung biaya receive kalau staff tidak isi harga aktual.
+          </p>
+        </label>
 
         <label className="block">
           <span className="mb-1.5 block text-sm font-medium text-zinc-400">Jenis Bahan</span>

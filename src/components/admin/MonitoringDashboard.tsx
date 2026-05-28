@@ -87,6 +87,36 @@ type OutLineJoined = {
   worksheet_session: { business_date: string; department: Department };
 };
 
+type ReceiveLineJoined = {
+  id: string;
+  ingredient_id: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+  ingredient:
+    | Pick<IngredientRow, "id" | "name" | "unit" | "purchase_unit" | "default_unit_price">
+    | Pick<IngredientRow, "id" | "name" | "unit" | "purchase_unit" | "default_unit_price">[]
+    | null;
+  worksheet_session:
+    | { business_date: string; department: Department }
+    | { business_date: string; department: Department }[]
+    | null;
+};
+
+type ReceivePriceRow = {
+  id: string;
+  businessDate: string;
+  department: Department;
+  ingredientId: string;
+  ingredientName: string;
+  unit: string;
+  purchaseUnit: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  defaultUnitPrice: number;
+};
+
 type TopSellingEntry = {
   menu_name: string;
   quantity_sold: number;
@@ -889,6 +919,13 @@ export function MonitoringDashboard() {
   const [ledgerExportRows, setLedgerExportRows] = useState<StockLedgerExportRow[]>([]);
   const [lowStockInventoryRows, setLowStockInventoryRows] = useState<LowStockInventoryRow[]>([]);
   const [salesExportRows, setSalesExportRows] = useState<SalesExportRow[]>([]);
+  const [receivePriceRows, setReceivePriceRows] = useState<ReceivePriceRow[]>([]);
+  const [receivePriceInputs, setReceivePriceInputs] = useState<Record<string, string>>({});
+  const [savingReceivePriceId, setSavingReceivePriceId] = useState<string | null>(null);
+  const [receivePriceNotice, setReceivePriceNotice] = useState<{
+    message: string;
+    variant: "success" | "error";
+  } | null>(null);
   const [topBeverages, setTopBeverages] = useState<TopSellingEntry[]>([]);
   const [topFoods, setTopFoods] = useState<TopSellingEntry[]>([]);
   const [runwayEntries, setRunwayEntries] = useState<RunwayEntry[]>([]);
@@ -966,6 +1003,25 @@ export function MonitoringDashboard() {
         row.category.toLowerCase().includes(normalizedSearch)
     );
   }, [salesExportRows, normalizedSearch]);
+
+  const filteredReceivePriceRows = useMemo(() => {
+    if (!normalizedSearch) return receivePriceRows;
+    return receivePriceRows.filter(
+      (row) =>
+        row.ingredientName.toLowerCase().includes(normalizedSearch) ||
+        row.department.toLowerCase().includes(normalizedSearch)
+    );
+  }, [normalizedSearch, receivePriceRows]);
+
+  const missingReceivePriceCount = useMemo(
+    () => receivePriceRows.filter((row) => row.quantity > 0 && row.unitPrice <= 0).length,
+    [receivePriceRows]
+  );
+
+  const receiveCostTotal = useMemo(
+    () => receivePriceRows.reduce((sum, row) => sum + row.lineTotal, 0),
+    [receivePriceRows]
+  );
 
   const filteredTopBeverages = useMemo(() => {
     if (!normalizedSearch) return topBeverages;
@@ -1244,6 +1300,70 @@ export function MonitoringDashboard() {
           );
         }
       }
+
+      const { data: receiveLinesRaw, error: receiveErr } = await supabase
+        .from("worksheet_in_line")
+        .select(
+          `
+          id,
+          ingredient_id,
+          quantity,
+          unit_price,
+          line_total,
+          ingredient:ingredient_id ( id, name, unit, purchase_unit, default_unit_price ),
+          worksheet_session:session_id ( business_date, department )
+        `
+        )
+        .in("session_id", sessionIds);
+
+      if (receiveErr) {
+        setError(receiveErr.message);
+        setLoading(false);
+        return;
+      }
+
+      const receiveRows: ReceivePriceRow[] = [];
+      const receiveInputs: Record<string, string> = {};
+
+      for (const line of (receiveLinesRaw ?? []) as unknown as ReceiveLineJoined[]) {
+        const sessionRaw = line.worksheet_session;
+        const session = Array.isArray(sessionRaw) ? sessionRaw[0] : sessionRaw;
+        const ingredientRaw = line.ingredient;
+        const ingredient = Array.isArray(ingredientRaw) ? ingredientRaw[0] : ingredientRaw;
+        if (!session || !ingredient) continue;
+
+        const quantity = Number(line.quantity ?? 0);
+        const unitPrice = Number(line.unit_price ?? 0);
+        const lineTotal = Number(line.line_total ?? quantity * unitPrice);
+        receiveRows.push({
+          id: line.id,
+          businessDate: session.business_date,
+          department: session.department,
+          ingredientId: line.ingredient_id,
+          ingredientName: ingredient.name,
+          unit: ingredient.unit,
+          purchaseUnit: ingredient.purchase_unit?.trim() || ingredient.unit,
+          quantity,
+          unitPrice,
+          lineTotal,
+          defaultUnitPrice: Number(ingredient.default_unit_price ?? 0),
+        });
+        receiveInputs[line.id] = unitPrice > 0 ? String(unitPrice) : "";
+      }
+
+      receiveRows.sort((a, b) => {
+        const dateCmp = a.businessDate.localeCompare(b.businessDate);
+        if (dateCmp !== 0) return dateCmp;
+        const deptCmp = a.department.localeCompare(b.department);
+        if (deptCmp !== 0) return deptCmp;
+        return a.ingredientName.localeCompare(b.ingredientName);
+      });
+
+      setReceivePriceRows(receiveRows);
+      setReceivePriceInputs(receiveInputs);
+    } else {
+      setReceivePriceRows([]);
+      setReceivePriceInputs({});
     }
 
     const { data: ledgers, error: ledErr } = await supabase
@@ -1620,6 +1740,65 @@ export function MonitoringDashboard() {
   const handleEndDateChange = (value: string) => {
     setEndDate(value);
     if (startDate && value < startDate) setStartDate(value);
+  };
+
+  const handleReceivePriceInputChange = (lineId: string, value: string) => {
+    setReceivePriceInputs((prev) => ({ ...prev, [lineId]: value }));
+  };
+
+  const handleSaveReceivePrice = async (row: ReceivePriceRow) => {
+    if (!supabase || !canEdit) return;
+
+    const raw = (receivePriceInputs[row.id] ?? "").trim();
+    const unitPrice = raw ? Number(raw.replace(",", ".")) : 0;
+
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      setReceivePriceNotice({ message: "Harga receive harus angka ≥ 0.", variant: "error" });
+      return;
+    }
+
+    setSavingReceivePriceId(row.id);
+    setReceivePriceNotice(null);
+
+    try {
+      const lineTotal = row.quantity * unitPrice;
+      const { error: updateErr } = await supabase
+        .from("worksheet_in_line")
+        .update({
+          unit_price: unitPrice,
+          line_total: lineTotal,
+        })
+        .eq("id", row.id);
+
+      if (updateErr) throw updateErr;
+
+      setReceivePriceRows((prev) =>
+        prev.map((item) =>
+          item.id === row.id
+            ? {
+                ...item,
+                unitPrice,
+                lineTotal,
+              }
+            : item
+        )
+      );
+      setReceivePriceInputs((prev) => ({
+        ...prev,
+        [row.id]: unitPrice > 0 ? String(unitPrice) : "",
+      }));
+      setReceivePriceNotice({
+        message: `Harga receive ${row.ingredientName} tersimpan.`,
+        variant: "success",
+      });
+    } catch (err) {
+      setReceivePriceNotice({
+        message: err instanceof Error ? err.message : "Gagal menyimpan harga receive.",
+        variant: "error",
+      });
+    } finally {
+      setSavingReceivePriceId(null);
+    }
   };
 
   const handleAddPoLine = (catalogItem: SupplierPriceCatalog) => {
@@ -2030,6 +2209,141 @@ export function MonitoringDashboard() {
                   : "Belum ada penjualan makanan dalam rentang tanggal terpilih."
               }
             />
+          </section>
+
+          <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-base font-semibold text-slate-100">Harga Receive Harian</h3>
+                <p className="text-xs text-slate-500">
+                  Koreksi harga bahan yang diterima staff untuk rentang {dateRangeLabel}.
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs uppercase tracking-wider text-slate-500">Total receive</p>
+                <p className="text-lg font-bold tabular-nums text-emerald-300">
+                  {formatRupiah(receiveCostTotal)}
+                </p>
+              </div>
+            </div>
+
+            {receivePriceNotice ? (
+              <p
+                className={`mb-3 rounded-lg border px-3 py-2 text-sm ${
+                  receivePriceNotice.variant === "success"
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                    : "border-red-500/40 bg-red-500/10 text-red-300"
+                }`}
+              >
+                {receivePriceNotice.message}
+              </p>
+            ) : null}
+
+            {missingReceivePriceCount > 0 ? (
+              <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                {missingReceivePriceCount} receive line belum punya harga.
+              </p>
+            ) : null}
+
+            <div className="overflow-x-auto rounded-lg border border-slate-800">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="bg-zinc-950 text-slate-400">
+                  <tr>
+                    {!isSingleDayRange && <th className="px-3 py-2 font-medium">Tanggal</th>}
+                    <th className="px-3 py-2 font-medium">Dept</th>
+                    <th className="px-3 py-2 font-medium">Bahan</th>
+                    <th className="px-3 py-2 text-right font-medium">Qty</th>
+                    <th className="px-3 py-2 text-right font-medium">Harga / Unit</th>
+                    <th className="px-3 py-2 text-right font-medium">Subtotal</th>
+                    {canEdit ? <th className="px-3 py-2 text-right font-medium">Aksi</th> : null}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80">
+                  {filteredReceivePriceRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={(isSingleDayRange ? 5 : 6) + (canEdit ? 1 : 0)}
+                        className="px-3 py-8 text-center text-slate-500"
+                      >
+                        Belum ada receive line dalam rentang tanggal ini.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredReceivePriceRows.map((row) => {
+                      const inputValue = receivePriceInputs[row.id] ?? "";
+                      const inputPrice = inputValue.trim()
+                        ? Number(inputValue.replace(",", "."))
+                        : 0;
+                      const previewTotal =
+                        Number.isFinite(inputPrice) && inputPrice >= 0
+                          ? row.quantity * inputPrice
+                          : row.lineTotal;
+                      const isSaving = savingReceivePriceId === row.id;
+
+                      return (
+                        <tr key={row.id} className="hover:bg-zinc-950/50">
+                          {!isSingleDayRange && (
+                            <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                              {formatBusinessDateLabel(row.businessDate)}
+                            </td>
+                          )}
+                          <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+                          <td className="px-3 py-2 text-slate-100">
+                            <span className="flex flex-col">
+                              <span>{row.ingredientName}</span>
+                              {row.defaultUnitPrice > 0 ? (
+                                <span className="text-[10px] text-slate-500">
+                                  Default {formatRupiah(row.defaultUnitPrice)} / {row.purchaseUnit}
+                                </span>
+                              ) : null}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                            {formatQtyId(row.quantity)} {row.purchaseUnit}
+                          </td>
+                          <td className="px-3 py-2">
+                            {canEdit ? (
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                step="any"
+                                value={inputValue}
+                                onChange={(e) =>
+                                  handleReceivePriceInputChange(row.id, e.target.value)
+                                }
+                                placeholder="0"
+                                className="ml-auto block min-h-10 w-36 rounded-lg border border-slate-800 bg-zinc-950 px-3 text-right tabular-nums text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                            ) : (
+                              <span className="block text-right tabular-nums text-slate-300">
+                                {formatRupiah(row.unitPrice)}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
+                            {formatRupiah(previewTotal)}
+                          </td>
+                          {canEdit ? (
+                            <td className="px-3 py-2 text-right">
+                              <button
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => void handleSaveReceivePrice(row)}
+                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-3 text-sm font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                Simpan
+                              </button>
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </section>
 
           <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">

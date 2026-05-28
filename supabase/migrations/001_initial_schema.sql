@@ -71,6 +71,7 @@ CREATE TABLE ingredient (
   name                        TEXT NOT NULL,
   department                  department_type NOT NULL,
   unit                        TEXT NOT NULL,
+  default_unit_price          NUMERIC(14, 4) NOT NULL DEFAULT 0 CHECK (default_unit_price >= 0),
   current_stock               NUMERIC(14, 4) NOT NULL DEFAULT 0,
   slow_moving_threshold_days  INTEGER NOT NULL DEFAULT 30
     CHECK (slow_moving_threshold_days >= 0),
@@ -234,6 +235,8 @@ CREATE TABLE worksheet_in_line (
   session_id      UUID NOT NULL REFERENCES worksheet_session (id) ON DELETE CASCADE,
   ingredient_id   UUID NOT NULL REFERENCES ingredient (id) ON DELETE RESTRICT,
   quantity        NUMERIC(14, 4) NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+  unit_price      NUMERIC(14, 4) NOT NULL DEFAULT 0 CHECK (unit_price >= 0),
+  line_total      NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (line_total >= 0),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 

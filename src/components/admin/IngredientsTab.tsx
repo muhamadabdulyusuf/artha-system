@@ -15,6 +15,7 @@ interface Ingredient {
   unit: IngredientUnit;
   purchase_unit: IngredientUnit | null;
   purchase_to_stock_factor: number;
+  default_unit_price: number;
   department: IngredientDepartment;
   kind: IngredientKind;
   minimum_stock: number;
@@ -31,7 +32,15 @@ type DeptFilter = "all" | FormDepartment;
 const SEARCH_INPUT_CLASS =
   "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
 
-const TABLE_COL_COUNT = 9;
+const TABLE_COL_COUNT = 10;
+
+function formatRupiah(amount: number): string {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
 
 function mapRow(row: Record<string, unknown>): Ingredient {
   return {
@@ -40,6 +49,7 @@ function mapRow(row: Record<string, unknown>): Ingredient {
     unit: (row.unit ? String(row.unit) : "gr") as Ingredient["unit"],
     purchase_unit: row.purchase_unit ? (String(row.purchase_unit) as Ingredient["unit"]) : null,
     purchase_to_stock_factor: Number(row.purchase_to_stock_factor ?? 1),
+    default_unit_price: Number(row.default_unit_price ?? 0),
     department: (row.department as FormDepartment) || "bar",
     kind: (row.kind === "premix" ? "premix" : "raw") as IngredientKind,
     minimum_stock: Number(row.minimum_stock ?? 0),
@@ -64,6 +74,7 @@ function toModalRecord(item: Ingredient): IngredientRecord {
     unit: item.unit,
     purchase_unit: item.purchase_unit,
     purchase_to_stock_factor: item.purchase_to_stock_factor,
+    default_unit_price: item.default_unit_price,
     department: item.department,
     kind: item.kind,
     minimum_stock: item.minimum_stock,
@@ -275,6 +286,7 @@ export function IngredientsTab() {
                 <th className="px-4 py-3 font-medium">Nama Bahan</th>
                 <th className="px-4 py-3 font-medium">Satuan Stok</th>
                 <th className="px-4 py-3 font-medium">Receive</th>
+                <th className="px-4 py-3 font-medium">Harga</th>
                 <th className="px-4 py-3 font-medium">Jenis</th>
                 <th className="px-4 py-3 font-medium">Tracking</th>
                 <th className="px-4 py-3 font-medium">Supplier</th>
@@ -308,6 +320,16 @@ export function IngredientsTab() {
                         </span>
                       ) : (
                         <span className="text-zinc-600">Sama</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums text-zinc-300">
+                      {item.default_unit_price > 0 ? (
+                        <span>
+                          {formatRupiah(item.default_unit_price)} /{" "}
+                          {item.purchase_unit || item.unit}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-600">Belum ada</span>
                       )}
                     </td>
                     <td className="px-4 py-3">

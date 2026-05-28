@@ -69,6 +69,7 @@ type WorksheetTab = "receive" | "outstock" | "opname" | "premix" | "sold";
 
 type IngredientLineState = {
   inQty: string;
+  inUnitPrice: string;
   closingStock: string;
   outQty: string;
   outNote: string;
@@ -125,6 +126,7 @@ type WorksheetClosingProps = {
 
 const DEFAULT_LINE: IngredientLineState = {
   inQty: "",
+  inUnitPrice: "",
   closingStock: "",
   outQty: "",
   outNote: "",
@@ -153,6 +155,13 @@ function parseQty(value: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function parseOptionalPrice(value: string, fallback = 0): number {
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+  const n = parseFloat(raw.replace(",", "."));
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 function isBlankQty(value: string | null | undefined): boolean {
   return String(value ?? "").trim() === "";
 }
@@ -161,6 +170,14 @@ function formatQty(value: number): string {
   if (!Number.isFinite(value)) return "0";
   const rounded = Math.round(value * 10000) / 10000;
   return String(rounded);
+}
+
+function formatRupiah(amount: number): string {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(amount);
 }
 
 function getPurchaseUnit(ingredient: Pick<IngredientRow, "unit" | "purchase_unit">): string {
@@ -181,6 +198,13 @@ function receiveInputToStockQty(
   return parseQty(receiveInputQty) * getPurchaseToStockFactor(ingredient);
 }
 
+function getReceiveUnitPrice(
+  ingredient: Pick<IngredientRow, "default_unit_price">,
+  line: Pick<IngredientLineState, "inUnitPrice">
+): number {
+  return parseOptionalPrice(line.inUnitPrice, Number(ingredient.default_unit_price ?? 0));
+}
+
 function stockQtyToReceiveInput(
   ingredient: Pick<IngredientRow, "purchase_to_stock_factor"> | undefined,
   stockQty: number
@@ -197,8 +221,8 @@ function blankZero(value: string | undefined): string {
 function normalizeRestoredLines(
   restoredLines: Record<
     string,
-    Omit<IngredientLineState, "outPhotoUrl" | "outPhotoPublicId"> &
-      Partial<Pick<IngredientLineState, "outPhotoUrl" | "outPhotoPublicId">>
+    Omit<IngredientLineState, "inUnitPrice" | "outPhotoUrl" | "outPhotoPublicId"> &
+      Partial<Pick<IngredientLineState, "inUnitPrice" | "outPhotoUrl" | "outPhotoPublicId">>
   >
 ): Record<string, IngredientLineState> {
   return Object.fromEntries(
@@ -206,6 +230,7 @@ function normalizeRestoredLines(
       ingredientId,
       {
         inQty: blankZero(line.inQty),
+        inUnitPrice: blankZero(line.inUnitPrice),
         closingStock: blankZero(line.closingStock),
         outQty: blankZero(line.outQty),
         outNote: line.outNote ?? "",
@@ -296,6 +321,7 @@ function computePremixEffects(
 function createDefaultLine(preset?: Partial<IngredientLineState>): IngredientLineState {
   return {
     inQty: preset?.inQty ?? "",
+    inUnitPrice: preset?.inUnitPrice ?? "",
     closingStock: preset?.closingStock ?? "",
     outQty: preset?.outQty ?? "",
     outNote: preset?.outNote ?? "",
@@ -634,6 +660,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     [premixItems, premixQuantities]
   );
 
+  const receiveCostTotal = useMemo(() => {
+    return ingredients
+      .filter((ing) => ing.kind === "raw")
+      .reduce((sum, ing) => {
+        const line = lines[ing.id] ?? DEFAULT_LINE;
+        const quantity = parseQty(line.inQty);
+        if (quantity <= 0) return sum;
+        return sum + quantity * getReceiveUnitPrice(ing, line);
+      }, 0);
+  }, [ingredients, lines]);
+
   const outstockHasBlockingErrors = useMemo(
     () => hasOutstockValidationErrors(ingredients, lines),
     [ingredients, lines]
@@ -821,13 +858,14 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     if (ws?.id) {
       const { data: inLines } = await supabase
         .from("worksheet_in_line")
-        .select("ingredient_id, quantity")
+        .select("ingredient_id, quantity, unit_price")
         .eq("session_id", ws.id);
 
       for (const row of inLines ?? []) {
         ingredientPreset[row.ingredient_id] = {
           ...ingredientPreset[row.ingredient_id],
           inQty: Number(row.quantity) === 0 ? "" : String(row.quantity),
+          inUnitPrice: Number(row.unit_price) === 0 ? "" : String(row.unit_price),
         };
       }
 
@@ -894,6 +932,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           inQty:
             existing?.inQty ??
             stockQtyToReceiveInput(ingredientById.get(row.ingredient_id), snapshot?.in_qty ?? 0),
+          inUnitPrice: existing?.inUnitPrice,
           closingStock: existing?.closingStock ?? String(snapshot?.closing_stock ?? 0),
           outQty: existing?.outQty,
           outNote: existing?.outNote,
@@ -1023,6 +1062,14 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }));
   };
 
+  const updateInUnitPrice = (ingredientId: string, value: string) => {
+    if (locked) return;
+    setLines((prev) => ({
+      ...prev,
+      [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), inUnitPrice: value },
+    }));
+  };
+
   const updateClosingStock = (ingredientId: string, value: string) => {
     if (locked) return;
     setLines((prev) => ({
@@ -1148,11 +1195,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const upsertPayload = ingredients
         .filter((ing) => ing.kind === "raw")
-        .map((ing) => ({
-          session_id: activeSessionId,
-          ingredient_id: ing.id,
-          quantity: parseQty(lines[ing.id]?.inQty ?? ""),
-        }))
+        .map((ing) => {
+          const line = lines[ing.id] ?? DEFAULT_LINE;
+          const quantity = parseQty(line.inQty);
+          const unit_price = getReceiveUnitPrice(ing, line);
+          return {
+            session_id: activeSessionId,
+            ingredient_id: ing.id,
+            quantity,
+            unit_price,
+            line_total: quantity * unit_price,
+          };
+        })
         .filter((row) => row.quantity > 0);
 
       const { error: clearErr } = await supabase
@@ -1443,11 +1497,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const inLinePayload = ingredients
         .filter((ing) => ing.kind === "raw")
-        .map((ing) => ({
-          session_id: ensuredSessionId,
-          ingredient_id: ing.id,
-          quantity: parseQty(lines[ing.id]?.inQty ?? ""),
-        }))
+        .map((ing) => {
+          const line = lines[ing.id] ?? DEFAULT_LINE;
+          const quantity = parseQty(line.inQty);
+          const unit_price = getReceiveUnitPrice(ing, line);
+          return {
+            session_id: ensuredSessionId,
+            ingredient_id: ing.id,
+            quantity,
+            unit_price,
+            line_total: quantity * unit_price,
+          };
+        })
         .filter((row) => row.quantity > 0);
 
       const { error: clearInErr } = await supabase
@@ -2055,6 +2116,14 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                 <p className="mb-4 text-xs text-zinc-500">
                   Catat bahan raw dari supplier saja. Premix/WIP dibuat di tab Premix, bukan lewat receive.
                 </p>
+                <div className="mb-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+                    Total biaya receive
+                  </p>
+                  <p className="mt-1 text-2xl font-bold tabular-nums text-amber-100">
+                    {formatRupiah(receiveCostTotal)}
+                  </p>
+                </div>
                 <ul className="space-y-3">
                   {filteredReceiveIngredients.length === 0 ? (
                     <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
@@ -2066,6 +2135,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     const purchaseUnit = getPurchaseUnit(ing);
                     const factor = getPurchaseToStockFactor(ing);
                     const stockQty = receiveInputToStockQty(ing, line.inQty);
+                    const receiveQty = parseQty(line.inQty);
+                    const unitPrice = getReceiveUnitPrice(ing, line);
+                    const lineTotal = receiveQty * unitPrice;
                     return (
                       <li
                         key={ing.id}
@@ -2080,25 +2152,53 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               : ""}
                           </p>
                         </div>
-                        <label className="block">
-                          <span className="mb-1 block text-xs text-zinc-400">
-                            Pasokan masuk ({purchaseUnit})
-                          </span>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            step="any"
-                            disabled={locked}
-                            value={line.inQty}
-                            onChange={(e) => updateInQty(ing.id, e.target.value)}
-                            placeholder="Kosong"
-                            className={INPUT_CLASS}
-                          />
-                        </label>
+                        <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-zinc-400">
+                              Pasokan masuk ({purchaseUnit})
+                            </span>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              step="any"
+                              disabled={locked}
+                              value={line.inQty}
+                              onChange={(e) => updateInQty(ing.id, e.target.value)}
+                              placeholder="Kosong"
+                              className={INPUT_CLASS}
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-zinc-400">
+                              Harga / {purchaseUnit} (opsional)
+                            </span>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              step="any"
+                              disabled={locked}
+                              value={line.inUnitPrice}
+                              onChange={(e) => updateInUnitPrice(ing.id, e.target.value)}
+                              placeholder={
+                                ing.default_unit_price > 0
+                                  ? `${formatRupiah(Number(ing.default_unit_price))}`
+                                  : "Kosong = 0"
+                              }
+                              className={INPUT_CLASS}
+                            />
+                          </label>
+                        </div>
                         {purchaseUnit !== ing.unit && parseQty(line.inQty) > 0 ? (
                           <p className="mt-2 text-xs text-emerald-300">
                             Masuk ledger: {formatQty(stockQty)} {ing.unit}
+                          </p>
+                        ) : null}
+                        {receiveQty > 0 ? (
+                          <p className="mt-2 text-xs text-amber-200">
+                            Biaya: {formatQty(receiveQty)} {purchaseUnit} x{" "}
+                            {formatRupiah(unitPrice)} = {formatRupiah(lineTotal)}
                           </p>
                         ) : null}
                       </li>

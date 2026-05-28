@@ -5,6 +5,7 @@ export type WorksheetDraftPayload = {
     string,
     {
       inQty: string;
+      inUnitPrice?: string;
       closingStock: string;
       outQty: string;
       outNote: string;

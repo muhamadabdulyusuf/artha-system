@@ -42,6 +42,7 @@ export type IngredientRow = {
   unit: string;
   purchase_unit: string | null;
   purchase_to_stock_factor: number;
+  default_unit_price: number;
   kind: IngredientKind;
   current_stock: number;
   minimum_stock: number;
@@ -150,6 +151,8 @@ export type WorksheetInLineRow = {
   session_id: string;
   ingredient_id: string;
   quantity: number;
+  unit_price: number;
+  line_total: number;
   created_at: string;
   updated_at: string;
 };
@@ -314,6 +317,7 @@ export type Database = {
           unit: string;
           purchase_unit?: string | null;
           purchase_to_stock_factor?: number;
+          default_unit_price?: number;
           kind?: IngredientKind;
           current_stock?: number;
           minimum_stock?: number;
@@ -328,6 +332,7 @@ export type Database = {
           unit?: string;
           purchase_unit?: string | null;
           purchase_to_stock_factor?: number;
+          default_unit_price?: number;
           kind?: IngredientKind;
           current_stock?: number;
           minimum_stock?: number;
@@ -421,8 +426,10 @@ export type Database = {
           session_id: string;
           ingredient_id: string;
           quantity: number;
+          unit_price?: number;
+          line_total?: number;
         };
-        Update: { quantity?: number };
+        Update: { quantity?: number; unit_price?: number; line_total?: number };
         Relationships: [];
       };
       worksheet_sold_line: {
