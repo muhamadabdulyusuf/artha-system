@@ -116,6 +116,8 @@ type StockLedgerInsert = {
   closing_stock: number;
 };
 
+type LedgerSnapshotForCalc = Omit<StockLedgerInsert, "business_date">;
+
 type WorksheetClosingProps = {
   department: Department;
   title: string;
@@ -254,23 +256,6 @@ function getActiveRecipeLines(menu: MenuItemWithRecipe): RecipeLineForCalc[] {
   return active?.recipe_line ?? [];
 }
 
-function computeMenuTheoreticalUsage(
-  menuList: MenuItemWithRecipe[],
-  soldItems: Record<string, string>
-): Map<string, number> {
-  const usage = new Map<string, number>();
-
-  for (const menu of menuList) {
-    const quantitySold = parseQty(soldItems[menu.id] ?? "");
-    for (const line of getActiveRecipeLines(menu)) {
-      const add = quantitySold * Number(line.quantity_per_serving);
-      usage.set(line.ingredient_id, (usage.get(line.ingredient_id) ?? 0) + add);
-    }
-  }
-
-  return usage;
-}
-
 function getActivePremixRecipe(premix: PremixItemWithRecipe): PremixRecipeNested | null {
   const recipes = Array.isArray(premix.recipes)
     ? premix.recipes
@@ -393,6 +378,123 @@ async function fetchPremixWithActiveRecipes(
 
   if (error) throw new Error(`Gagal memuat resep premix: ${error.message}`);
   return (data ?? []) as unknown as PremixItemWithRecipe[];
+}
+
+async function fetchIngredientsByIds(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  ingredientIds: string[]
+): Promise<IngredientRow[]> {
+  const uniqueIds = [...new Set(ingredientIds)];
+  if (uniqueIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("ingredient")
+    .select("*")
+    .in("id", uniqueIds);
+
+  if (error) throw new Error(`Gagal memuat bahan lintas departemen: ${error.message}`);
+  return (data ?? []) as IngredientRow[];
+}
+
+async function fetchLedgerSnapshotForDate(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  ingredientIds: string[],
+  date: string
+): Promise<Map<string, LedgerSnapshotForCalc>> {
+  const map = new Map<string, LedgerSnapshotForCalc>();
+  const uniqueIds = [...new Set(ingredientIds)];
+  if (uniqueIds.length === 0) return map;
+
+  const { data, error } = await supabase
+    .from("stock_ledger")
+    .select("ingredient_id, opening_stock, in_qty, theoretical_usage, adjustment_qty, closing_stock")
+    .eq("business_date", date)
+    .in("ingredient_id", uniqueIds);
+
+  if (error) throw new Error(`Gagal memuat ledger hari ini: ${error.message}`);
+
+  for (const row of data ?? []) {
+    map.set(row.ingredient_id, {
+      ingredient_id: row.ingredient_id,
+      opening_stock: Number(row.opening_stock),
+      in_qty: Number(row.in_qty),
+      theoretical_usage: Number(row.theoretical_usage),
+      adjustment_qty: Number(row.adjustment_qty),
+      closing_stock: Number(row.closing_stock),
+    });
+  }
+
+  return map;
+}
+
+async function fetchSoldMenuTheoreticalUsage(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  date: string,
+  currentSessionId: string
+): Promise<Map<string, number>> {
+  const usage = new Map<string, number>();
+
+  const { data: sessions, error: sessionErr } = await supabase
+    .from("worksheet_session")
+    .select("id, status")
+    .eq("business_date", date);
+
+  if (sessionErr) throw new Error(`Gagal memuat sesi closing: ${sessionErr.message}`);
+
+  const sessionIds = (sessions ?? [])
+    .filter((session) => session.id === currentSessionId || isWorksheetLocked(session.status))
+    .map((session) => session.id);
+
+  if (sessionIds.length === 0) return usage;
+
+  const { data: soldLines, error: soldErr } = await supabase
+    .from("worksheet_sold_line")
+    .select("menu_item_id, quantity_sold")
+    .in("session_id", sessionIds);
+
+  if (soldErr) throw new Error(`Gagal memuat menu terjual lintas departemen: ${soldErr.message}`);
+
+  const qtyByMenuId = new Map<string, number>();
+  for (const line of soldLines ?? []) {
+    const qty = Number(line.quantity_sold);
+    if (qty <= 0) continue;
+    qtyByMenuId.set(line.menu_item_id, (qtyByMenuId.get(line.menu_item_id) ?? 0) + qty);
+  }
+
+  const menuIds = [...qtyByMenuId.keys()];
+  if (menuIds.length === 0) return usage;
+
+  const { data: versions, error: recipeErr } = await supabase
+    .from("menu_recipe_version")
+    .select(
+      `
+        menu_item_id,
+        is_active,
+        recipe_line (
+          ingredient_id,
+          quantity_per_serving
+        )
+      `
+    )
+    .in("menu_item_id", menuIds)
+    .eq("is_active", true);
+
+  if (recipeErr) throw new Error(`Gagal memuat resep menu lintas departemen: ${recipeErr.message}`);
+
+  const recipeVersions = (versions ?? []) as unknown as {
+    menu_item_id: string;
+    recipe_line?: RecipeLineForCalc[];
+  }[];
+
+  for (const version of recipeVersions) {
+    const soldQty = qtyByMenuId.get(version.menu_item_id) ?? 0;
+    for (const line of version.recipe_line ?? []) {
+      const add = soldQty * Number(line.quantity_per_serving);
+      usage.set(line.ingredient_id, (usage.get(line.ingredient_id) ?? 0) + add);
+    }
+  }
+
+  return usage;
 }
 
 async function fetchLedgerClosingMap(
@@ -1454,15 +1556,34 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan worksheet_premix_line: ${premixErr.message}`);
       }
 
-      const menuTheoreticalMap = computeMenuTheoreticalUsage(menuListForCalc, soldItems);
+      const menuTheoreticalMap = await fetchSoldMenuTheoreticalUsage(
+        supabase,
+        date,
+        ensuredSessionId
+      );
       const premixUsageMap = premixEffects.usageMap;
       const premixOutputMap = premixEffects.outputMap;
       const freshById = new Map(freshIngredients.map((ing) => [ing.id, ing]));
+      const externalIngredientIds = [...menuTheoreticalMap.keys()].filter(
+        (ingredientId) => !freshById.has(ingredientId)
+      );
+      const externalIngredients = (
+        await fetchIngredientsByIds(supabase, externalIngredientIds)
+      ).filter((ing) => ing.is_active && ing.is_stock_tracked);
+      const ledgerIngredients = [...freshIngredients, ...externalIngredients];
+      const ledgerIngredientById = new Map(
+        ledgerIngredients.map((ingredient) => [ingredient.id, ingredient])
+      );
       const previousClosingMap = await fetchLedgerClosingMap(
         supabase,
-        freshIngredients.map((ing) => ing.id),
+        ledgerIngredients.map((ing) => ing.id),
         date,
         "before"
+      );
+      const existingLedgerMap = await fetchLedgerSnapshotForDate(
+        supabase,
+        externalIngredients.map((ing) => ing.id),
+        date
       );
 
       for (const [ingredientId, requiredQty] of premixUsageMap) {
@@ -1479,7 +1600,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         }
       }
 
-      const ledgerPayload: StockLedgerInsert[] = freshIngredients.map((ing) => {
+      const localLedgerPayload: StockLedgerInsert[] = freshIngredients.map((ing) => {
         const line = lines[ing.id] ?? DEFAULT_LINE;
         const opening_stock = Math.max(
           0,
@@ -1520,6 +1641,36 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         };
       });
 
+      const externalLedgerPayload: StockLedgerInsert[] = externalIngredients.map((ing) => {
+        const existing = existingLedgerMap.get(ing.id);
+        const opening_stock = existing
+          ? existing.opening_stock
+          : Math.max(0, previousClosingMap.get(ing.id) ?? Number(ing.current_stock) ?? 0);
+        const in_qty = existing?.in_qty ?? 0;
+        const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
+        const existing_non_menu_theoretical = existing
+          ? Math.max(0, Number(existing.theoretical_usage) - menu_theoretical)
+          : 0;
+        const theoretical_usage = menu_theoretical + existing_non_menu_theoretical;
+        const expected_closing = opening_stock + in_qty - theoretical_usage;
+        const closing_stock = existing
+          ? existing.closing_stock
+          : Math.max(0, expected_closing);
+        const adjustment_qty = closing_stock - expected_closing;
+
+        return {
+          business_date: date,
+          ingredient_id: ing.id,
+          opening_stock,
+          in_qty,
+          theoretical_usage,
+          adjustment_qty,
+          closing_stock,
+        };
+      });
+
+      const ledgerPayload = [...localLedgerPayload, ...externalLedgerPayload];
+
       const { error: ledgerErr } = await supabase
         .from("stock_ledger")
         .upsert(ledgerPayload, { onConflict: "business_date,ingredient_id" });
@@ -1548,7 +1699,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
 
       const logPayload = ledgerPayload.map((row) => {
-        const ing = freshIngredients.find((item) => item.id === row.ingredient_id);
+        const ing = ledgerIngredientById.get(row.ingredient_id);
         const before = Number(ing?.current_stock ?? 0);
         return {
           ingredient_id: row.ingredient_id,
@@ -1571,7 +1722,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       opnameEvalForAsync = evaluateOpnameSubmission({
         ingredients: freshIngredients,
         lines,
-        ledgerRows: ledgerPayload.map((row) => ({
+        ledgerRows: localLedgerPayload.map((row) => ({
           ingredient_id: row.ingredient_id,
           opening_stock: row.opening_stock,
           in_qty: row.in_qty,

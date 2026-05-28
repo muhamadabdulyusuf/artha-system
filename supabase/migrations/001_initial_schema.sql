@@ -78,9 +78,12 @@ CREATE TABLE ingredient (
   created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT ingredient_name_department_unique UNIQUE (name, department),
   CONSTRAINT ingredient_current_stock_non_negative CHECK (current_stock >= 0)
 );
+
+CREATE UNIQUE INDEX ingredient_name_department_active_unique
+  ON ingredient (name, department)
+  WHERE is_active = TRUE;
 
 CREATE INDEX ingredient_department_idx ON ingredient (department);
 CREATE INDEX ingredient_active_idx ON ingredient (department, is_active) WHERE is_active = TRUE;
@@ -96,10 +99,13 @@ CREATE TABLE menu_item (
   price         NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (price >= 0),
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 
-  CONSTRAINT menu_item_name_department_unique UNIQUE (menu_name, department)
 );
+
+CREATE UNIQUE INDEX menu_item_name_department_active_unique
+  ON menu_item (menu_name, department)
+  WHERE is_active = TRUE;
 
 CREATE INDEX menu_item_department_idx ON menu_item (department);
 CREATE INDEX menu_item_active_idx ON menu_item (department, is_active) WHERE is_active = TRUE;
@@ -355,38 +361,6 @@ $$;
 CREATE TRIGGER worksheet_sold_line_department_match
   BEFORE INSERT OR UPDATE ON worksheet_sold_line
   FOR EACH ROW EXECUTE FUNCTION assert_worksheet_sold_line_department_match();
-
--- -----------------------------------------------------------------------------
--- Validasi: recipe_line ingredient harus sama departemen dengan menu
--- -----------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION assert_recipe_line_department_match()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  v_menu_department department_type;
-  v_ingredient_department department_type;
-BEGIN
-  SELECT mi.department, i.department
-  INTO v_menu_department, v_ingredient_department
-  FROM menu_recipe_version mrv
-  JOIN menu_item mi ON mi.id = mrv.menu_item_id
-  JOIN ingredient i ON i.id = NEW.ingredient_id
-  WHERE mrv.id = NEW.recipe_version_id;
-
-  IF v_menu_department IS DISTINCT FROM v_ingredient_department THEN
-    RAISE EXCEPTION 'ingredient department (%) does not match menu department (%)',
-      v_ingredient_department, v_menu_department;
-  END IF;
-
-  RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER recipe_line_department_match
-  BEFORE INSERT OR UPDATE ON recipe_line
-  FOR EACH ROW EXECUTE FUNCTION assert_recipe_line_department_match();
 
 -- -----------------------------------------------------------------------------
 -- Comments (dokumentasi operasional)

@@ -163,6 +163,17 @@ type LowStockOrderGroup = {
   lines: LowStockOrderLine[];
 };
 
+type LowStockInventoryRow = {
+  ingredientId: string;
+  ingredientName: string;
+  unit: string;
+  currentStock: number;
+  minimumStock: number;
+  primarySupplierId: string | null;
+  primarySupplierName: string;
+  primarySupplierPhone: string | null;
+};
+
 type IngredientWithPrimarySupplier = IngredientRow & {
   supplier?: { id: string; name: string; phone_number: string | null } | null;
 };
@@ -570,6 +581,10 @@ function formatPoLineDraftQuantity(value: number): string {
   return rounded % 1 === 0 ? String(Math.round(rounded)) : rounded.toFixed(2);
 }
 
+function formatInitialPoLineQuantity(value: number): string {
+  return formatPoLineDraftQuantity(Math.max(value, 1));
+}
+
 function formatPoDateLocal(now: Date = new Date()): string {
   return new Intl.DateTimeFormat("id-ID", {
     timeZone: WIB_TIMEZONE,
@@ -872,6 +887,7 @@ export function MonitoringDashboard() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [ledgerExportRows, setLedgerExportRows] = useState<StockLedgerExportRow[]>([]);
+  const [lowStockInventoryRows, setLowStockInventoryRows] = useState<LowStockInventoryRow[]>([]);
   const [salesExportRows, setSalesExportRows] = useState<SalesExportRow[]>([]);
   const [topBeverages, setTopBeverages] = useState<TopSellingEntry[]>([]);
   const [topFoods, setTopFoods] = useState<TopSellingEntry[]>([]);
@@ -974,47 +990,29 @@ export function MonitoringDashboard() {
     [filteredLedgerRows]
   );
 
-  const lowStockCountToday = useMemo(() => {
-    const seen = new Set<string>();
-    let count = 0;
-    for (const row of ledgerExportRows) {
-      if (row.business_date !== endDate) continue;
-      if (seen.has(row.ingredient_id)) continue;
-      if (isLowStockCondition(row.closing_stock, row.minimum_stock)) {
-        seen.add(row.ingredient_id);
-        count += 1;
-      }
-    }
-    return count;
-  }, [ledgerExportRows, endDate]);
+  const lowStockCountToday = lowStockInventoryRows.length;
 
   const lowStockOrderGroups = useMemo<LowStockOrderGroup[]>(() => {
-    const seen = new Set<string>();
     const grouped = new Map<string, LowStockOrderGroup>();
 
-    for (const row of ledgerExportRows) {
-      if (row.business_date !== endDate) continue;
-      if (seen.has(row.ingredient_id)) continue;
-      seen.add(row.ingredient_id);
+    for (const row of lowStockInventoryRows) {
+      const currentStock = row.currentStock;
+      const minimumStock = row.minimumStock;
 
-      const currentStock = Number(row.closing_stock) || 0;
-      const minimumStock = Number(row.minimum_stock) || 0;
-      if (!isLowStockCondition(currentStock, minimumStock)) continue;
-
-      const supplier = row.primary_supplier_id
+      const supplier = row.primarySupplierId
         ? {
-            supplierId: row.primary_supplier_id,
-            supplierName: row.primary_supplier_name || "Belum ada supplier",
-            phoneNumber: null,
+            supplierId: row.primarySupplierId,
+            supplierName: row.primarySupplierName || "Belum ada supplier",
+            phoneNumber: row.primarySupplierPhone,
             unitPrice: 0,
           }
-        : (primarySupplierByIngredientId[row.ingredient_id] ?? {
+        : (primarySupplierByIngredientId[row.ingredientId] ?? {
             supplierId: "unassigned",
             supplierName: "Belum ada supplier",
             phoneNumber: null,
             unitPrice: 0,
           });
-      const dailyNeed = ingredientDailyUsageById[row.ingredient_id] ?? 0;
+      const dailyNeed = ingredientDailyUsageById[row.ingredientId] ?? 0;
       const quantity = Math.max(
         computeRecommendedPoQuantity(dailyNeed, coverageDays, minimumStock, currentStock),
         1
@@ -1027,8 +1025,8 @@ export function MonitoringDashboard() {
         lines: [],
       };
       existing.lines.push({
-        ingredientId: row.ingredient_id,
-        ingredientName: row.ingredient_name,
+        ingredientId: row.ingredientId,
+        ingredientName: row.ingredientName,
         unit: row.unit,
         quantity,
         currentStock,
@@ -1049,9 +1047,8 @@ export function MonitoringDashboard() {
       });
   }, [
     coverageDays,
-    endDate,
     ingredientDailyUsageById,
-    ledgerExportRows,
+    lowStockInventoryRows,
     primarySupplierByIngredientId,
   ]);
 
@@ -1062,6 +1059,16 @@ export function MonitoringDashboard() {
         dateLabel: formatBusinessDateLabel(endDate),
       }),
     [endDate, lowStockOrderGroups]
+  );
+
+  const selectedSupplierLowStockGroups = useMemo(
+    () => lowStockOrderGroups.filter((group) => group.supplierId === selectedSupplierId),
+    [lowStockOrderGroups, selectedSupplierId]
+  );
+
+  const totalSelectedLowStockLines = useMemo(
+    () => selectedSupplierLowStockGroups.reduce((sum, group) => sum + group.lines.length, 0),
+    [selectedSupplierLowStockGroups]
   );
 
   const barLedgerRows = useMemo(
@@ -1162,6 +1169,20 @@ export function MonitoringDashboard() {
 
     const ingredientMap = new Map(
       ((ingredients ?? []) as IngredientWithPrimarySupplier[]).map((i) => [i.id, i])
+    );
+    setLowStockInventoryRows(
+      ((ingredients ?? []) as IngredientWithPrimarySupplier[])
+        .map((ingredient) => ({
+          ingredientId: ingredient.id,
+          ingredientName: ingredient.name,
+          unit: ingredient.unit,
+          currentStock: Number(ingredient.current_stock ?? 0),
+          minimumStock: Number(ingredient.minimum_stock ?? 0),
+          primarySupplierId: ingredient.primary_supplier_id ?? null,
+          primarySupplierName: ingredient.supplier?.name ?? "",
+          primarySupplierPhone: ingredient.supplier?.phone_number ?? null,
+        }))
+        .filter((row) => isLowStockCondition(row.currentStock, row.minimumStock))
     );
 
     const { data: sessionsInRange, error: sessionRangeErr } = await supabase
@@ -1547,7 +1568,7 @@ export function MonitoringDashboard() {
     setPoLines((prev) => {
       let changed = false;
       const next = prev.map((line) => {
-        const recommended = formatPoLineDraftQuantity(resolveRecommendedPoQuantity(line.ingredientId));
+        const recommended = formatInitialPoLineQuantity(resolveRecommendedPoQuantity(line.ingredientId));
         if (line.quantity === recommended) return line;
         changed = true;
         return { ...line, quantity: recommended };
@@ -1611,7 +1632,7 @@ export function MonitoringDashboard() {
           ingredientId: catalogItem.ingredient.id,
           ingredientName: catalogItem.ingredient.name,
           unit: catalogItem.ingredient.unit,
-          quantity: formatPoLineDraftQuantity(recommendedQty),
+          quantity: formatInitialPoLineQuantity(recommendedQty),
           unitPrice: Number(catalogItem.unit_price),
         },
       ];
@@ -1659,7 +1680,19 @@ export function MonitoringDashboard() {
       .filter((line) => line.quantity > 0);
 
     const hasManualCart = cartItems.length > 0;
-    const hasLowStock = lowStockOrderGroups.length > 0;
+    const hasLowStock = selectedSupplierLowStockGroups.length > 0;
+
+    if (poLines.length > 0 && !hasManualCart) {
+      setPoError("Qty bahan di Draft Purchase Order harus lebih dari 0 sebelum dikirim ke WhatsApp.");
+      return;
+    }
+
+    if (!hasManualCart && !hasLowStock) {
+      setPoError(
+        "Belum ada bahan low stock untuk supplier ini. Cek Primary Supplier di Master Ingredients atau tambahkan bahan manual dari katalog."
+      );
+      return;
+    }
 
     let waTextArray: string[] = [];
 
@@ -1684,37 +1717,22 @@ export function MonitoringDashboard() {
         "*Tim Operasional - Artha System*",
         "---------------------------------------------",
       ];
-    } else if (hasLowStock) {
-      const totalLowStockItems = lowStockOrderGroups.reduce(
-        (sum, group) => sum + group.lines.length,
-        0
-      );
+    } else {
+      const lowStockLines = selectedSupplierLowStockGroups.flatMap((group) => group.lines);
       waTextArray = [
         "*PURCHASE ORDER - AUTO REPLENISHMENT*",
         "---------------------------------------------",
         `*Tanggal:* ${formattedDate}`,
         `*Kepada:* ${supplierName}`,
-        `*Coverage:* ${coverageDays} hari`,
-        `*Total Item:* ${totalLowStockItems} bahan`,
         "",
-        "*DAFTAR PESANAN PER SUPPLIER:*",
-        ...lowStockOrderGroups.flatMap((group, groupIndex) => [
-          "",
-          `${groupIndex + 1}. *${group.supplierName}*`,
-          ...group.lines.map(
-            (line) =>
-              `   - ${line.ingredientName}: ${formatPoWaQuantity(line.quantity)} ${line.unit} ` +
-              `(stok ${formatPoWaQuantity(line.currentStock)} / min ${formatPoWaQuantity(line.minimumStock)})`
-          ),
-        ]),
+        "*DAFTAR PESANAN (URGENT LOW STOCK):*",
+        ...lowStockLines.map(
+          (line, index) =>
+            `${index + 1}. ${line.ingredientName} - ${formatPoWaQuantity(line.quantity)} ${line.unit}`
+        ),
         "",
-        "*Catatan:* Supplier 'Belum ada supplier' perlu dilengkapi di Master Ingredients.",
-        "*Total Nilai Pesanan:* Menunggu konfirmasi harga masing-masing supplier.",
+        "*Total Nilai Pesanan:* Menunggu Konfirmasi Harga",
         "---------------------------------------------",
-      ];
-    } else {
-      waTextArray = [
-        `Halo ${supplierName}, mohon kirimkan katalog harga dan stok terbarunya ya. Terima kasih!`,
       ];
     }
 
@@ -1790,12 +1808,10 @@ export function MonitoringDashboard() {
 
     if (hasLowStock) {
       setPoSuccess(
-        `PO Auto Replenishment (${lowStockOrderGroups.length} supplier) dibuka untuk ${supplierName} via WhatsApp.`
+        `PO Auto Replenishment (${totalSelectedLowStockLines} bahan) dibuka untuk ${supplierName} via WhatsApp.`
       );
       return;
     }
-
-    setPoSuccess(`Permintaan katalog dikirim ke ${supplierName} via WhatsApp.`);
   };
 
   return (

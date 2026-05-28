@@ -5,6 +5,8 @@ DO $$
 DECLARE
   v_serpong_fresh_id UUID;
   v_curious_people_id UUID;
+  v_existing_id UUID;
+  v_ingredient RECORD;
 BEGIN
   SELECT id
   INTO v_serpong_fresh_id
@@ -34,18 +36,9 @@ BEGIN
     RETURNING id INTO v_curious_people_id;
   END IF;
 
-  INSERT INTO ingredient (
-    name,
-    department,
-    unit,
-    current_stock,
-    minimum_stock,
-    kind,
-    is_stock_tracked,
-    is_active,
-    primary_supplier_id
-  )
-  VALUES
+  FOR v_ingredient IN
+    SELECT *
+    FROM (VALUES
     ('Lime Fruit', 'bar', 'pcs', 0, 0, 'raw', TRUE, TRUE, v_serpong_fresh_id),
     ('Sunkist Fruit', 'bar', 'pcs', 0, 0, 'raw', TRUE, TRUE, v_serpong_fresh_id),
     ('Coffee Beans', 'bar', 'gr', 0, 0, 'raw', TRUE, TRUE, v_curious_people_id),
@@ -77,12 +70,59 @@ BEGIN
     ('Tutu Concentrates Malt Zero Proof', 'bar', 'ml', 0, 0, 'raw', TRUE, TRUE, NULL),
     ('Taragui Yerba Mate', 'bar', 'gr', 0, 0, 'raw', TRUE, TRUE, NULL),
     ('Soda', 'bar', 'ml', 0, 0, 'raw', TRUE, TRUE, NULL)
-  ON CONFLICT (name, department)
-  DO UPDATE SET
-    unit = EXCLUDED.unit,
-    kind = EXCLUDED.kind,
-    is_stock_tracked = EXCLUDED.is_stock_tracked,
-    is_active = TRUE,
-    primary_supplier_id = EXCLUDED.primary_supplier_id;
+    ) AS seed(
+      name,
+      department,
+      unit,
+      current_stock,
+      minimum_stock,
+      kind,
+      is_stock_tracked,
+      is_active,
+      primary_supplier_id
+    )
+  LOOP
+    SELECT id
+    INTO v_existing_id
+    FROM ingredient
+    WHERE name = v_ingredient.name
+      AND department = v_ingredient.department::department_type
+    ORDER BY is_active DESC, created_at ASC
+    LIMIT 1;
+
+    IF v_existing_id IS NULL THEN
+      INSERT INTO ingredient (
+        name,
+        department,
+        unit,
+        current_stock,
+        minimum_stock,
+        kind,
+        is_stock_tracked,
+        is_active,
+        primary_supplier_id
+      )
+      VALUES (
+        v_ingredient.name,
+        v_ingredient.department::department_type,
+        v_ingredient.unit,
+        v_ingredient.current_stock,
+        v_ingredient.minimum_stock,
+        v_ingredient.kind::ingredient_kind,
+        v_ingredient.is_stock_tracked,
+        v_ingredient.is_active,
+        v_ingredient.primary_supplier_id
+      );
+    ELSE
+      UPDATE ingredient
+      SET
+        unit = v_ingredient.unit,
+        kind = v_ingredient.kind::ingredient_kind,
+        is_stock_tracked = v_ingredient.is_stock_tracked,
+        is_active = TRUE,
+        primary_supplier_id = v_ingredient.primary_supplier_id
+      WHERE id = v_existing_id;
+    END IF;
+  END LOOP;
 END;
 $$;

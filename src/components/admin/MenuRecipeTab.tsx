@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Beaker, ChefHat, Loader2, Pencil, Plus, Search, Wand2, X } from "lucide-react";
+import { Beaker, ChefHat, Loader2, Pencil, Plus, Search, Trash2, Wand2, X } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { canEditStaffData } from "@/lib/auth/permissions";
@@ -341,6 +341,31 @@ export function MenuRecipeTab() {
     setMenuForm(emptyMenuForm());
   };
 
+  const handleDeactivate = async (menu: MenuItemRow) => {
+    if (!menu.is_active) return;
+
+    const confirmed = window.confirm(`Nonaktifkan menu "${menu.menu_name}"?`);
+    if (!confirmed) return;
+
+    setError(null);
+
+    try {
+      const { error: updateError } = await supabase
+        .from("menu_item")
+        .update({ is_active: false })
+        .eq("id", menu.id);
+
+      if (updateError) throw updateError;
+
+      setToast(`"${menu.menu_name}" dinonaktifkan.`);
+      await Promise.all([fetchMenus(), fetchRecipeSummaries()]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Gagal menonaktifkan menu.";
+      setError(message);
+      setToast(null);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -565,7 +590,8 @@ export function MenuRecipeTab() {
                               setRecipeTarget({ type: "menu", item: menu });
                               setBuilderOpen(true);
                             }}
-                            className="flex min-h-9 items-center gap-1 rounded-lg bg-indigo-600/20 px-3 text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
+                            disabled={!menu.is_active}
+                            className="flex min-h-9 items-center gap-1 rounded-lg bg-indigo-600/20 px-3 text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <ChefHat className="h-4 w-4" />
                             Kelola Resep
@@ -573,10 +599,20 @@ export function MenuRecipeTab() {
                           <button
                             type="button"
                             onClick={() => openEditModal(menu)}
-                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-zinc-400 ring-1 ring-zinc-600 hover:text-white"
+                            disabled={!menu.is_active}
+                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-zinc-400 ring-1 ring-zinc-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Pencil className="h-4 w-4" />
                             Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeactivate(menu)}
+                            disabled={!menu.is_active}
+                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-red-400 ring-1 ring-zinc-600 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Nonaktif
                           </button>
                         </div>
                       ) : (

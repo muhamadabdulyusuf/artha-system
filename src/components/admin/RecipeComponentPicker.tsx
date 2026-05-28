@@ -6,12 +6,13 @@ import { getSupabaseClient } from "@/lib/supabase/client";
 import type { Department, IngredientKind, IngredientRow } from "@/lib/types/database";
 
 type RecipeComponentPickerProps = {
-  department: Department;
+  department?: Department;
   value: string;
   onChange: (ingredientId: string) => void;
   excludeIds?: string[];
   disabled?: boolean;
   placeholder?: string;
+  showDepartment?: boolean;
   /** Hide the target premix from its own recipe (self-reference). */
   excludeSelfId?: string;
 };
@@ -38,6 +39,7 @@ export function RecipeComponentPicker({
   excludeIds = [],
   disabled = false,
   placeholder = "Cari bahan raw atau premix…",
+  showDepartment = false,
   excludeSelfId,
 }: RecipeComponentPickerProps) {
   const supabase = getSupabaseClient();
@@ -105,11 +107,15 @@ export function RecipeComponentPicker({
         let request = supabase
           .from("ingredient")
           .select("*")
-          .eq("department", department)
           .eq("is_active", true)
           .order("kind", { ascending: true })
+          .order("department", { ascending: true })
           .order("name", { ascending: true })
           .limit(50);
+
+        if (department) {
+          request = request.eq("department", department);
+        }
 
         const term = query.trim();
         if (term) {
@@ -231,9 +237,14 @@ export function RecipeComponentPicker({
                     option.id === value ? "bg-indigo-600/15 text-indigo-200" : "text-zinc-200"
                   }`}
                 >
-                  <span className="min-w-0 truncate">{option.name}</span>
+                    <span className="min-w-0 truncate">{option.name}</span>
                   <div className="flex shrink-0 items-center gap-2">
                     <KindBadge kind={option.kind} />
+                    {showDepartment ? (
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                        {option.department}
+                      </span>
+                    ) : null}
                     <span className="text-xs text-zinc-500">{option.unit}</span>
                   </div>
                 </button>

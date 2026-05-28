@@ -99,6 +99,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
   const componentsSectionTitle = targetType === "premix" ? "Bahan Baku" : "Komposisi";
   const quantityLabel = targetType === "premix" ? "Qty / batch" : "Qty / porsi";
   const allowZeroQty = targetType === "menu";
+  const componentPickerDepartment = targetType === "premix" ? (department ?? undefined) : undefined;
 
   const resetEditor = useCallback(() => {
     setRows([newDraftRow()]);
@@ -547,8 +548,17 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
               Departemen{" "}
               <span className="font-medium capitalize text-indigo-300">{department}</span>
               {" · "}
-              Komponen bisa berupa bahan <span className="text-emerald-300">Raw</span> atau{" "}
-              <span className="text-amber-300">Premix</span> lain.
+              {targetType === "menu" ? (
+                <>
+                  Komposisi bisa ambil bahan dari <span className="text-indigo-300">Bar</span>{" "}
+                  dan <span className="text-indigo-300">Kitchen</span>.
+                </>
+              ) : (
+                <>
+                  Komponen bisa berupa bahan <span className="text-emerald-300">Raw</span> atau{" "}
+                  <span className="text-amber-300">Premix</span> lain.
+                </>
+              )}
             </p>
           ) : null}
 
@@ -635,11 +645,12 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                       ) : null}
                     </span>
                     <RecipeComponentPicker
-                      department={department}
+                      department={componentPickerDepartment}
                       value={row.ingredient_id}
                       excludeIds={excludeIngredientIds}
                       excludeSelfId={targetType === "premix" ? targetPremixId : undefined}
                       disabled={saving || isDeleting}
+                      showDepartment={targetType === "menu"}
                       onChange={(id) => void handleIngredientPicked(row.clientKey, id)}
                     />
                   </label>
