@@ -341,26 +341,55 @@ export function MenuRecipeTab() {
     setMenuForm(emptyMenuForm());
   };
 
-  const handleDeactivate = async (menu: MenuItemRow) => {
-    if (!menu.is_active) return;
-
-    const confirmed = window.confirm(`Nonaktifkan menu "${menu.menu_name}"?`);
+  const handleDeleteMenu = async (menu: MenuItemRow) => {
+    const confirmed = window.confirm(
+      `Hapus menu "${menu.menu_name}"? Kalau menu sudah punya history sold, menu akan dinonaktifkan agar laporan lama tetap aman.`
+    );
     if (!confirmed) return;
 
     setError(null);
 
     try {
-      const { error: updateError } = await supabase
-        .from("menu_item")
-        .update({ is_active: false })
-        .eq("id", menu.id);
+      const { count, error: soldCheckError } = await supabase
+        .from("worksheet_sold_line")
+        .select("id", { count: "exact", head: true })
+        .eq("menu_item_id", menu.id);
 
-      if (updateError) throw updateError;
+      if (soldCheckError) throw soldCheckError;
 
-      setToast(`"${menu.menu_name}" dinonaktifkan.`);
+      if ((count ?? 0) > 0) {
+        if (!menu.is_active) {
+          setToast(`"${menu.menu_name}" sudah nonaktif dan tetap disimpan untuk history laporan.`);
+          return;
+        }
+
+        const { error: updateError } = await supabase
+          .from("menu_item")
+          .update({ is_active: false })
+          .eq("id", menu.id);
+
+        if (updateError) throw updateError;
+
+        setToast(`"${menu.menu_name}" sudah pernah dipakai, jadi dinonaktifkan.`);
+        await Promise.all([fetchMenus(), fetchRecipeSummaries()]);
+        return;
+      }
+
+      const { error: recipeDeleteError } = await supabase
+        .from("menu_recipe_version")
+        .delete()
+        .eq("menu_item_id", menu.id);
+
+      if (recipeDeleteError) throw recipeDeleteError;
+
+      const { error: deleteError } = await supabase.from("menu_item").delete().eq("id", menu.id);
+
+      if (deleteError) throw deleteError;
+
+      setToast(`"${menu.menu_name}" berhasil dihapus.`);
       await Promise.all([fetchMenus(), fetchRecipeSummaries()]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Gagal menonaktifkan menu.";
+      const message = err instanceof Error ? err.message : "Gagal menghapus menu.";
       setError(message);
       setToast(null);
     }
@@ -607,12 +636,11 @@ export function MenuRecipeTab() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => void handleDeactivate(menu)}
-                            disabled={!menu.is_active}
-                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-red-400 ring-1 ring-zinc-600 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => void handleDeleteMenu(menu)}
+                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-red-400 ring-1 ring-zinc-600 hover:bg-red-500/10"
                           >
                             <Trash2 className="h-4 w-4" />
-                            Nonaktif
+                            Hapus
                           </button>
                         </div>
                       ) : (
