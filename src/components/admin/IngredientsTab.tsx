@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit, Loader2, Plus, Search, Trash2, X } from "lucide-react";
+import { Edit, Loader2, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { IngredientModal, type IngredientDepartment, type IngredientRecord, type IngredientUnit } from "@/components/admin/IngredientModal";
 import { Toast } from "@/components/ui/Toast";
 import { canEditStaffData } from "@/lib/auth/permissions";
@@ -156,6 +156,31 @@ export function IngredientsTab() {
       await fetchIngredients();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Gagal menonaktifkan bahan.";
+      setToast({ message, variant: "error" });
+    }
+  };
+
+  const handleActivate = async (item: Ingredient) => {
+    if (item.is_active) return;
+
+    const confirmed = window.confirm(`Aktifkan lagi bahan "${item.name}"?`);
+    if (!confirmed) return;
+
+    try {
+      const { error } = await supabase
+        .from("ingredient")
+        .update({ is_active: true })
+        .eq("id", item.id);
+
+      if (error) throw error;
+
+      setToast({ message: `"${item.name}" aktif lagi.`, variant: "success" });
+      await fetchIngredients();
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Gagal mengaktifkan bahan. Pastikan tidak ada bahan aktif dengan nama dan departemen yang sama.";
       setToast({ message, variant: "error" });
     }
   };
@@ -318,24 +343,35 @@ export function IngredientsTab() {
                     <td className="px-4 py-3">
                       {canEdit ? (
                         <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(item)}
-                            disabled={!item.is_active}
-                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10 disabled:cursor-not-allowed disabled:opacity-40"
-                            aria-label={`Edit ${item.name}`}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleDeactivate(item)}
-                            disabled={!item.is_active}
-                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-red-400 ring-1 ring-zinc-600 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
-                            aria-label={`Nonaktifkan ${item.name}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          {item.is_active ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openEditModal(item)}
+                                className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10"
+                                aria-label={`Edit ${item.name}`}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeactivate(item)}
+                                className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-red-400 ring-1 ring-zinc-600 transition hover:bg-red-500/10"
+                                aria-label={`Nonaktifkan ${item.name}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void handleActivate(item)}
+                              className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-emerald-400 ring-1 ring-zinc-600 transition hover:bg-emerald-500/10"
+                              aria-label={`Aktifkan ${item.name}`}
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <span className="block text-right text-xs text-zinc-500">—</span>

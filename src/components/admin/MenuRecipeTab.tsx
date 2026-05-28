@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Beaker, ChefHat, Loader2, Pencil, Plus, Search, Trash2, Wand2, X } from "lucide-react";
+import { Beaker, ChefHat, Loader2, Pencil, Plus, RotateCcw, Search, Trash2, Wand2, X } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { canEditStaffData } from "@/lib/auth/permissions";
@@ -395,6 +395,34 @@ export function MenuRecipeTab() {
     }
   };
 
+  const handleActivateMenu = async (menu: MenuItemRow) => {
+    if (menu.is_active) return;
+
+    const confirmed = window.confirm(`Aktifkan lagi menu "${menu.menu_name}"?`);
+    if (!confirmed) return;
+
+    setError(null);
+
+    try {
+      const { error: updateError } = await supabase
+        .from("menu_item")
+        .update({ is_active: true })
+        .eq("id", menu.id);
+
+      if (updateError) throw updateError;
+
+      setToast(`"${menu.menu_name}" aktif lagi.`);
+      await Promise.all([fetchMenus(), fetchRecipeSummaries()]);
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Gagal mengaktifkan menu. Pastikan tidak ada menu aktif dengan nama dan departemen yang sama.";
+      setError(message);
+      setToast(null);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -613,35 +641,46 @@ export function MenuRecipeTab() {
                     <td className="px-4 py-3">
                       {canEdit ? (
                         <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRecipeTarget({ type: "menu", item: menu });
-                              setBuilderOpen(true);
-                            }}
-                            disabled={!menu.is_active}
-                            className="flex min-h-9 items-center gap-1 rounded-lg bg-indigo-600/20 px-3 text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <ChefHat className="h-4 w-4" />
-                            Kelola Resep
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(menu)}
-                            disabled={!menu.is_active}
-                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-zinc-400 ring-1 ring-zinc-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <Pencil className="h-4 w-4" />
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleDeleteMenu(menu)}
-                            className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-red-400 ring-1 ring-zinc-600 hover:bg-red-500/10"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Hapus
-                          </button>
+                          {menu.is_active ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRecipeTarget({ type: "menu", item: menu });
+                                  setBuilderOpen(true);
+                                }}
+                                className="flex min-h-9 items-center gap-1 rounded-lg bg-indigo-600/20 px-3 text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
+                              >
+                                <ChefHat className="h-4 w-4" />
+                                Kelola Resep
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openEditModal(menu)}
+                                className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-zinc-400 ring-1 ring-zinc-600 hover:text-white"
+                              >
+                                <Pencil className="h-4 w-4" />
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteMenu(menu)}
+                                className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-red-400 ring-1 ring-zinc-600 hover:bg-red-500/10"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Hapus
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void handleActivateMenu(menu)}
+                              className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-emerald-400 ring-1 ring-zinc-600 hover:bg-emerald-500/10"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                              Aktifkan
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <span className="block text-right text-xs text-zinc-500">—</span>
