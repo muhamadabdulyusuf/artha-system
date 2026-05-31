@@ -65,6 +65,9 @@ const SUBMITTED_LOCK_STATUSES: ClosingStatus[] = [
   "LOCKED",
   "PENDING_APPROVAL_ADMIN",
 ];
+const OUTLET_TIMEZONE = "Asia/Jakarta";
+const CLOSING_SUBMIT_UNLOCK_HOUR = 0;
+const BUSINESS_DATE_CUTOFF_HOUR = 5;
 
 type WorksheetTab = "receive" | "outstock" | "opname" | "premix" | "issue" | "sold";
 
@@ -265,6 +268,21 @@ function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
 
 function canRequestResubmit(status: ClosingStatus | null | undefined): boolean {
   return status === "SUBMITTED" || status === "PENDING_APPROVAL_ADMIN";
+}
+
+function getHourInOutletTimeZone(date: Date = new Date()): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: OUTLET_TIMEZONE,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(date);
+  const hourPart = parts.find((part) => part.type === "hour");
+  return hourPart ? Number(hourPart.value) : 0;
+}
+
+function isClosingSubmitWindowOpen(date: Date = new Date()): boolean {
+  const hour = getHourInOutletTimeZone(date);
+  return hour >= CLOSING_SUBMIT_UNLOCK_HOUR && hour < BUSINESS_DATE_CUTOFF_HOUR;
 }
 
 function isIsoDate(value: string): boolean {
@@ -684,6 +702,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [isSavingOutStock, setIsSavingOutStock] = useState(false);
   const [isSavingOpname, setIsSavingOpname] = useState(false);
   const [isSavingPremix, setIsSavingPremix] = useState(false);
+  const [isSavingMenuProgress, setIsSavingMenuProgress] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRequestingResubmit, setIsRequestingResubmit] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -699,12 +718,14 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [showTestDateControls, setShowTestDateControls] = useState(false);
   const [testBusinessDate, setTestBusinessDate] = useState("");
   const [uploadingPhotoFor, setUploadingPhotoFor] = useState<string | null>(null);
+  const [clockTick, setClockTick] = useState(() => Date.now());
   const pendingTypoActionRef = useRef<(() => void) | null>(null);
 
   const locked = isWorksheetLocked(worksheetStatus ?? undefined);
   const pendingAdminApproval = worksheetStatus === "PENDING_APPROVAL_ADMIN";
   const showResubmitCta = canRequestResubmit(worksheetStatus ?? undefined);
   const canEdit = canEditStaffData(staff?.role);
+  const closingSubmitOpen = useMemo(() => isClosingSubmitWindowOpen(new Date(clockTick)), [clockTick]);
 
   const businessDateLabel = useMemo(
     () => (businessDate ? formatBusinessDateLabel(businessDate) : ""),
@@ -1053,6 +1074,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     if (staff) void loadData();
   }, [staff, loadData]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   useWorksheetDraft({
     department,
     businessDate,
@@ -1277,7 +1303,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
   const savePendingReceiveEntries = async (activeSessionId: string): Promise<Map<string, number>> => {
     if (!staff?.id) {
-      throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login PIN ulang.");
+      throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
     }
 
     const entryPayload = ingredients
@@ -1645,9 +1671,96 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }
   };
 
+  const saveMenuProgress = async (
+    activeSessionId: string,
+    menuList: MenuItemWithRecipe[]
+  ): Promise<void> => {
+    const soldPayload = menuList
+      .map((menu) => ({
+        session_id: activeSessionId,
+        menu_item_id: menu.id,
+        quantity_sold: parseQty(soldItems[menu.id] ?? ""),
+      }))
+      .filter((row) => row.quantity_sold > 0);
+
+    const { error: clearSoldErr } = await supabase
+      .from("worksheet_sold_line")
+      .delete()
+      .eq("session_id", activeSessionId);
+
+    if (clearSoldErr) {
+      throw new Error(`Gagal membersihkan worksheet_sold_line: ${clearSoldErr.message}`);
+    }
+
+    const { error: soldErr } =
+      soldPayload.length > 0
+        ? await supabase.from("worksheet_sold_line").insert(soldPayload)
+        : { error: null };
+
+    if (soldErr) {
+      throw new Error(`Gagal menyimpan worksheet_sold_line: ${soldErr.message}`);
+    }
+
+    const issuePayload = menuList
+      .map((menu) => {
+        const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
+        return {
+          session_id: activeSessionId,
+          menu_item_id: menu.id,
+          quantity: parseQty(issue.quantity),
+          reason: issue.reason,
+          note: issue.note.trim(),
+          photo_url: issue.photoUrl || null,
+          photo_public_id: issue.photoPublicId || null,
+        };
+      })
+      .filter((row) => row.quantity > 0);
+
+    const { error: clearIssueErr } = await supabase
+      .from("worksheet_menu_issue_line")
+      .delete()
+      .eq("session_id", activeSessionId);
+
+    if (clearIssueErr) {
+      throw new Error(`Gagal membersihkan worksheet_menu_issue_line: ${clearIssueErr.message}`);
+    }
+
+    const { error: issueErr } =
+      issuePayload.length > 0
+        ? await supabase.from("worksheet_menu_issue_line").insert(issuePayload)
+        : { error: null };
+
+    if (issueErr) {
+      throw new Error(`Gagal menyimpan worksheet_menu_issue_line: ${issueErr.message}`);
+    }
+  };
+
+  const handleSaveMenuProgress = async () => {
+    if (locked || isSavingMenuProgress) return;
+
+    setIsSavingMenuProgress(true);
+    setError(null);
+
+    try {
+      const date = businessDate || resolveWorksheetBusinessDate();
+      const { sessionId: ensuredSessionId } = await ensureDraftSession(date);
+      await saveMenuProgress(ensuredSessionId, menus);
+      showSuccessToast("Sales menu tersimpan sebagai draft. Shift berikutnya bisa lanjut dari angka ini.");
+    } catch (err) {
+      showTranslatedSubmitError(err);
+    } finally {
+      setIsSavingMenuProgress(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (isSubmitting) {
       showPlainErrorToast("Laporan sedang dikirim, tunggu sebentar ya.");
+      return;
+    }
+
+    if (!closingSubmitOpen) {
+      showPlainErrorToast("Submit Closing aktif otomatis setelah jam 00:00 WIB. Untuk sekarang gunakan Simpan Sales Menu / Simpan Progress dulu.");
       return;
     }
 
@@ -1659,7 +1772,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }
 
     if (!staff?.id) {
-      showPlainErrorToast("Sesi staf tidak ditemukan. Silakan logout dan login PIN ulang.");
+      showPlainErrorToast("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
       return;
     }
 
@@ -1738,64 +1851,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan worksheet_out_line: ${outLineErr.message}`);
       }
 
-      const soldPayload = menuListForCalc
-        .map((menu) => ({
-          session_id: ensuredSessionId,
-          menu_item_id: menu.id,
-          quantity_sold: parseQty(soldItems[menu.id] ?? ""),
-        }))
-        .filter((row) => row.quantity_sold > 0);
-
-      const { error: clearSoldErr } = await supabase
-        .from("worksheet_sold_line")
-        .delete()
-        .eq("session_id", ensuredSessionId);
-
-      if (clearSoldErr) {
-        throw new Error(`Gagal membersihkan worksheet_sold_line: ${clearSoldErr.message}`);
-      }
-
-      const { error: soldErr } =
-        soldPayload.length > 0
-          ? await supabase.from("worksheet_sold_line").insert(soldPayload)
-          : { error: null };
-
-      if (soldErr) {
-        throw new Error(`Gagal menyimpan worksheet_sold_line: ${soldErr.message}`);
-      }
-
-      const issuePayload = menuListForCalc
-        .map((menu) => {
-          const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
-          return {
-            session_id: ensuredSessionId,
-            menu_item_id: menu.id,
-            quantity: parseQty(issue.quantity),
-            reason: issue.reason,
-            note: issue.note.trim(),
-            photo_url: issue.photoUrl || null,
-            photo_public_id: issue.photoPublicId || null,
-          };
-        })
-        .filter((row) => row.quantity > 0);
-
-      const { error: clearIssueErr } = await supabase
-        .from("worksheet_menu_issue_line")
-        .delete()
-        .eq("session_id", ensuredSessionId);
-
-      if (clearIssueErr) {
-        throw new Error(`Gagal membersihkan worksheet_menu_issue_line: ${clearIssueErr.message}`);
-      }
-
-      const { error: issueErr } =
-        issuePayload.length > 0
-          ? await supabase.from("worksheet_menu_issue_line").insert(issuePayload)
-          : { error: null };
-
-      if (issueErr) {
-        throw new Error(`Gagal menyimpan worksheet_menu_issue_line: ${issueErr.message}`);
-      }
+      await saveMenuProgress(ensuredSessionId, menuListForCalc);
 
       const premixPayload = premixItems
         .map((premix) => {
@@ -2073,6 +2129,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     isSavingOutStock ||
     isSavingOpname ||
     isSavingPremix ||
+    isSavingMenuProgress ||
     isRequestingResubmit;
 
   const overlayMessage = isSubmitting
@@ -2085,7 +2142,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
             ? "Menyimpan out stock…"
             : isSavingPremix
               ? "Menyimpan premix…"
-              : "Menyimpan opname…";
+              : isSavingMenuProgress
+                ? "Menyimpan sales menu…"
+                : "Menyimpan opname…";
 
   const stickySaveReceive = () =>
     runWithTypoGuard(["inQty"], () => void handleSaveReceive());
@@ -2094,6 +2153,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const stickySaveOpname = () =>
     runWithTypoGuard(["closingStock"], () => void handleSaveOpname());
   const stickySavePremix = () => void handleSavePremix();
+  const stickySaveMenuProgress = () => void handleSaveMenuProgress();
   const stickySubmit = () =>
     runWithTypoGuard(["inQty", "closingStock", "outQty"], () => void handleSubmit());
 
@@ -2142,7 +2202,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               {title}
             </p>
             <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-              Penanggung jawab (otomatis dari PIN)
+              Penanggung jawab (otomatis dari login)
             </p>
             <h1 className="text-lg font-bold text-zinc-50">{staff.name}</h1>
             {businessDateLabel ? (
@@ -2890,7 +2950,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   Kamar 6 — Menu Terjual
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
-                  Kosong berarti tidak ada penjualan. Setelah semua kamar benar, submit laporan closing di bawah.
+                  Kosong berarti tidak ada penjualan. Simpan sales menu saat pergantian shift; Submit Closing aktif otomatis setelah 00:00 WIB.
                 </p>
                 {menus.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
@@ -3042,14 +3102,38 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           ) : null}
 
           {activeTab === "sold" ? (
-            <button
-              type="button"
-              onClick={stickySubmit}
-              className="flex min-h-16 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500"
-            >
-              {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-              {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}
-            </button>
+            <div className="grid w-full gap-2">
+              <button
+                type="button"
+                disabled={isSavingMenuProgress || isSubmitting}
+                onClick={stickySaveMenuProgress}
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-600/20 font-bold text-emerald-100 active:bg-emerald-600/30 disabled:opacity-50"
+              >
+                {isSavingMenuProgress ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <UtensilsCrossed className="h-5 w-5" />
+                )}
+                {isSavingMenuProgress ? "Menyimpan sales…" : "Simpan Sales Menu"}
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting || !closingSubmitOpen}
+                onClick={stickySubmit}
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Lock className="h-5 w-5" />
+                )}
+                {isSubmitting
+                  ? "Mengunci laporan…"
+                  : closingSubmitOpen
+                    ? "Submit Report Closing"
+                    : "Submit Aktif 00:00 WIB"}
+              </button>
+            </div>
           ) : null}
         </WorksheetStickyActionBar>
       ) : null}

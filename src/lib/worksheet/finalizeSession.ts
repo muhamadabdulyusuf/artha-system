@@ -6,7 +6,7 @@ type Supabase = SupabaseClient<Database>;
 export type FinalWorksheetStatus = "SUBMITTED" | "PENDING_APPROVAL_ADMIN";
 
 /**
- * Menandai worksheet_session sebagai terkirim dengan staff dari sesi PIN.
+ * Menandai worksheet_session sebagai terkirim dengan staff dari sesi login.
  */
 export async function finalizeWorksheetSession(params: {
   supabase: Supabase;
@@ -18,7 +18,7 @@ export async function finalizeWorksheetSession(params: {
   const { supabase, sessionId, staffId, submittedAt, status } = params;
 
   if (!staffId.trim()) {
-    throw new Error("ID staff penanggung jawab tidak valid. Silakan logout dan login PIN ulang.");
+    throw new Error("ID staff penanggung jawab tidak valid. Silakan logout dan login ulang.");
   }
 
   const { error } = await supabase

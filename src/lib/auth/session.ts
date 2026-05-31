@@ -2,7 +2,7 @@ import Cookies from "js-cookie";
 import { z } from "zod";
 
 export const SESSION_COOKIE = "artha_session";
-const SESSION_EXPIRES_DAYS = 0.5;
+const SESSION_EXPIRES_DAYS = 7;
 
 const staffSessionSchema = z.object({
   id: z.string().uuid(),

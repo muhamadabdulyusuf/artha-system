@@ -110,22 +110,6 @@ type OutLineJoined = {
   worksheet_session: { business_date: string; department: Department };
 };
 
-type ReceiveLineJoined = {
-  id: string;
-  ingredient_id: string;
-  quantity: number;
-  unit_price: number;
-  line_total: number;
-  ingredient:
-    | Pick<IngredientRow, "id" | "name" | "unit" | "purchase_unit" | "default_unit_price">
-    | Pick<IngredientRow, "id" | "name" | "unit" | "purchase_unit" | "default_unit_price">[]
-    | null;
-  worksheet_session:
-    | { business_date: string; department: Department }
-    | { business_date: string; department: Department }[]
-    | null;
-};
-
 type ReceiveAuditJoined = {
   id: string;
   ingredient_id: string;
@@ -152,20 +136,6 @@ type ReceiveAuditRow = {
   unit: string;
   staffName: string;
   createdAt: string;
-};
-
-type ReceivePriceRow = {
-  id: string;
-  businessDate: string;
-  department: Department;
-  ingredientId: string;
-  ingredientName: string;
-  unit: string;
-  purchaseUnit: string;
-  quantity: number;
-  unitPrice: number;
-  lineTotal: number;
-  defaultUnitPrice: number;
 };
 
 type TopSellingEntry = {
@@ -318,6 +288,12 @@ type DemandEventForm = {
   endDate: string;
   expectedUpliftPct: string;
   notes: string;
+};
+
+type PublicHolidayApiRow = {
+  date: string;
+  localName?: string;
+  name?: string;
 };
 
 type MonitoringTabId = "overview" | "demand" | "inventory" | "sales" | "control" | "export";
@@ -1262,13 +1238,7 @@ export function MonitoringDashboard() {
   }));
   const [eventNotice, setEventNotice] = useState<{ message: string; variant: "success" | "error" } | null>(null);
   const [eventSaving, setEventSaving] = useState(false);
-  const [receivePriceRows, setReceivePriceRows] = useState<ReceivePriceRow[]>([]);
-  const [receivePriceInputs, setReceivePriceInputs] = useState<Record<string, string>>({});
-  const [savingReceivePriceId, setSavingReceivePriceId] = useState<string | null>(null);
-  const [receivePriceNotice, setReceivePriceNotice] = useState<{
-    message: string;
-    variant: "success" | "error";
-  } | null>(null);
+  const [holidaySyncing, setHolidaySyncing] = useState(false);
   const [topBeverages, setTopBeverages] = useState<TopSellingEntry[]>([]);
   const [topFoods, setTopFoods] = useState<TopSellingEntry[]>([]);
   const [runwayEntries, setRunwayEntries] = useState<RunwayEntry[]>([]);
@@ -1429,25 +1399,6 @@ export function MonitoringDashboard() {
           return b.totalUsage - a.totalUsage;
         }),
     [coverageDays, demandMultiplier, filteredSalesDemandRows]
-  );
-
-  const filteredReceivePriceRows = useMemo(() => {
-    if (!normalizedSearch) return receivePriceRows;
-    return receivePriceRows.filter(
-      (row) =>
-        row.ingredientName.toLowerCase().includes(normalizedSearch) ||
-        row.department.toLowerCase().includes(normalizedSearch)
-    );
-  }, [normalizedSearch, receivePriceRows]);
-
-  const missingReceivePriceCount = useMemo(
-    () => receivePriceRows.filter((row) => row.quantity > 0 && row.unitPrice <= 0).length,
-    [receivePriceRows]
-  );
-
-  const receiveCostTotal = useMemo(
-    () => receivePriceRows.reduce((sum, row) => sum + row.lineTotal, 0),
-    [receivePriceRows]
   );
 
   const filteredTopBeverages = useMemo(() => {
@@ -1808,67 +1759,6 @@ export function MonitoringDashboard() {
         }
       }
 
-      const { data: receiveLinesRaw, error: receiveErr } = await supabase
-        .from("worksheet_in_line")
-        .select(
-          `
-          id,
-          ingredient_id,
-          quantity,
-          unit_price,
-          line_total,
-          ingredient:ingredient_id ( id, name, unit, purchase_unit, default_unit_price ),
-          worksheet_session:session_id ( business_date, department )
-        `
-        )
-        .in("session_id", sessionIds);
-
-      if (receiveErr) {
-        setError(receiveErr.message);
-        setLoading(false);
-        return;
-      }
-
-      const receiveRows: ReceivePriceRow[] = [];
-      const receiveInputs: Record<string, string> = {};
-
-      for (const line of (receiveLinesRaw ?? []) as unknown as ReceiveLineJoined[]) {
-        const sessionRaw = line.worksheet_session;
-        const session = Array.isArray(sessionRaw) ? sessionRaw[0] : sessionRaw;
-        const ingredientRaw = line.ingredient;
-        const ingredient = Array.isArray(ingredientRaw) ? ingredientRaw[0] : ingredientRaw;
-        if (!session || !ingredient) continue;
-
-        const quantity = Number(line.quantity ?? 0);
-        const unitPrice = Number(line.unit_price ?? 0);
-        const lineTotal = Number(line.line_total ?? quantity * unitPrice);
-        receiveRows.push({
-          id: line.id,
-          businessDate: session.business_date,
-          department: session.department,
-          ingredientId: line.ingredient_id,
-          ingredientName: ingredient.name,
-          unit: ingredient.unit,
-          purchaseUnit: ingredient.purchase_unit?.trim() || ingredient.unit,
-          quantity,
-          unitPrice,
-          lineTotal,
-          defaultUnitPrice: Number(ingredient.default_unit_price ?? 0),
-        });
-        receiveInputs[line.id] = unitPrice > 0 ? String(unitPrice) : "";
-      }
-
-      receiveRows.sort((a, b) => {
-        const dateCmp = a.businessDate.localeCompare(b.businessDate);
-        if (dateCmp !== 0) return dateCmp;
-        const deptCmp = a.department.localeCompare(b.department);
-        if (deptCmp !== 0) return deptCmp;
-        return a.ingredientName.localeCompare(b.ingredientName);
-      });
-
-      setReceivePriceRows(receiveRows);
-      setReceivePriceInputs(receiveInputs);
-
       const { data: receiveEntryRaw, error: receiveEntryErr } = await supabase
         .from("worksheet_receive_entry")
         .select(
@@ -1959,8 +1849,6 @@ export function MonitoringDashboard() {
         setMenuIssueRows(issueRows);
       }
     } else {
-      setReceivePriceRows([]);
-      setReceivePriceInputs({});
       setReceiveAuditRows([]);
       setMenuIssueRows([]);
     }
@@ -2219,15 +2107,80 @@ export function MonitoringDashboard() {
     if (eventErr) {
       setDemandEvents([]);
     } else {
-      const eventReports: DemandEventReportRow[] = ((eventRows ?? []) as DemandEventRow[]).map((event) => {
+      const events = (eventRows ?? []) as DemandEventRow[];
+      let eventSalesRows = salesRows;
+
+      if (events.length > 0) {
+        let eventSalesStart = rangeEnd;
+        let eventSalesEnd = rangeStart;
+
+        for (const event of events) {
+          const durationDays = Math.max(
+            1,
+            Math.round((Date.parse(event.end_date) - Date.parse(event.start_date)) / 86400000) + 1
+          );
+          eventSalesStart = [eventSalesStart, addIsoDays(event.start_date, -durationDays)].sort()[0];
+          eventSalesEnd = [eventSalesEnd, event.end_date].sort()[1];
+        }
+
+        const { data: eventSessions, error: eventSessionErr } = await supabase
+          .from("worksheet_session")
+          .select("id")
+          .gte("business_date", eventSalesStart)
+          .lte("business_date", eventSalesEnd);
+
+        if (!eventSessionErr) {
+          const eventSessionIds = (eventSessions ?? []).map((session) => session.id);
+          if (eventSessionIds.length > 0) {
+            const { data: eventSoldData, error: eventSoldErr } = await supabase
+              .from("worksheet_sold_line")
+              .select(
+                `
+                quantity_sold,
+                menu_item:menu_item_id ( id, menu_name, department, price ),
+                worksheet_session:session_id ( business_date, department )
+              `
+              )
+              .in("session_id", eventSessionIds);
+
+            if (!eventSoldErr) {
+              eventSalesRows = [];
+              for (const line of (eventSoldData ?? []) as SoldLineJoined[]) {
+                const menuRaw = line.menu_item;
+                const sessionRaw = line.worksheet_session;
+                const menu = Array.isArray(menuRaw) ? menuRaw[0] : menuRaw;
+                const session = Array.isArray(sessionRaw) ? sessionRaw[0] : sessionRaw;
+                if (!menu || !session) continue;
+
+                const qty = Number(line.quantity_sold);
+                if (qty <= 0) continue;
+
+                const unitPrice = Number(menu.price);
+                eventSalesRows.push({
+                  session_date: session.business_date,
+                  menu_name: menu.menu_name,
+                  category: departmentToCategory(menu.department),
+                  quantity_sold: qty,
+                  unit_price: unitPrice,
+                  total_gross_revenue: qty * unitPrice,
+                });
+              }
+            }
+          } else {
+            eventSalesRows = [];
+          }
+        }
+      }
+
+      const eventReports: DemandEventReportRow[] = events.map((event) => {
         const durationDays = Math.max(1, Math.round((Date.parse(event.end_date) - Date.parse(event.start_date)) / 86400000) + 1);
         const baselineStart = addIsoDays(event.start_date, -durationDays);
         const baselineEnd = addIsoDays(event.start_date, -1);
-        const eventQty = salesRows
+        const eventQty = eventSalesRows
           .filter((row) => row.session_date >= event.start_date && row.session_date <= event.end_date)
           .filter((row) => !event.department || (event.department === "bar" ? row.category === "beverage" : row.category === "food"))
           .reduce((sum, row) => sum + row.quantity_sold, 0);
-        const baselineQty = salesRows
+        const baselineQty = eventSalesRows
           .filter((row) => row.session_date >= baselineStart && row.session_date <= baselineEnd)
           .filter((row) => !event.department || (event.department === "bar" ? row.category === "beverage" : row.category === "food"))
           .reduce((sum, row) => sum + row.quantity_sold, 0);
@@ -2442,65 +2395,6 @@ export function MonitoringDashboard() {
     if (startDate && value < startDate) setStartDate(value);
   };
 
-  const handleReceivePriceInputChange = (lineId: string, value: string) => {
-    setReceivePriceInputs((prev) => ({ ...prev, [lineId]: value }));
-  };
-
-  const handleSaveReceivePrice = async (row: ReceivePriceRow) => {
-    if (!supabase || !canEdit) return;
-
-    const raw = (receivePriceInputs[row.id] ?? "").trim();
-    const unitPrice = raw ? Number(raw.replace(",", ".")) : 0;
-
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-      setReceivePriceNotice({ message: "Harga receive harus angka ≥ 0.", variant: "error" });
-      return;
-    }
-
-    setSavingReceivePriceId(row.id);
-    setReceivePriceNotice(null);
-
-    try {
-      const lineTotal = row.quantity * unitPrice;
-      const { error: updateErr } = await supabase
-        .from("worksheet_in_line")
-        .update({
-          unit_price: unitPrice,
-          line_total: lineTotal,
-        })
-        .eq("id", row.id);
-
-      if (updateErr) throw updateErr;
-
-      setReceivePriceRows((prev) =>
-        prev.map((item) =>
-          item.id === row.id
-            ? {
-                ...item,
-                unitPrice,
-                lineTotal,
-              }
-            : item
-        )
-      );
-      setReceivePriceInputs((prev) => ({
-        ...prev,
-        [row.id]: unitPrice > 0 ? String(unitPrice) : "",
-      }));
-      setReceivePriceNotice({
-        message: `Harga receive ${row.ingredientName} tersimpan.`,
-        variant: "success",
-      });
-    } catch (err) {
-      setReceivePriceNotice({
-        message: err instanceof Error ? err.message : "Gagal menyimpan harga receive.",
-        variant: "error",
-      });
-    } finally {
-      setSavingReceivePriceId(null);
-    }
-  };
-
   const handleAddPoLine = (catalogItem: SupplierPriceCatalog) => {
     const recommendedQty = resolveRecommendedPoQuantity(catalogItem.ingredient.id);
     setPoLines((prev) => {
@@ -2596,6 +2490,109 @@ export function MonitoringDashboard() {
       notes: "",
     }));
     setRefreshKey((k) => k + 1);
+  };
+
+  const handleSyncNationalHolidays = async () => {
+    if (!supabase || !canEdit) return;
+
+    const years = Array.from(
+      new Set(
+        [startDate, endDate, eventForm.startDate, eventForm.endDate]
+          .map((value) => Number(value.slice(0, 4)))
+          .filter((year) => Number.isInteger(year) && year >= 2000 && year <= 2100)
+      )
+    );
+
+    if (years.length === 0) {
+      setEventNotice({ message: "Tahun periode belum valid untuk sync libur nasional.", variant: "error" });
+      return;
+    }
+
+    const staff = getStaffSession();
+    setHolidaySyncing(true);
+    setEventNotice(null);
+
+    try {
+      const holidayRows: Array<{
+        title: string;
+        event_type: string;
+        department: null;
+        start_date: string;
+        end_date: string;
+        expected_uplift_pct: number;
+        notes: string;
+        source: string;
+        external_id: string;
+        created_by_staff_id: string | null;
+      }> = [];
+
+      for (const year of years) {
+        const response = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/ID`);
+        if (!response.ok) throw new Error(`Gagal mengambil libur nasional ${year}.`);
+
+        const holidays = (await response.json()) as PublicHolidayApiRow[];
+        for (const holiday of holidays) {
+          const title = (holiday.localName || holiday.name || "Libur Nasional Indonesia").trim();
+          if (!holiday.date || !title) continue;
+
+          holidayRows.push({
+            title,
+            event_type: "national_holiday",
+            department: null,
+            start_date: holiday.date,
+            end_date: holiday.date,
+            expected_uplift_pct: 0,
+            notes: "Auto-sync libur nasional Indonesia. Isi event manual terpisah jika ada target uplift khusus.",
+            source: "nager_date",
+            external_id: `ID:${holiday.date}:${title}`,
+            created_by_staff_id: staff?.id ?? null,
+          });
+        }
+      }
+
+      if (holidayRows.length === 0) {
+        setEventNotice({ message: "Tidak ada data libur nasional yang ditemukan.", variant: "error" });
+        return;
+      }
+
+      const { data: existingRows, error: existingErr } = await supabase
+        .from("demand_event")
+        .select("external_id")
+        .in(
+          "external_id",
+          holidayRows.map((row) => row.external_id)
+        );
+
+      if (existingErr) throw existingErr;
+
+      const existingIds = new Set(
+        ((existingRows ?? []) as Pick<DemandEventRow, "external_id">[])
+          .map((row) => row.external_id)
+          .filter((value): value is string => Boolean(value))
+      );
+      const rowsToInsert = holidayRows.filter((row) => !existingIds.has(row.external_id));
+
+      if (rowsToInsert.length > 0) {
+        const { error: insertErr } = await supabase.from("demand_event").insert(rowsToInsert);
+        if (insertErr) throw insertErr;
+      }
+
+      setEventNotice({
+        message:
+          rowsToInsert.length === 0
+            ? "Libur nasional sudah tersinkron, tidak ada data baru."
+            : `${rowsToInsert.length} libur nasional tersinkron ke Demand Event.`,
+        variant: "success",
+      });
+      setRefreshKey((key) => key + 1);
+    } catch (err) {
+      setEventNotice({
+        message: err instanceof Error ? err.message : "Gagal sync libur nasional.",
+        variant: "error",
+      });
+    } finally {
+      setHolidaySyncing(false);
+    }
   };
 
   const handleCoverageDaysChange = (next: number) => {
@@ -3129,9 +3126,26 @@ export function MonitoringDashboard() {
                     Catat promo/KOL/libur, lalu cek expected uplift vs actual uplift setelah event berjalan.
                   </p>
                 </div>
-                <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
-                  {filteredDemandEvents.length} event
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      disabled={holidaySyncing}
+                      onClick={() => void handleSyncNationalHolidays()}
+                      className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-3 text-xs font-semibold text-slate-200 hover:border-indigo-400 hover:text-indigo-200 disabled:opacity-50"
+                    >
+                      {holidaySyncing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <CalendarDays className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      {holidaySyncing ? "Sync..." : "Sync Libur Nasional"}
+                    </button>
+                  ) : null}
+                  <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                    {filteredDemandEvents.length} event
+                  </span>
+                </div>
               </div>
 
               {eventNotice ? (

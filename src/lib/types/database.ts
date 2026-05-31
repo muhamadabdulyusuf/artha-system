@@ -28,6 +28,7 @@ export type StaffRow = {
   id: string;
   name: string;
   pin_code: string;
+  password_hash: string;
   role: StaffRole;
   department: Department | null;
   is_active: boolean;
@@ -315,6 +316,8 @@ export type DemandEventRow = {
   end_date: string;
   expected_uplift_pct: number;
   notes: string;
+  source: string;
+  external_id: string | null;
   created_by_staff_id: string | null;
   created_at: string;
   updated_at: string;
@@ -331,6 +334,7 @@ export type Database = {
           id?: string;
           name: string;
           pin_code: string;
+          password_hash?: string;
           role: StaffRole;
           department?: Department | null;
           is_active?: boolean;
@@ -338,6 +342,7 @@ export type Database = {
         Update: {
           name?: string;
           pin_code?: string;
+          password_hash?: string;
           role?: StaffRole;
           department?: Department | null;
           is_active?: boolean;
@@ -698,6 +703,8 @@ export type Database = {
           end_date: string;
           expected_uplift_pct?: number;
           notes?: string;
+          source?: string;
+          external_id?: string | null;
           created_by_staff_id?: string | null;
         };
         Update: {
@@ -708,6 +715,8 @@ export type Database = {
           end_date?: string;
           expected_uplift_pct?: number;
           notes?: string;
+          source?: string;
+          external_id?: string | null;
         };
         Relationships: [];
       };
@@ -760,6 +769,24 @@ export type Database = {
     Functions: {
       verify_staff_pin: {
         Args: { p_pin: string };
+        Returns: {
+          id: string;
+          name: string;
+          role: StaffRole;
+          department: Department | null;
+        }[];
+      };
+      list_active_login_staff: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          id: string;
+          name: string;
+          role: StaffRole;
+          department: Department | null;
+        }[];
+      };
+      verify_staff_password: {
+        Args: { p_name: string; p_password: string };
         Returns: {
           id: string;
           name: string;

@@ -85,7 +85,7 @@ export function translateWorksheetSubmitError(err: unknown): TranslatedWorksheet
     return {
       title: "❌ Gagal Kirim: Sesi Staff Tidak Valid",
       description:
-        "Penanggung jawab dari login PIN tidak tersimpan dengan benar. Silakan logout, login ulang dengan PIN Anda, lalu klik Submit Report Closing sekali lagi.",
+        "Penanggung jawab dari login staff tidak tersimpan dengan benar. Silakan logout, login ulang, lalu klik Submit Report Closing sekali lagi.",
       variant: "error",
     };
   }
