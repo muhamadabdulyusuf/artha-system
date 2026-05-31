@@ -2158,7 +2158,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     runWithTypoGuard(["inQty", "closingStock", "outQty"], () => void handleSubmit());
 
   return (
-    <main className="mx-auto min-h-screen max-w-lg bg-zinc-950 pb-24">
+    <main className="mx-auto min-h-screen max-w-lg bg-zinc-950 pb-48">
       <Toast
         message={toast?.message ?? null}
         title={toast?.title}
@@ -3107,31 +3107,33 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                 type="button"
                 disabled={isSavingMenuProgress || isSubmitting}
                 onClick={stickySaveMenuProgress}
-                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-600/20 font-bold text-emerald-100 active:bg-emerald-600/30 disabled:opacity-50"
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-600/20 px-3 text-center text-sm font-bold leading-tight text-emerald-100 active:bg-emerald-600/30 disabled:opacity-50"
               >
                 {isSavingMenuProgress ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
                 ) : (
-                  <UtensilsCrossed className="h-5 w-5" />
+                  <UtensilsCrossed className="h-5 w-5 shrink-0" />
                 )}
-                {isSavingMenuProgress ? "Menyimpan sales…" : "Simpan Sales Menu"}
+                <span>{isSavingMenuProgress ? "Menyimpan sales…" : "Simpan Sales Menu"}</span>
               </button>
               <button
                 type="button"
                 disabled={isSubmitting || !closingSubmitOpen}
                 onClick={stickySubmit}
-                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
               >
                 {isSubmitting ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
                 ) : (
-                  <Lock className="h-5 w-5" />
+                  <Lock className="h-5 w-5 shrink-0" />
                 )}
-                {isSubmitting
-                  ? "Mengunci laporan…"
-                  : closingSubmitOpen
-                    ? "Submit Report Closing"
-                    : "Submit Aktif 00:00 WIB"}
+                <span>
+                  {isSubmitting
+                    ? "Mengunci laporan…"
+                    : closingSubmitOpen
+                      ? "Submit Report Closing"
+                      : "Submit Aktif 00:00 WIB"}
+                </span>
               </button>
             </div>
           ) : null}

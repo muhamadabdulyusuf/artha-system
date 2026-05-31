@@ -132,8 +132,8 @@ export function PinGate() {
   }, [password, router, selectedName]);
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-slate-900 px-4 py-8">
-      <header className="mb-8 text-center">
+    <main className="flex min-h-dvh flex-col items-center justify-center overflow-y-auto bg-slate-900 px-4 py-6">
+      <header className="mb-6 text-center sm:mb-8">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-400">
           Abdul Company
         </p>
@@ -168,7 +168,7 @@ export function PinGate() {
                 <option value="">Belum ada staff aktif</option>
               ) : (
                 staffOptions.map((staff) => (
-                  <option key={staff.id} value={staff.name}>
+                  <option key={staff.id} value={staff.name} className="bg-slate-900 text-white">
                     {staff.name}
                   </option>
                 ))
@@ -213,7 +213,7 @@ export function PinGate() {
         <button
           type="submit"
           disabled={loadingStaff || checking || !selectedStaff || !password.trim()}
-          className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 text-sm font-bold text-slate-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 text-center text-sm font-bold leading-tight text-slate-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {checking ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
           {checking ? "Memverifikasi..." : "Masuk"}
