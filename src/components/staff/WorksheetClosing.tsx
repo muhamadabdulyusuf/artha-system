@@ -112,6 +112,47 @@ type SoldEntryJoined = {
   staff: { name: string } | { name: string }[] | null;
 };
 
+type ReceiveEntryJoined = {
+  ingredient_id: string;
+  staff_id: string | null;
+  quantity: number;
+  staff: { name: string } | { name: string }[] | null;
+};
+
+type WorksheetLineOwner = {
+  staffId: string | null;
+  staffName: string;
+};
+
+type StaffJoin = { staff_id: string | null; staff: { name: string } | { name: string }[] | null };
+
+type OutLineJoined = StaffJoin & {
+  ingredient_id: string;
+  quantity: number;
+  note: string | null;
+  photo_url: string | null;
+  photo_public_id: string | null;
+};
+
+type IssueLineJoined = StaffJoin & {
+  menu_item_id: string;
+  quantity: number;
+  reason: string | null;
+  note: string | null;
+  photo_url: string | null;
+  photo_public_id: string | null;
+};
+
+type PremixLineJoined = StaffJoin & {
+  output_ingredient_id: string;
+  batch_quantity: number;
+};
+
+type OpnameLineJoined = StaffJoin & {
+  ingredient_id: string;
+  closing_stock: number;
+};
+
 type PremixRecipeComponent = {
   ingredient_id: string;
   qty_per_batch: number;
@@ -296,6 +337,15 @@ function getHourInOutletTimeZone(date: Date = new Date()): number {
 function isClosingSubmitWindowOpen(date: Date = new Date()): boolean {
   const hour = getHourInOutletTimeZone(date);
   return hour >= CLOSING_SUBMIT_UNLOCK_HOUR && hour < BUSINESS_DATE_CUTOFF_HOUR;
+}
+
+function resolveLineOwner(row: StaffJoin): WorksheetLineOwner {
+  const staffRaw = row.staff;
+  const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+  return {
+    staffId: row.staff_id,
+    staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+  };
 }
 
 function isIsoDate(value: string): boolean {
@@ -707,8 +757,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [premixItems, setPremixItems] = useState<PremixItemWithRecipe[]>([]);
   const [lines, setLines] = useState<Record<string, IngredientLineState>>({});
   const [receiveEntryInputs, setReceiveEntryInputs] = useState<Record<string, string>>({});
+  const [receiveEntrySummaries, setReceiveEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
   const [soldItems, setSoldItems] = useState<Record<string, string>>({});
   const [soldEntrySummaries, setSoldEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
+  const [outLineOwners, setOutLineOwners] = useState<Record<string, WorksheetLineOwner>>({});
+  const [opnameLineOwners, setOpnameLineOwners] = useState<Record<string, WorksheetLineOwner>>({});
+  const [premixLineOwners, setPremixLineOwners] = useState<Record<string, WorksheetLineOwner>>({});
+  const [issueLineOwners, setIssueLineOwners] = useState<Record<string, WorksheetLineOwner>>({});
   const [menuIssues, setMenuIssues] = useState<Record<string, MenuIssueLineState>>({});
   const [premixQuantities, setPremixQuantities] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -784,6 +839,20 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const outstockHasBlockingErrors = useMemo(
     () => hasOutstockValidationErrors(ingredients, lines),
     [ingredients, lines]
+  );
+
+  const isOwnedByOther = useCallback(
+    (owner?: WorksheetLineOwner | null) =>
+      Boolean(owner?.staffId && staff?.id && owner.staffId !== staff.id),
+    [staff?.id]
+  );
+
+  const currentStaffOwner = useCallback(
+    (): WorksheetLineOwner => ({
+      staffId: staff?.id ?? null,
+      staffName: staff?.name ?? "Staff ini",
+    }),
+    [staff?.id, staff?.name]
   );
 
   const refreshIngredientStockFromDb = useCallback(async () => {
@@ -891,6 +960,38 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     []
   );
 
+  const refreshReceiveEntrySummaries = useCallback(
+    async (activeSessionId: string) => {
+      const { data, error: receiveEntryErr } = await supabase
+        .from("worksheet_receive_entry")
+        .select("ingredient_id, staff_id, quantity, staff:staff_id ( name )")
+        .eq("session_id", activeSessionId);
+
+      if (receiveEntryErr) {
+        throw new Error(`Gagal memuat detail receive staff: ${receiveEntryErr.message}`);
+      }
+
+      const nextSummaries: Record<string, SoldEntrySummary[]> = {};
+      for (const row of (data ?? []) as unknown as ReceiveEntryJoined[]) {
+        const quantity = Number(row.quantity ?? 0);
+        if (quantity <= 0) continue;
+        const staffRaw = row.staff;
+        const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+        nextSummaries[row.ingredient_id] = [
+          ...(nextSummaries[row.ingredient_id] ?? []),
+          {
+            staffId: row.staff_id,
+            staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+            quantity,
+          },
+        ];
+      }
+
+      setReceiveEntrySummaries(nextSummaries);
+    },
+    [supabase]
+  );
+
   const loadData = useCallback(async () => {
     if (!staff) return;
 
@@ -965,7 +1066,12 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     const soldPreset: Record<string, string> = {};
     const issuePreset: Record<string, MenuIssueLineState> = {};
     const premixPreset: Record<string, string> = {};
+    setReceiveEntrySummaries({});
     setSoldEntrySummaries({});
+    setOutLineOwners({});
+    setOpnameLineOwners({});
+    setPremixLineOwners({});
+    setIssueLineOwners({});
 
     if (ws?.id) {
       const { data: inLines } = await supabase
@@ -980,12 +1086,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         };
       }
 
+      try {
+        await refreshReceiveEntrySummaries(ws.id);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Gagal memuat detail receive staff.");
+      }
+
       const { data: outLines } = await supabase
         .from("worksheet_out_line")
-        .select("ingredient_id, quantity, note, photo_url, photo_public_id")
+        .select("ingredient_id, quantity, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name )")
         .eq("session_id", ws.id);
 
-      for (const row of outLines ?? []) {
+      const nextOutOwners: Record<string, WorksheetLineOwner> = {};
+      for (const row of (outLines ?? []) as unknown as OutLineJoined[]) {
         ingredientPreset[row.ingredient_id] = {
           ...ingredientPreset[row.ingredient_id],
           outQty: Number(row.quantity) === 0 ? "" : String(row.quantity),
@@ -993,7 +1106,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           outPhotoUrl: row.photo_url ?? "",
           outPhotoPublicId: row.photo_public_id ?? "",
         };
+        nextOutOwners[row.ingredient_id] = resolveLineOwner(row);
       }
+      setOutLineOwners(nextOutOwners);
 
       const { data: soldEntries, error: soldEntryErr } = await supabase
         .from("worksheet_sold_entry")
@@ -1046,10 +1161,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const { data: issueLines } = await supabase
         .from("worksheet_menu_issue_line")
-        .select("menu_item_id, quantity, reason, note, photo_url, photo_public_id")
+        .select("menu_item_id, quantity, reason, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name )")
         .eq("session_id", ws.id);
 
-      for (const row of issueLines ?? []) {
+      const nextIssueOwners: Record<string, WorksheetLineOwner> = {};
+      for (const row of (issueLines ?? []) as unknown as IssueLineJoined[]) {
         issuePreset[row.menu_item_id] = {
           quantity: Number(row.quantity) === 0 ? "" : String(row.quantity),
           reason: normalizeIssueReason(row.reason),
@@ -1057,29 +1173,37 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           photoUrl: row.photo_url ?? "",
           photoPublicId: row.photo_public_id ?? "",
         };
+        nextIssueOwners[row.menu_item_id] = resolveLineOwner(row);
       }
+      setIssueLineOwners(nextIssueOwners);
 
       const { data: premixLines } = await supabase
         .from("worksheet_premix_line")
-        .select("output_ingredient_id, batch_quantity")
+        .select("output_ingredient_id, batch_quantity, staff_id, staff:staff_id ( name )")
         .eq("session_id", ws.id);
 
-      for (const row of premixLines ?? []) {
+      const nextPremixOwners: Record<string, WorksheetLineOwner> = {};
+      for (const row of (premixLines ?? []) as unknown as PremixLineJoined[]) {
         premixPreset[row.output_ingredient_id] =
           Number(row.batch_quantity) === 0 ? "" : String(row.batch_quantity);
+        nextPremixOwners[row.output_ingredient_id] = resolveLineOwner(row);
       }
+      setPremixLineOwners(nextPremixOwners);
 
       const { data: opnameLines } = await supabase
         .from("worksheet_opname_line")
-        .select("ingredient_id, closing_stock")
+        .select("ingredient_id, closing_stock, staff_id, staff:staff_id ( name )")
         .eq("session_id", ws.id);
 
-      for (const row of opnameLines ?? []) {
+      const nextOpnameOwners: Record<string, WorksheetLineOwner> = {};
+      for (const row of (opnameLines ?? []) as unknown as OpnameLineJoined[]) {
         ingredientPreset[row.ingredient_id] = {
           ...ingredientPreset[row.ingredient_id],
           closingStock: String(row.closing_stock),
         };
+        nextOpnameOwners[row.ingredient_id] = resolveLineOwner(row);
       }
+      setOpnameLineOwners(nextOpnameOwners);
 
       const { data: ledgers } = await supabase
         .from("stock_ledger")
@@ -1112,7 +1236,15 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     setMenuIssues(issuePreset);
     initPremixQuantities(premixList, premixPreset);
     setIsLoading(false);
-  }, [department, initIngredientLines, initPremixQuantities, initSoldItems, staff, supabase]);
+  }, [
+    department,
+    initIngredientLines,
+    initPremixQuantities,
+    initSoldItems,
+    refreshReceiveEntrySummaries,
+    staff,
+    supabase,
+  ]);
 
   useEffect(() => {
     const current = getStaffSession();
@@ -1245,7 +1377,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const updateClosingStock = (ingredientId: string, value: string) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(opnameLineOwners[ingredientId])) return;
     setLines((prev) => ({
       ...prev,
       [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), closingStock: value },
@@ -1253,7 +1385,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const updateOutQty = (ingredientId: string, value: string) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
     setLines((prev) => ({
       ...prev,
       [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), outQty: value },
@@ -1261,7 +1393,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const updateOutNote = (ingredientId: string, value: string) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
     setLines((prev) => ({
       ...prev,
       [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), outNote: value },
@@ -1272,7 +1404,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     ingredientId: string,
     value: { url: string; publicId: string }
   ) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
     setLines((prev) => ({
       ...prev,
       [ingredientId]: {
@@ -1284,7 +1416,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const clearOutPhoto = (ingredientId: string) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
     setLines((prev) => ({
       ...prev,
       [ingredientId]: {
@@ -1381,12 +1513,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }
 
     const totals = await syncReceiveAggregate(activeSessionId);
+    await refreshReceiveEntrySummaries(activeSessionId);
     setReceiveEntryInputs({});
     return totals;
   };
 
   const uploadOutStockPhoto = async (ingredientId: string, file: File | null) => {
-    if (!file || locked) return;
+    if (!file || locked || isOwnedByOther(outLineOwners[ingredientId])) return;
 
     setUploadingPhotoFor(ingredientId);
     setError(null);
@@ -1425,7 +1558,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const updateMenuIssue = (menuId: string, patch: Partial<MenuIssueLineState>) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(issueLineOwners[menuId])) return;
     setMenuIssues((prev) => ({
       ...prev,
       [menuId]: {
@@ -1437,7 +1570,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const uploadMenuIssuePhoto = async (menuId: string, file: File | null) => {
-    if (!file || locked) return;
+    if (!file || locked || isOwnedByOther(issueLineOwners[menuId])) return;
 
     setUploadingPhotoFor(`issue-${menuId}`);
     setError(null);
@@ -1475,7 +1608,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const updatePremixQty = (premixId: string, value: string) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(premixLineOwners[premixId])) return;
     setPremixQuantities((prev) => ({ ...prev, [premixId]: value }));
   };
 
@@ -1489,7 +1622,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const adjustPremixQty = (premixId: string, delta: number) => {
-    if (locked) return;
+    if (locked || isOwnedByOther(premixLineOwners[premixId])) return;
     setPremixQuantities((prev) => {
       const current = parseQty(prev[premixId] ?? "");
       const next = Math.max(0, current + delta);
@@ -1527,7 +1660,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   };
 
   const handleSaveOutStock = async () => {
-    if (locked || isSavingOutStock || outstockHasBlockingErrors) return;
+    if (locked || isSavingOutStock || outstockHasBlockingErrors || !staff?.id) return;
 
     const date = businessDate || resolveWorksheetBusinessDate();
     setIsSavingOutStock(true);
@@ -1539,12 +1672,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
 
+      const editableIngredientIds = freshIngredients
+        .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
+        .map((ing) => ing.id);
+
       const outLinePayload = freshIngredients
+        .filter((ing) => editableIngredientIds.includes(ing.id))
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
           return {
             session_id: activeSessionId,
             ingredient_id: ing.id,
+            staff_id: staff.id,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
             photo_url: line.outPhotoUrl || null,
@@ -1553,10 +1692,15 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         })
         .filter((row) => row.quantity > 0);
 
-      const { error: clearErr } = await supabase
-        .from("worksheet_out_line")
-        .delete()
-        .eq("session_id", activeSessionId);
+      const { error: clearErr } =
+        editableIngredientIds.length > 0
+          ? await supabase
+              .from("worksheet_out_line")
+              .delete()
+              .eq("session_id", activeSessionId)
+              .in("ingredient_id", editableIngredientIds)
+              .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+          : { error: null };
 
       if (clearErr) {
         throw new Error(`Gagal membersihkan draft out stock: ${clearErr.message}`);
@@ -1570,6 +1714,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       if (outLineErr) {
         throw new Error(`Gagal menyimpan out stock: ${outLineErr.message}`);
       }
+
+      const nextOwners = { ...outLineOwners };
+      for (const ingredientId of editableIngredientIds) delete nextOwners[ingredientId];
+      for (const row of outLinePayload) nextOwners[row.ingredient_id] = currentStaffOwner();
+      setOutLineOwners(nextOwners);
 
       showSuccessToast("Out stock tersimpan. Form tetap bisa diedit untuk koreksi typo.");
     } catch (err) {
@@ -1592,7 +1741,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
 
       const blankIngredientIds: string[] = [];
-      const opnamePayload = freshIngredients.flatMap((ing) => {
+      const editableIngredients = freshIngredients.filter(
+        (ing) => !isOwnedByOther(opnameLineOwners[ing.id])
+      );
+      const opnamePayload = editableIngredients.flatMap((ing) => {
         const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
         if (isBlankQty(raw)) {
           blankIngredientIds.push(ing.id);
@@ -1608,21 +1760,24 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           {
             session_id: activeSessionId,
             ingredient_id: ing.id,
+            staff_id: staff.id,
             closing_stock,
           },
         ];
       });
 
-      if (blankIngredientIds.length > 0) {
-        const { error: clearBlankErr } = await supabase
-          .from("worksheet_opname_line")
-          .delete()
-          .eq("session_id", activeSessionId)
-          .in("ingredient_id", blankIngredientIds);
+      const { error: clearBlankErr } =
+        blankIngredientIds.length > 0
+          ? await supabase
+              .from("worksheet_opname_line")
+              .delete()
+              .eq("session_id", activeSessionId)
+              .in("ingredient_id", blankIngredientIds)
+              .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+          : { error: null };
 
-        if (clearBlankErr) {
-          throw new Error(`Gagal membersihkan draft opname kosong: ${clearBlankErr.message}`);
-        }
+      if (clearBlankErr) {
+        throw new Error(`Gagal membersihkan draft opname kosong: ${clearBlankErr.message}`);
       }
 
       const { error: opnameErr } =
@@ -1635,6 +1790,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       if (opnameErr) {
         throw new Error(`Gagal menyimpan draft opname: ${opnameErr.message}`);
       }
+
+      const nextOwners = { ...opnameLineOwners };
+      for (const ingredientId of blankIngredientIds) delete nextOwners[ingredientId];
+      for (const row of opnamePayload) nextOwners[row.ingredient_id] = currentStaffOwner();
+      setOpnameLineOwners(nextOwners);
 
       showSuccessToast("Draft opname tersimpan. Ledger final dibuat saat Submit Report Closing.");
     } catch (err) {
@@ -1653,22 +1813,32 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     try {
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
+      const editablePremixIds = premixItems
+        .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
+        .map((premix) => premix.id);
       const payload = premixItems
+        .filter((premix) => editablePremixIds.includes(premix.id))
         .map((premix) => {
           const recipe = getActivePremixRecipe(premix);
           return {
             session_id: activeSessionId,
             output_ingredient_id: premix.id,
             recipe_id: recipe?.id ?? "",
+            staff_id: staff.id,
             batch_quantity: parseQty(premixQuantities[premix.id] ?? ""),
           };
         })
         .filter((row) => row.batch_quantity > 0 && row.recipe_id);
 
-      const { error: clearErr } = await supabase
-        .from("worksheet_premix_line")
-        .delete()
-        .eq("session_id", activeSessionId);
+      const { error: clearErr } =
+        editablePremixIds.length > 0
+          ? await supabase
+              .from("worksheet_premix_line")
+              .delete()
+              .eq("session_id", activeSessionId)
+              .in("output_ingredient_id", editablePremixIds)
+              .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+          : { error: null };
 
       if (clearErr) {
         throw new Error(`Gagal membersihkan draft premix: ${clearErr.message}`);
@@ -1682,6 +1852,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       if (premixErr) {
         throw new Error(`Gagal menyimpan draft premix: ${premixErr.message}`);
       }
+
+      const nextOwners = { ...premixLineOwners };
+      for (const premixId of editablePremixIds) delete nextOwners[premixId];
+      for (const row of payload) nextOwners[row.output_ingredient_id] = currentStaffOwner();
+      setPremixLineOwners(nextOwners);
 
       showSuccessToast("Produksi premix tersimpan. Stok final dihitung saat Submit Report Closing.");
     } catch (err) {
@@ -1818,12 +1993,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     setSoldEntrySummaries(nextSummaries);
 
+    const editableIssueMenuIds = menuList
+      .filter((menu) => !isOwnedByOther(issueLineOwners[menu.id]))
+      .map((menu) => menu.id);
     const issuePayload = menuList
+      .filter((menu) => editableIssueMenuIds.includes(menu.id))
       .map((menu) => {
         const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
         return {
           session_id: activeSessionId,
           menu_item_id: menu.id,
+          staff_id: staff.id,
           quantity: parseQty(issue.quantity),
           reason: issue.reason,
           note: issue.note.trim(),
@@ -1833,10 +2013,15 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       })
       .filter((row) => row.quantity > 0);
 
-    const { error: clearIssueErr } = await supabase
-      .from("worksheet_menu_issue_line")
-      .delete()
-      .eq("session_id", activeSessionId);
+    const { error: clearIssueErr } =
+      editableIssueMenuIds.length > 0
+        ? await supabase
+            .from("worksheet_menu_issue_line")
+            .delete()
+            .eq("session_id", activeSessionId)
+            .in("menu_item_id", editableIssueMenuIds)
+            .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+        : { error: null };
 
     if (clearIssueErr) {
       throw new Error(`Gagal membersihkan worksheet_menu_issue_line: ${clearIssueErr.message}`);
@@ -1850,6 +2035,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     if (issueErr) {
       throw new Error(`Gagal menyimpan worksheet_menu_issue_line: ${issueErr.message}`);
     }
+
+    const nextIssueOwners = { ...issueLineOwners };
+    for (const menuId of editableIssueMenuIds) delete nextIssueOwners[menuId];
+    for (const row of issuePayload) nextIssueOwners[row.menu_item_id] = currentStaffOwner();
+    setIssueLineOwners(nextIssueOwners);
   };
 
   const handleSaveMenuProgress = async () => {
@@ -1936,12 +2126,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const receiveTotals = await savePendingReceiveEntries(ensuredSessionId);
 
+      const editableOutIngredientIds = freshIngredients
+        .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
+        .map((ing) => ing.id);
       const outLinePayload = freshIngredients
+        .filter((ing) => editableOutIngredientIds.includes(ing.id))
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
           return {
             session_id: ensuredSessionId,
             ingredient_id: ing.id,
+            staff_id: submittingStaffId,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
             photo_url: line.outPhotoUrl || null,
@@ -1950,10 +2145,15 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         })
         .filter((row) => row.quantity > 0);
 
-      const { error: clearOutErr } = await supabase
-        .from("worksheet_out_line")
-        .delete()
-        .eq("session_id", ensuredSessionId);
+      const { error: clearOutErr } =
+        editableOutIngredientIds.length > 0
+          ? await supabase
+              .from("worksheet_out_line")
+              .delete()
+              .eq("session_id", ensuredSessionId)
+              .in("ingredient_id", editableOutIngredientIds)
+              .or(`staff_id.eq.${submittingStaffId},staff_id.is.null`)
+          : { error: null };
 
       if (clearOutErr) {
         throw new Error(`Gagal membersihkan worksheet_out_line: ${clearOutErr.message}`);
@@ -1970,22 +2170,32 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       await saveMenuProgress(ensuredSessionId, menuListForCalc);
 
+      const editablePremixIds = premixItems
+        .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
+        .map((premix) => premix.id);
       const premixPayload = premixItems
+        .filter((premix) => editablePremixIds.includes(premix.id))
         .map((premix) => {
           const recipe = getActivePremixRecipe(premix);
           return {
             session_id: ensuredSessionId,
             output_ingredient_id: premix.id,
             recipe_id: recipe?.id ?? "",
+            staff_id: submittingStaffId,
             batch_quantity: parseQty(premixQuantities[premix.id] ?? ""),
           };
         })
         .filter((row) => row.batch_quantity > 0 && row.recipe_id);
 
-      const { error: clearPremixErr } = await supabase
-        .from("worksheet_premix_line")
-        .delete()
-        .eq("session_id", ensuredSessionId);
+      const { error: clearPremixErr } =
+        editablePremixIds.length > 0
+          ? await supabase
+              .from("worksheet_premix_line")
+              .delete()
+              .eq("session_id", ensuredSessionId)
+              .in("output_ingredient_id", editablePremixIds)
+              .or(`staff_id.eq.${submittingStaffId},staff_id.is.null`)
+          : { error: null };
 
       if (clearPremixErr) {
         throw new Error(`Gagal membersihkan worksheet_premix_line: ${clearPremixErr.message}`);
@@ -2526,6 +2736,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                       ing,
                       receiveEntryInputs[ing.id] ?? ""
                     );
+                    const receiveSummaries = receiveEntrySummaries[ing.id] ?? [];
                     return (
                       <li
                         key={ing.id}
@@ -2542,6 +2753,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               ? ` · Receive: 1 ${purchaseUnit} = ${factor} ${ing.unit}`
                               : ""}
                           </p>
+                          {receiveSummaries.length > 0 ? (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {receiveSummaries.map((entry, index) => (
+                                <span
+                                  key={`${entry.staffId ?? "legacy"}-${index}`}
+                                  className="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-200"
+                                >
+                                  {entry.staffName}: {formatQty(entry.quantity)} {purchaseUnit}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                           <label className="block">
@@ -2602,6 +2825,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     const showOutFields = validation.outQty > 0;
                     const qtyInputInvalid = validation.exceedsStock;
                     const isUploadingPhoto = uploadingPhotoFor === ing.id;
+                    const owner = outLineOwners[ing.id];
+                    const ownedByOther = isOwnedByOther(owner);
+                    const inputDisabled = locked || ownedByOther;
 
                     return (
                       <li
@@ -2612,6 +2838,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                         <div className="mb-3">
                           <p className="font-semibold text-zinc-50">{ing.name}</p>
                           <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
+                          {owner ? (
+                            <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                              Diisi oleh {owner.staffName}
+                            </p>
+                          ) : null}
                         </div>
                         <label className="mb-3 block">
                           <span className="mb-1 block text-xs text-zinc-400">
@@ -2625,7 +2856,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             inputMode="decimal"
                             min={0}
                             step="any"
-                            disabled={locked}
+                            disabled={inputDisabled}
                             value={line.outQty}
                             onChange={(e) => updateOutQty(ing.id, e.target.value)}
                             placeholder="Kosong"
@@ -2649,7 +2880,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             </span>
                             <textarea
                               rows={3}
-                              disabled={locked || isUploadingPhoto}
+                              disabled={inputDisabled || isUploadingPhoto}
                               value={line.outNote}
                               onChange={(e) => updateOutNote(ing.id, e.target.value)}
                               placeholder="Contoh: Tumpah, Salah buat/re-make, Expired"
@@ -2673,7 +2904,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                     type="file"
                                     accept="image/*"
                                     capture="environment"
-                                    disabled={locked || isUploadingPhoto}
+                                    disabled={inputDisabled || isUploadingPhoto}
                                     onChange={(e) => {
                                       const file = e.target.files?.[0] ?? null;
                                       e.currentTarget.value = "";
@@ -2709,7 +2940,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                     </a>
                                     <button
                                       type="button"
-                                      disabled={locked || isUploadingPhoto}
+                                      disabled={inputDisabled || isUploadingPhoto}
                                       onClick={() => clearOutPhoto(ing.id)}
                                       className="mt-1 text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
                                     >
@@ -2745,6 +2976,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   ) : null}
                   {filteredIngredients.map((ing) => {
                     const line = lines[ing.id] ?? DEFAULT_LINE;
+                    const owner = opnameLineOwners[ing.id];
+                    const ownedByOther = isOwnedByOther(owner);
                     return (
                       <li
                         key={ing.id}
@@ -2753,6 +2986,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                         <div className="mb-3">
                           <p className="font-semibold text-zinc-50">{ing.name}</p>
                           <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
+                          {owner ? (
+                            <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                              Diisi oleh {owner.staffName}
+                            </p>
+                          ) : null}
                         </div>
                         <label className="block">
                           <span className="mb-1 block text-xs text-zinc-400">
@@ -2766,7 +3004,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             inputMode="decimal"
                             min={0}
                             step="any"
-                            disabled={locked}
+                            disabled={locked || ownedByOther}
                             value={line.closingStock}
                             onChange={(e) => updateClosingStock(ing.id, e.target.value)}
                             placeholder="Kosong = ikut stok sistem"
@@ -2805,6 +3043,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                       const qty = parseQty(qtyValue);
                       const yieldQty = Number(recipe?.yield_quantity ?? 1);
                       const outputQty = qty * yieldQty;
+                      const owner = premixLineOwners[premix.id];
+                      const ownedByOther = isOwnedByOther(owner);
+                      const inputDisabled = locked || ownedByOther;
 
                       return (
                         <li
@@ -2817,6 +3058,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               <p className="text-xs text-zinc-500">
                                 1 batch = {yieldQty.toLocaleString("id-ID")} {premix.unit} · Stok sistem {Number(premix.current_stock).toLocaleString("id-ID")}
                               </p>
+                              {owner ? (
+                                <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                                  Diisi oleh {owner.staffName}
+                                </p>
+                              ) : null}
                             </div>
                             <Beaker className="h-5 w-5 shrink-0 text-emerald-400" />
                           </div>
@@ -2828,7 +3074,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             <div className="flex items-center gap-1">
                               <button
                                 type="button"
-                                disabled={locked}
+                                disabled={inputDisabled}
                                 onClick={() => adjustPremixQty(premix.id, -1)}
                                 className="flex h-12 w-12 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 active:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
                               >
@@ -2839,7 +3085,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                 inputMode="decimal"
                                 min={0}
                                 step="any"
-                                disabled={locked || !recipe}
+                                disabled={inputDisabled || !recipe}
                                 value={qtyValue}
                                 onChange={(e) => updatePremixQty(premix.id, e.target.value)}
                                 placeholder="Kosong"
@@ -2847,7 +3093,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               />
                               <button
                                 type="button"
-                                disabled={locked || !recipe}
+                                disabled={inputDisabled || !recipe}
                                 onClick={() => adjustPremixQty(premix.id, 1)}
                                 className="flex h-12 w-12 items-center justify-center rounded-lg border border-emerald-500/50 bg-emerald-600/20 text-emerald-100 active:bg-emerald-600/35 disabled:cursor-not-allowed disabled:opacity-50"
                               >
@@ -2926,6 +3172,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     {filteredIssueMenus.map((menu) => {
                       const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
                       const hasRecipe = getActiveRecipeLines(menu).length > 0;
+                      const owner = issueLineOwners[menu.id];
+                      const ownedByOther = isOwnedByOther(owner);
+                      const inputDisabled = locked || ownedByOther;
                       return (
                         <li
                           key={menu.id}
@@ -2938,6 +3187,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                 ? "Remake akan dikonversi otomatis ke bahan resep."
                                 : "Belum ada resep aktif — pemakaian bahan tidak bisa dihitung."}
                             </p>
+                            {owner ? (
+                              <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                                Diisi oleh {owner.staffName}
+                              </p>
+                            ) : null}
                           </div>
                           <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
                             <label className="block">
@@ -2947,7 +3201,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                 inputMode="decimal"
                                 min={0}
                                 step={1}
-                                disabled={locked}
+                                disabled={inputDisabled}
                                 value={issue.quantity}
                                 onChange={(e) =>
                                   updateMenuIssue(menu.id, { quantity: e.target.value })
@@ -2959,7 +3213,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             <label className="block">
                               <span className="mb-1 block text-xs text-zinc-400">Alasan</span>
                               <select
-                                disabled={locked}
+                                disabled={inputDisabled}
                                 value={issue.reason}
                                 onChange={(e) =>
                                   updateMenuIssue(menu.id, {
@@ -2982,7 +3236,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             </span>
                             <input
                               type="text"
-                              disabled={locked}
+                              disabled={inputDisabled}
                               value={issue.note}
                               onChange={(e) =>
                                 updateMenuIssue(menu.id, { note: e.target.value })
@@ -2999,7 +3253,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               {issue.photoUrl ? (
                                 <button
                                   type="button"
-                                  disabled={locked}
+                                  disabled={inputDisabled}
                                   onClick={() => clearMenuIssuePhoto(menu.id)}
                                   className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-red-500/40 px-2 text-xs font-medium text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
@@ -3033,7 +3287,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               <input
                                 type="file"
                                 accept="image/*"
-                                disabled={locked || uploadingPhotoFor === `issue-${menu.id}`}
+                                disabled={inputDisabled || uploadingPhotoFor === `issue-${menu.id}`}
                                 onChange={(e) => {
                                   void uploadMenuIssuePhoto(menu.id, e.target.files?.[0] ?? null);
                                   e.currentTarget.value = "";

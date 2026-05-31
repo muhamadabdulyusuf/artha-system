@@ -90,6 +90,7 @@ export type WorksheetPremixLineRow = {
   output_ingredient_id: string;
   recipe_id: string;
   batch_quantity: number;
+  staff_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -193,6 +194,7 @@ export type WorksheetMenuIssueLineRow = {
   quantity: number;
   reason: string;
   note: string;
+  staff_id: string | null;
   photo_url: string | null;
   photo_public_id: string | null;
   created_at: string;
@@ -205,6 +207,7 @@ export type WorksheetOutLineRow = {
   ingredient_id: string;
   quantity: number;
   note: string;
+  staff_id: string | null;
   photo_url: string | null;
   photo_public_id: string | null;
   created_at: string;
@@ -216,6 +219,7 @@ export type WorksheetOpnameLineRow = {
   session_id: string;
   ingredient_id: string;
   closing_stock: number;
+  staff_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -534,6 +538,7 @@ export type Database = {
           quantity: number;
           reason?: string;
           note?: string;
+          staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };
@@ -541,6 +546,7 @@ export type Database = {
           quantity?: number;
           reason?: string;
           note?: string;
+          staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };
@@ -554,12 +560,14 @@ export type Database = {
           ingredient_id: string;
           quantity: number;
           note?: string;
+          staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };
         Update: {
           quantity?: number;
           note?: string;
+          staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };
@@ -572,8 +580,9 @@ export type Database = {
           session_id: string;
           ingredient_id: string;
           closing_stock: number;
+          staff_id?: string | null;
         };
-        Update: { closing_stock?: number };
+        Update: { closing_stock?: number; staff_id?: string | null };
         Relationships: [];
       };
       worksheet_premix_line: {
@@ -584,8 +593,9 @@ export type Database = {
           output_ingredient_id: string;
           recipe_id: string;
           batch_quantity: number;
+          staff_id?: string | null;
         };
-        Update: { batch_quantity?: number; recipe_id?: string };
+        Update: { batch_quantity?: number; recipe_id?: string; staff_id?: string | null };
         Relationships: [];
       };
       stock_ledger: {
