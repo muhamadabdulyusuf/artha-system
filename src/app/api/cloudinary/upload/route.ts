@@ -18,13 +18,23 @@ function signCloudinaryParams(params: Record<string, string>, apiSecret: string)
 }
 
 export async function POST(request: Request) {
-  const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  const cloudName = (
+    process.env.CLOUDINARY_CLOUD_NAME ??
+    process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME ??
+    ""
+  ).trim();
+  const apiKey = (process.env.CLOUDINARY_API_KEY ?? "").trim();
+  const apiSecret = (process.env.CLOUDINARY_API_SECRET ?? "").trim();
 
   if (!cloudName || !apiKey || !apiSecret) {
+    const missing = [
+      !cloudName ? "CLOUDINARY_CLOUD_NAME/NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME" : "",
+      !apiKey ? "CLOUDINARY_API_KEY" : "",
+      !apiSecret ? "CLOUDINARY_API_SECRET" : "",
+    ].filter(Boolean);
+
     return NextResponse.json(
-      { error: "Cloudinary env belum lengkap." },
+      { error: `Cloudinary env belum lengkap: ${missing.join(", ")}.` },
       { status: 500 }
     );
   }
