@@ -1923,16 +1923,29 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       for (const [ingredientId, requiredQty] of premixUsageMap) {
         const ing = freshById.get(ingredientId);
         if (!ing) continue;
+        const line = lines[ingredientId] ?? DEFAULT_LINE;
         const receiveQty = receiveInputToStockQty(
           ing,
           String(receiveTotals.get(ingredientId) ?? 0)
         );
         const premixOutputQty = premixOutputMap.get(ingredientId) ?? 0;
         const bookStock = previousClosingMap.get(ingredientId) ?? Number(ing.current_stock) ?? 0;
-        const available = Math.max(0, bookStock) + receiveQty + premixOutputQty;
-        if (requiredQty > available) {
+        const physicalStock = !isBlankQty(line.closingStock)
+          ? parseQty(line.closingStock)
+          : Math.max(0, bookStock);
+        const remainingAfterPhysical = Math.max(0, requiredQty - physicalStock);
+        const remainingAfterReceive = Math.max(0, remainingAfterPhysical - receiveQty);
+        const shortage = Math.max(0, remainingAfterReceive - premixOutputQty);
+
+        if (shortage > 0.0001) {
           throw new Error(
-            `Bahan premix tidak cukup: ${ing.name} butuh ${requiredQty} ${ing.unit}, tersedia ${available} ${ing.unit} (stok sistem + receive hari ini).`
+            `Bahan premix tidak cukup: ${ing.name} butuh ${formatQty(
+              requiredQty
+            )} ${ing.unit}. Dipakai dari stok opname/sistem ${formatQty(
+              physicalStock
+            )}, lalu receive ${formatQty(receiveQty)}, lalu output premix ${formatQty(
+              premixOutputQty
+            )}; masih kurang ${formatQty(shortage)} ${ing.unit}.`
           );
         }
       }
@@ -1956,6 +1969,24 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         const theoretical_usage = menu_theoretical + issue_theoretical + premix_theoretical;
         const expected_closing = opening_stock + in_qty - theoretical_usage;
         const hasPhysicalOpname = !isBlankQty(line.closingStock);
+        const stockOutQty = theoretical_usage + out_qty;
+        const physicalStock = hasPhysicalOpname ? parseQty(line.closingStock) : opening_stock;
+        const remainingAfterPhysical = Math.max(0, stockOutQty - physicalStock);
+        const remainingAfterReceive = Math.max(0, remainingAfterPhysical - receive_qty);
+        const shortage = Math.max(0, remainingAfterReceive - premix_output_qty);
+
+        if (shortage > 0.0001) {
+          throw new Error(
+            `Stok ${ing.name} tidak cukup untuk menu/premix/out stock. Kebutuhan ${formatQty(
+              stockOutQty
+            )} ${ing.unit}. Dipakai dari stok opname/sistem ${formatQty(
+              physicalStock
+            )}, lalu receive ${formatQty(receive_qty)}, lalu output premix ${formatQty(
+              premix_output_qty
+            )}; masih kurang ${formatQty(shortage)} ${ing.unit}.`
+          );
+        }
+
         const closing_stock = hasPhysicalOpname
           ? parseQty(line.closingStock)
           : Math.max(0, expected_closing - out_qty);
