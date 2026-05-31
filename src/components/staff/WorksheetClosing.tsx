@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Loader2,
   Lock,
   Minus,
@@ -65,7 +66,7 @@ const SUBMITTED_LOCK_STATUSES: ClosingStatus[] = [
   "PENDING_APPROVAL_ADMIN",
 ];
 
-type WorksheetTab = "receive" | "outstock" | "opname" | "premix" | "sold";
+type WorksheetTab = "receive" | "outstock" | "opname" | "premix" | "issue" | "sold";
 
 type IngredientLineState = {
   inQty: string;
@@ -85,6 +86,14 @@ type RecipeVersionNested = {
 
 type MenuItemWithRecipe = MenuItemRow & {
   menu_recipe_version: RecipeVersionNested[];
+};
+
+type MenuIssueLineState = {
+  quantity: string;
+  reason: MenuIssueReason;
+  note: string;
+  photoUrl: string;
+  photoPublicId: string;
 };
 
 type PremixRecipeComponent = {
@@ -139,8 +148,23 @@ const TAB_CONFIG: { id: WorksheetTab; label: string; icon: typeof Package }[] = 
   { id: "outstock", label: "Out Stock", icon: PackageMinus },
   { id: "opname", label: "Opname", icon: ClipboardList },
   { id: "premix", label: "Premix", icon: Beaker },
+  { id: "issue", label: "Remake", icon: AlertTriangle },
   { id: "sold", label: "Menu", icon: UtensilsCrossed },
 ];
+
+const MENU_ISSUE_REASONS = [
+  { id: "too_salty", label: "Terlalu asin" },
+  { id: "undercooked", label: "Kurang matang" },
+  { id: "burnt", label: "Gosong" },
+  { id: "hair", label: "Ada rambut" },
+  { id: "wrong_order", label: "Salah order" },
+  { id: "spilled", label: "Jatuh / tumpah" },
+  { id: "guest_complaint", label: "Complaint tamu" },
+  { id: "staff_error", label: "Staff error" },
+  { id: "other", label: "Lainnya" },
+] as const;
+
+type MenuIssueReason = (typeof MENU_ISSUE_REASONS)[number]["id"];
 
 const INPUT_CLASS =
   "min-h-12 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-lg font-semibold tabular-nums text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50";
@@ -155,13 +179,6 @@ function parseQty(value: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseOptionalPrice(value: string, fallback = 0): number {
-  const raw = String(value ?? "").trim();
-  if (!raw) return fallback;
-  const n = parseFloat(raw.replace(",", "."));
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
 function isBlankQty(value: string | null | undefined): boolean {
   return String(value ?? "").trim() === "";
 }
@@ -170,14 +187,6 @@ function formatQty(value: number): string {
   if (!Number.isFinite(value)) return "0";
   const rounded = Math.round(value * 10000) / 10000;
   return String(rounded);
-}
-
-function formatRupiah(amount: number): string {
-  return new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-    maximumFractionDigits: 0,
-  }).format(amount);
 }
 
 function getPurchaseUnit(ingredient: Pick<IngredientRow, "unit" | "purchase_unit">): string {
@@ -196,13 +205,6 @@ function receiveInputToStockQty(
   receiveInputQty: string
 ): number {
   return parseQty(receiveInputQty) * getPurchaseToStockFactor(ingredient);
-}
-
-function getReceiveUnitPrice(
-  ingredient: Pick<IngredientRow, "default_unit_price">,
-  line: Pick<IngredientLineState, "inUnitPrice">
-): number {
-  return parseOptionalPrice(line.inUnitPrice, Number(ingredient.default_unit_price ?? 0));
 }
 
 function stockQtyToReceiveInput(
@@ -245,6 +247,16 @@ function normalizeRestoredSoldItems(restoredSoldItems: Record<string, string>): 
   return Object.fromEntries(
     Object.entries(restoredSoldItems).map(([menuId, value]) => [menuId, blankZero(value)])
   );
+}
+
+function createDefaultMenuIssue(): MenuIssueLineState {
+  return { quantity: "", reason: "guest_complaint", note: "", photoUrl: "", photoPublicId: "" };
+}
+
+function normalizeIssueReason(value: string | null | undefined): MenuIssueReason {
+  return MENU_ISSUE_REASONS.some((reason) => reason.id === value)
+    ? (value as MenuIssueReason)
+    : "other";
 }
 
 function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
@@ -523,6 +535,76 @@ async function fetchSoldMenuTheoreticalUsage(
   return usage;
 }
 
+async function fetchMenuIssueTheoreticalUsage(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  date: string,
+  currentSessionId: string
+): Promise<Map<string, number>> {
+  const usage = new Map<string, number>();
+
+  const { data: sessions, error: sessionErr } = await supabase
+    .from("worksheet_session")
+    .select("id, status")
+    .eq("business_date", date);
+
+  if (sessionErr) throw new Error(`Gagal memuat sesi issue menu: ${sessionErr.message}`);
+
+  const sessionIds = (sessions ?? [])
+    .filter((session) => session.id === currentSessionId || isWorksheetLocked(session.status))
+    .map((session) => session.id);
+
+  if (sessionIds.length === 0) return usage;
+
+  const { data: issueLines, error: issueErr } = await supabase
+    .from("worksheet_menu_issue_line")
+    .select("menu_item_id, quantity")
+    .in("session_id", sessionIds);
+
+  if (issueErr) throw new Error(`Gagal memuat menu issue: ${issueErr.message}`);
+
+  const qtyByMenuId = new Map<string, number>();
+  for (const line of issueLines ?? []) {
+    const qty = Number(line.quantity);
+    if (qty <= 0) continue;
+    qtyByMenuId.set(line.menu_item_id, (qtyByMenuId.get(line.menu_item_id) ?? 0) + qty);
+  }
+
+  const menuIds = [...qtyByMenuId.keys()];
+  if (menuIds.length === 0) return usage;
+
+  const { data: versions, error: recipeErr } = await supabase
+    .from("menu_recipe_version")
+    .select(
+      `
+        menu_item_id,
+        is_active,
+        recipe_line (
+          ingredient_id,
+          quantity_per_serving
+        )
+      `
+    )
+    .in("menu_item_id", menuIds)
+    .eq("is_active", true);
+
+  if (recipeErr) throw new Error(`Gagal memuat resep menu issue: ${recipeErr.message}`);
+
+  const recipeVersions = (versions ?? []) as unknown as {
+    menu_item_id: string;
+    recipe_line?: RecipeLineForCalc[];
+  }[];
+
+  for (const version of recipeVersions) {
+    const issueQty = qtyByMenuId.get(version.menu_item_id) ?? 0;
+    for (const line of version.recipe_line ?? []) {
+      const add = issueQty * Number(line.quantity_per_serving);
+      usage.set(line.ingredient_id, (usage.get(line.ingredient_id) ?? 0) + add);
+    }
+  }
+
+  return usage;
+}
+
 async function fetchLedgerClosingMap(
   supabase: ReturnType<typeof getSupabaseClient>,
   ingredientIds: string[],
@@ -593,7 +675,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [menus, setMenus] = useState<MenuItemWithRecipe[]>([]);
   const [premixItems, setPremixItems] = useState<PremixItemWithRecipe[]>([]);
   const [lines, setLines] = useState<Record<string, IngredientLineState>>({});
+  const [receiveEntryInputs, setReceiveEntryInputs] = useState<Record<string, string>>({});
   const [soldItems, setSoldItems] = useState<Record<string, string>>({});
+  const [menuIssues, setMenuIssues] = useState<Record<string, MenuIssueLineState>>({});
   const [premixQuantities, setPremixQuantities] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingReceive, setIsSavingReceive] = useState(false);
@@ -650,6 +734,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     return menus.filter((menu) => menu.menu_name.toLowerCase().includes(normalizedSearch));
   }, [menus, normalizedSearch]);
 
+  const filteredIssueMenus = filteredMenus;
+
   const filteredPremixItems = useMemo(() => {
     if (!normalizedSearch) return premixItems;
     return premixItems.filter((item) => item.name.toLowerCase().includes(normalizedSearch));
@@ -659,17 +745,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     () => computePremixEffects(premixItems, premixQuantities),
     [premixItems, premixQuantities]
   );
-
-  const receiveCostTotal = useMemo(() => {
-    return ingredients
-      .filter((ing) => ing.kind === "raw")
-      .reduce((sum, ing) => {
-        const line = lines[ing.id] ?? DEFAULT_LINE;
-        const quantity = parseQty(line.inQty);
-        if (quantity <= 0) return sum;
-        return sum + quantity * getReceiveUnitPrice(ing, line);
-      }, 0);
-  }, [ingredients, lines]);
 
   const outstockHasBlockingErrors = useMemo(
     () => hasOutstockValidationErrors(ingredients, lines),
@@ -853,19 +928,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     const ingredientPreset: Record<string, Partial<IngredientLineState>> = {};
     const soldPreset: Record<string, string> = {};
+    const issuePreset: Record<string, MenuIssueLineState> = {};
     const premixPreset: Record<string, string> = {};
 
     if (ws?.id) {
       const { data: inLines } = await supabase
         .from("worksheet_in_line")
-        .select("ingredient_id, quantity, unit_price")
+        .select("ingredient_id, quantity")
         .eq("session_id", ws.id);
 
       for (const row of inLines ?? []) {
         ingredientPreset[row.ingredient_id] = {
           ...ingredientPreset[row.ingredient_id],
           inQty: Number(row.quantity) === 0 ? "" : String(row.quantity),
-          inUnitPrice: Number(row.unit_price) === 0 ? "" : String(row.unit_price),
         };
       }
 
@@ -892,6 +967,21 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       for (const row of soldLines ?? []) {
         soldPreset[row.menu_item_id] =
           Number(row.quantity_sold) === 0 ? "" : String(row.quantity_sold);
+      }
+
+      const { data: issueLines } = await supabase
+        .from("worksheet_menu_issue_line")
+        .select("menu_item_id, quantity, reason, note, photo_url, photo_public_id")
+        .eq("session_id", ws.id);
+
+      for (const row of issueLines ?? []) {
+        issuePreset[row.menu_item_id] = {
+          quantity: Number(row.quantity) === 0 ? "" : String(row.quantity),
+          reason: normalizeIssueReason(row.reason),
+          note: row.note ?? "",
+          photoUrl: row.photo_url ?? "",
+          photoPublicId: row.photo_public_id ?? "",
+        };
       }
 
       const { data: premixLines } = await supabase
@@ -932,7 +1022,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           inQty:
             existing?.inQty ??
             stockQtyToReceiveInput(ingredientById.get(row.ingredient_id), snapshot?.in_qty ?? 0),
-          inUnitPrice: existing?.inUnitPrice,
           closingStock: existing?.closingStock ?? String(snapshot?.closing_stock ?? 0),
           outQty: existing?.outQty,
           outNote: existing?.outNote,
@@ -943,7 +1032,9 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }
 
     initIngredientLines(ingredientList, ingredientPreset);
+    setReceiveEntryInputs({});
     initSoldItems(menuList, soldPreset);
+    setMenuIssues(issuePreset);
     initPremixQuantities(premixList, premixPreset);
     setIsLoading(false);
   }, [department, initIngredientLines, initPremixQuantities, initSoldItems, staff, supabase]);
@@ -972,7 +1063,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     premixQuantities,
     activeTab,
     onRestore: (draft) => {
-      setLines(normalizeRestoredLines(draft.lines));
+      const restoredLines = normalizeRestoredLines(draft.lines);
+      setLines((prev) =>
+        Object.fromEntries(
+          Object.entries(restoredLines).map(([ingredientId, line]) => [
+            ingredientId,
+            {
+              ...line,
+              inQty: prev[ingredientId]?.inQty ?? line.inQty,
+            },
+          ])
+        )
+      );
       setSoldItems(normalizeRestoredSoldItems(draft.soldItems));
       setPremixQuantities(normalizeRestoredSoldItems(draft.premixQuantities ?? {}));
       setActiveTab(draft.activeTab);
@@ -1054,19 +1156,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     return { sessionId: wsRow.id, status: wsRow.status };
   };
 
-  const updateInQty = (ingredientId: string, value: string) => {
+  const updateReceiveEntryQty = (ingredientId: string, value: string) => {
     if (locked) return;
-    setLines((prev) => ({
+    setReceiveEntryInputs((prev) => ({
       ...prev,
-      [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), inQty: value },
-    }));
-  };
-
-  const updateInUnitPrice = (ingredientId: string, value: string) => {
-    if (locked) return;
-    setLines((prev) => ({
-      ...prev,
-      [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), inUnitPrice: value },
+      [ingredientId]: value,
     }));
   };
 
@@ -1121,6 +1215,96 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }));
   };
 
+  const syncReceiveAggregate = async (activeSessionId: string): Promise<Map<string, number>> => {
+    const { data: entries, error: entryErr } = await supabase
+      .from("worksheet_receive_entry")
+      .select("ingredient_id, quantity")
+      .eq("session_id", activeSessionId);
+
+    if (entryErr) {
+      throw new Error(`Gagal membaca detail receive: ${entryErr.message}`);
+    }
+
+    const totals = new Map<string, number>();
+    for (const entry of entries ?? []) {
+      const qty = Number(entry.quantity);
+      if (qty <= 0) continue;
+      totals.set(entry.ingredient_id, (totals.get(entry.ingredient_id) ?? 0) + qty);
+    }
+
+    const { error: clearErr } = await supabase
+      .from("worksheet_in_line")
+      .delete()
+      .eq("session_id", activeSessionId);
+
+    if (clearErr) {
+      throw new Error(`Gagal menyinkronkan total receive: ${clearErr.message}`);
+    }
+
+    const aggregatePayload = Array.from(totals.entries()).map(([ingredientId, quantity]) => ({
+      session_id: activeSessionId,
+      ingredient_id: ingredientId,
+      quantity,
+      unit_price: 0,
+      line_total: 0,
+    }));
+
+    if (aggregatePayload.length > 0) {
+      const { error: aggregateErr } = await supabase
+        .from("worksheet_in_line")
+        .insert(aggregatePayload);
+
+      if (aggregateErr) {
+        throw new Error(`Gagal menyimpan total receive: ${aggregateErr.message}`);
+      }
+    }
+
+    setLines((prev) => {
+      const next = { ...prev };
+      for (const ing of ingredients) {
+        if (ing.kind !== "raw") continue;
+        const total = totals.get(ing.id) ?? 0;
+        next[ing.id] = {
+          ...(next[ing.id] ?? DEFAULT_LINE),
+          inQty: total > 0 ? String(total) : "",
+        };
+      }
+      return next;
+    });
+
+    return totals;
+  };
+
+  const savePendingReceiveEntries = async (activeSessionId: string): Promise<Map<string, number>> => {
+    if (!staff?.id) {
+      throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login PIN ulang.");
+    }
+
+    const entryPayload = ingredients
+      .filter((ing) => ing.kind === "raw")
+      .map((ing) => ({
+        session_id: activeSessionId,
+        ingredient_id: ing.id,
+        staff_id: staff.id,
+        quantity: parseQty(receiveEntryInputs[ing.id] ?? ""),
+      }))
+      .filter((row) => row.quantity > 0);
+
+    if (entryPayload.length > 0) {
+      const { error: insertErr } = await supabase
+        .from("worksheet_receive_entry")
+        .insert(entryPayload);
+
+      if (insertErr) {
+        throw new Error(`Gagal menyimpan entry receive: ${insertErr.message}`);
+      }
+    }
+
+    const totals = await syncReceiveAggregate(activeSessionId);
+    setReceiveEntryInputs({});
+    return totals;
+  };
+
   const uploadOutStockPhoto = async (ingredientId: string, file: File | null) => {
     if (!file || locked) return;
 
@@ -1160,6 +1344,56 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     setSoldItems((prev) => ({ ...prev, [menuId]: value }));
   };
 
+  const updateMenuIssue = (menuId: string, patch: Partial<MenuIssueLineState>) => {
+    if (locked) return;
+    setMenuIssues((prev) => ({
+      ...prev,
+      [menuId]: {
+        ...createDefaultMenuIssue(),
+        ...(prev[menuId] ?? {}),
+        ...patch,
+      },
+    }));
+  };
+
+  const uploadMenuIssuePhoto = async (menuId: string, file: File | null) => {
+    if (!file || locked) return;
+
+    setUploadingPhotoFor(`issue-${menuId}`);
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("folder", `artha/menu-issue/${department}`);
+
+      const response = await fetch("/api/cloudinary/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await response.json()) as {
+        url?: string;
+        publicId?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !result.url || !result.publicId) {
+        throw new Error(result.error ?? "Upload foto gagal.");
+      }
+
+      updateMenuIssue(menuId, { photoUrl: result.url, photoPublicId: result.publicId });
+      showSuccessToast("Foto bukti remake tersimpan.");
+    } catch (err) {
+      showPlainErrorToast(err instanceof Error ? err.message : "Upload foto gagal.");
+    } finally {
+      setUploadingPhotoFor(null);
+    }
+  };
+
+  const clearMenuIssuePhoto = (menuId: string) => {
+    updateMenuIssue(menuId, { photoUrl: "", photoPublicId: "" });
+  };
+
   const updatePremixQty = (premixId: string, value: string) => {
     if (locked) return;
     setPremixQuantities((prev) => ({ ...prev, [premixId]: value }));
@@ -1192,43 +1426,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     try {
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
+      const hasPendingReceive = ingredients.some(
+        (ing) => ing.kind === "raw" && parseQty(receiveEntryInputs[ing.id] ?? "") > 0
+      );
 
-      const upsertPayload = ingredients
-        .filter((ing) => ing.kind === "raw")
-        .map((ing) => {
-          const line = lines[ing.id] ?? DEFAULT_LINE;
-          const quantity = parseQty(line.inQty);
-          const unit_price = getReceiveUnitPrice(ing, line);
-          return {
-            session_id: activeSessionId,
-            ingredient_id: ing.id,
-            quantity,
-            unit_price,
-            line_total: quantity * unit_price,
-          };
-        })
-        .filter((row) => row.quantity > 0);
-
-      const { error: clearErr } = await supabase
-        .from("worksheet_in_line")
-        .delete()
-        .eq("session_id", activeSessionId);
-
-      if (clearErr) {
-        throw new Error(`Gagal membersihkan draft pasokan: ${clearErr.message}`);
+      if (!hasPendingReceive) {
+        showPlainErrorToast("Isi jumlah tambahan receive terlebih dahulu.");
+        return;
       }
 
-      const { error: inLineErr } =
-        upsertPayload.length > 0
-          ? await supabase.from("worksheet_in_line").insert(upsertPayload)
-          : { error: null };
-
-      if (inLineErr) {
-        throw new Error(`Gagal menyimpan pasokan: ${inLineErr.message}`);
-      }
-
+      await savePendingReceiveEntries(activeSessionId);
       showSuccessToast(
-        "Pasokan tersimpan. Stok akumulatif (masuk) — tidak perlu isi opname di kamar ini."
+        "Receive ditambahkan. Total pasokan hari ini otomatis terakumulasi untuk semua staff."
       );
     } catch (err) {
       showTranslatedSubmitError(err);
@@ -1495,39 +1704,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const { sessionId: ensuredSessionId } = await ensureDraftSession(date);
       activeSessionId = ensuredSessionId;
 
-      const inLinePayload = ingredients
-        .filter((ing) => ing.kind === "raw")
-        .map((ing) => {
-          const line = lines[ing.id] ?? DEFAULT_LINE;
-          const quantity = parseQty(line.inQty);
-          const unit_price = getReceiveUnitPrice(ing, line);
-          return {
-            session_id: ensuredSessionId,
-            ingredient_id: ing.id,
-            quantity,
-            unit_price,
-            line_total: quantity * unit_price,
-          };
-        })
-        .filter((row) => row.quantity > 0);
-
-      const { error: clearInErr } = await supabase
-        .from("worksheet_in_line")
-        .delete()
-        .eq("session_id", ensuredSessionId);
-
-      if (clearInErr) {
-        throw new Error(`Gagal membersihkan worksheet_in_line: ${clearInErr.message}`);
-      }
-
-      const { error: inLineErr } =
-        inLinePayload.length > 0
-          ? await supabase.from("worksheet_in_line").insert(inLinePayload)
-          : { error: null };
-
-      if (inLineErr) {
-        throw new Error(`Gagal menyimpan worksheet_in_line: ${inLineErr.message}`);
-      }
+      const receiveTotals = await savePendingReceiveEntries(ensuredSessionId);
 
       const outLinePayload = freshIngredients
         .map((ing) => {
@@ -1587,6 +1764,39 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan worksheet_sold_line: ${soldErr.message}`);
       }
 
+      const issuePayload = menuListForCalc
+        .map((menu) => {
+          const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
+          return {
+            session_id: ensuredSessionId,
+            menu_item_id: menu.id,
+            quantity: parseQty(issue.quantity),
+            reason: issue.reason,
+            note: issue.note.trim(),
+            photo_url: issue.photoUrl || null,
+            photo_public_id: issue.photoPublicId || null,
+          };
+        })
+        .filter((row) => row.quantity > 0);
+
+      const { error: clearIssueErr } = await supabase
+        .from("worksheet_menu_issue_line")
+        .delete()
+        .eq("session_id", ensuredSessionId);
+
+      if (clearIssueErr) {
+        throw new Error(`Gagal membersihkan worksheet_menu_issue_line: ${clearIssueErr.message}`);
+      }
+
+      const { error: issueErr } =
+        issuePayload.length > 0
+          ? await supabase.from("worksheet_menu_issue_line").insert(issuePayload)
+          : { error: null };
+
+      if (issueErr) {
+        throw new Error(`Gagal menyimpan worksheet_menu_issue_line: ${issueErr.message}`);
+      }
+
       const premixPayload = premixItems
         .map((premix) => {
           const recipe = getActivePremixRecipe(premix);
@@ -1622,12 +1832,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         date,
         ensuredSessionId
       );
+      const issueTheoreticalMap = await fetchMenuIssueTheoreticalUsage(
+        supabase,
+        date,
+        ensuredSessionId
+      );
       const premixUsageMap = premixEffects.usageMap;
       const premixOutputMap = premixEffects.outputMap;
       const freshById = new Map(freshIngredients.map((ing) => [ing.id, ing]));
-      const externalIngredientIds = [...menuTheoreticalMap.keys()].filter(
-        (ingredientId) => !freshById.has(ingredientId)
-      );
+      const theoreticalIngredientIds = new Set([
+        ...menuTheoreticalMap.keys(),
+        ...issueTheoreticalMap.keys(),
+      ]);
+      const externalIngredientIds = [...theoreticalIngredientIds].filter((ingredientId) => !freshById.has(ingredientId));
       const externalIngredients = (
         await fetchIngredientsByIds(supabase, externalIngredientIds)
       ).filter((ing) => ing.is_active && ing.is_stock_tracked);
@@ -1650,7 +1867,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       for (const [ingredientId, requiredQty] of premixUsageMap) {
         const ing = freshById.get(ingredientId);
         if (!ing) continue;
-        const receiveQty = receiveInputToStockQty(ing, lines[ingredientId]?.inQty ?? "");
+        const receiveQty = receiveInputToStockQty(
+          ing,
+          String(receiveTotals.get(ingredientId) ?? 0)
+        );
         const premixOutputQty = premixOutputMap.get(ingredientId) ?? 0;
         const bookStock = previousClosingMap.get(ingredientId) ?? Number(ing.current_stock) ?? 0;
         const available = Math.max(0, bookStock) + receiveQty + premixOutputQty;
@@ -1667,13 +1887,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           0,
           previousClosingMap.get(ing.id) ?? Number(ing.current_stock) ?? 0
         );
-        const receive_qty = receiveInputToStockQty(ing, line.inQty);
+        const receive_qty = receiveInputToStockQty(
+          ing,
+          String(receiveTotals.get(ing.id) ?? 0)
+        );
         const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
         const in_qty = receive_qty + premix_output_qty;
         const out_qty = parseQty(line.outQty);
         const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
+        const issue_theoretical = issueTheoreticalMap.get(ing.id) ?? 0;
         const premix_theoretical = premixUsageMap.get(ing.id) ?? 0;
-        const theoretical_usage = menu_theoretical + premix_theoretical;
+        const theoretical_usage = menu_theoretical + issue_theoretical + premix_theoretical;
         const expected_closing = opening_stock + in_qty - theoretical_usage;
         const hasPhysicalOpname = !isBlankQty(line.closingStock);
         const closing_stock = hasPhysicalOpname
@@ -1709,10 +1933,12 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           : Math.max(0, previousClosingMap.get(ing.id) ?? Number(ing.current_stock) ?? 0);
         const in_qty = existing?.in_qty ?? 0;
         const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
-        const existing_non_menu_theoretical = existing
-          ? Math.max(0, Number(existing.theoretical_usage) - menu_theoretical)
+        const issue_theoretical = issueTheoreticalMap.get(ing.id) ?? 0;
+        const current_menu_issue_theoretical = menu_theoretical + issue_theoretical;
+        const existing_other_theoretical = existing
+          ? Math.max(0, Number(existing.theoretical_usage) - current_menu_issue_theoretical)
           : 0;
-        const theoretical_usage = menu_theoretical + existing_non_menu_theoretical;
+        const theoretical_usage = current_menu_issue_theoretical + existing_other_theoretical;
         const expected_closing = opening_stock + in_qty - theoretical_usage;
         const closing_stock = existing
           ? existing.closing_stock
@@ -2016,6 +2242,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               placeholder={
                 activeTab === "sold"
                   ? "Cari menu terjual…"
+                  : activeTab === "issue"
+                    ? "Cari menu remake…"
                   : activeTab === "premix"
                     ? "Cari premix…"
                     : "Cari bahan baku…"
@@ -2102,7 +2330,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
             <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
             Memuat data dari Supabase…
           </div>
-        ) : ingredients.length === 0 && activeTab !== "premix" && activeTab !== "sold" ? (
+                ) : ingredients.length === 0 && activeTab !== "premix" && activeTab !== "issue" && activeTab !== "sold" ? (
           <p className="py-12 text-center text-zinc-400">
             Belum ada bahan aktif untuk departemen ini. Tambahkan di Master Data Admin.
           </p>
@@ -2114,16 +2342,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   Kamar 1 — Receive
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
-                  Catat bahan raw dari supplier saja. Premix/WIP dibuat di tab Premix, bukan lewat receive.
+                  Tambahkan barang yang baru datang. Total receive hari ini otomatis dijumlahkan dan bisa dilihat staff lain.
                 </p>
-                <div className="mb-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-                    Total biaya receive
-                  </p>
-                  <p className="mt-1 text-2xl font-bold tabular-nums text-amber-100">
-                    {formatRupiah(receiveCostTotal)}
-                  </p>
-                </div>
                 <ul className="space-y-3">
                   {filteredReceiveIngredients.length === 0 ? (
                     <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
@@ -2134,10 +2354,12 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     const line = lines[ing.id] ?? DEFAULT_LINE;
                     const purchaseUnit = getPurchaseUnit(ing);
                     const factor = getPurchaseToStockFactor(ing);
-                    const stockQty = receiveInputToStockQty(ing, line.inQty);
-                    const receiveQty = parseQty(line.inQty);
-                    const unitPrice = getReceiveUnitPrice(ing, line);
-                    const lineTotal = receiveQty * unitPrice;
+                    const totalReceiveQty = parseQty(line.inQty);
+                    const entryQty = parseQty(receiveEntryInputs[ing.id] ?? "");
+                    const entryStockQty = receiveInputToStockQty(
+                      ing,
+                      receiveEntryInputs[ing.id] ?? ""
+                    );
                     return (
                       <li
                         key={ing.id}
@@ -2146,16 +2368,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                         <div className="mb-3">
                           <p className="font-semibold text-zinc-50">{ing.name}</p>
                           <p className="text-xs text-zinc-500">
-                            Stok: {ing.unit}
+                            Total hari ini:{" "}
+                            <span className="font-semibold text-amber-200">
+                              {formatQty(totalReceiveQty)} {purchaseUnit}
+                            </span>
                             {purchaseUnit !== ing.unit
                               ? ` · Receive: 1 ${purchaseUnit} = ${factor} ${ing.unit}`
                               : ""}
                           </p>
                         </div>
-                        <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
+                        <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                           <label className="block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Pasokan masuk ({purchaseUnit})
+                              Tambah receive ({purchaseUnit})
                             </span>
                             <input
                               type="number"
@@ -2163,42 +2388,24 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               min={0}
                               step="any"
                               disabled={locked}
-                              value={line.inQty}
-                              onChange={(e) => updateInQty(ing.id, e.target.value)}
+                              value={receiveEntryInputs[ing.id] ?? ""}
+                              onChange={(e) => updateReceiveEntryQty(ing.id, e.target.value)}
                               placeholder="Kosong"
                               className={INPUT_CLASS}
                             />
                           </label>
-                          <label className="block">
-                            <span className="mb-1 block text-xs text-zinc-400">
-                              Harga / {purchaseUnit} (opsional)
-                            </span>
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              min={0}
-                              step="any"
-                              disabled={locked}
-                              value={line.inUnitPrice}
-                              onChange={(e) => updateInUnitPrice(ing.id, e.target.value)}
-                              placeholder={
-                                ing.default_unit_price > 0
-                                  ? `${formatRupiah(Number(ing.default_unit_price))}`
-                                  : "Kosong = 0"
-                              }
-                              className={INPUT_CLASS}
-                            />
-                          </label>
+                          <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-right">
+                            <p className="text-[10px] uppercase tracking-wide text-zinc-500">
+                              Setelah save
+                            </p>
+                            <p className="text-sm font-semibold tabular-nums text-zinc-100">
+                              {formatQty(totalReceiveQty + entryQty)} {purchaseUnit}
+                            </p>
+                          </div>
                         </div>
-                        {purchaseUnit !== ing.unit && parseQty(line.inQty) > 0 ? (
+                        {purchaseUnit !== ing.unit && entryQty > 0 ? (
                           <p className="mt-2 text-xs text-emerald-300">
-                            Masuk ledger: {formatQty(stockQty)} {ing.unit}
-                          </p>
-                        ) : null}
-                        {receiveQty > 0 ? (
-                          <p className="mt-2 text-xs text-amber-200">
-                            Biaya: {formatQty(receiveQty)} {purchaseUnit} x{" "}
-                            {formatRupiah(unitPrice)} = {formatRupiah(lineTotal)}
+                            Tambahan masuk ledger: {formatQty(entryStockQty)} {ing.unit}
                           </p>
                         ) : null}
                       </li>
@@ -2535,10 +2742,152 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               </section>
             ) : null}
 
+            {activeTab === "issue" ? (
+              <section>
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-red-400">
+                  Kamar 5 — Remake / Complaint
+                </h2>
+                <p className="mb-4 text-xs text-zinc-500">
+                  Catat menu yang harus diganti baru karena kualitas tidak layak. Sistem otomatis
+                  mengurangi bahan berdasarkan resep aktif.
+                </p>
+                {filteredIssueMenus.length === 0 ? (
+                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                    Tidak ada menu cocok dengan &ldquo;{searchTerm}&rdquo;.
+                  </p>
+                ) : (
+                  <ul className="space-y-3">
+                    {filteredIssueMenus.map((menu) => {
+                      const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
+                      const hasRecipe = getActiveRecipeLines(menu).length > 0;
+                      return (
+                        <li
+                          key={menu.id}
+                          className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4"
+                        >
+                          <div className="mb-3">
+                            <p className="font-semibold text-zinc-50">{menu.menu_name}</p>
+                            <p className="text-xs text-zinc-500">
+                              {hasRecipe
+                                ? "Remake akan dikonversi otomatis ke bahan resep."
+                                : "Belum ada resep aktif — pemakaian bahan tidak bisa dihitung."}
+                            </p>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-zinc-400">Qty</span>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                step={1}
+                                disabled={locked}
+                                value={issue.quantity}
+                                onChange={(e) =>
+                                  updateMenuIssue(menu.id, { quantity: e.target.value })
+                                }
+                                placeholder="-"
+                                className={INPUT_CLASS}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-zinc-400">Alasan</span>
+                              <select
+                                disabled={locked}
+                                value={issue.reason}
+                                onChange={(e) =>
+                                  updateMenuIssue(menu.id, {
+                                    reason: normalizeIssueReason(e.target.value),
+                                  })
+                                }
+                                className="min-h-12 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm font-semibold text-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {MENU_ISSUE_REASONS.map((reason) => (
+                                  <option key={reason.id} value={reason.id}>
+                                    {reason.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          <label className="mt-3 block">
+                            <span className="mb-1 block text-xs text-zinc-400">
+                              Catatan opsional
+                            </span>
+                            <input
+                              type="text"
+                              disabled={locked}
+                              value={issue.note}
+                              onChange={(e) =>
+                                updateMenuIssue(menu.id, { note: e.target.value })
+                              }
+                              placeholder="Contoh: tamu minta diganti karena terlalu asin"
+                              className="min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                          </label>
+                          <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                            <div className="mb-2 flex items-center justify-between gap-3">
+                              <span className="text-xs font-medium text-zinc-400">
+                                Foto bukti opsional
+                              </span>
+                              {issue.photoUrl ? (
+                                <button
+                                  type="button"
+                                  disabled={locked}
+                                  onClick={() => clearMenuIssuePhoto(menu.id)}
+                                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-red-500/40 px-2 text-xs font-medium text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                  Hapus
+                                </button>
+                              ) : null}
+                            </div>
+                            {issue.photoUrl ? (
+                              <a
+                                href={issue.photoUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mb-3 flex items-center gap-2 text-xs text-indigo-300 underline decoration-indigo-500/40 underline-offset-4"
+                              >
+                                <ImageIcon className="h-4 w-4" />
+                                Lihat foto bukti
+                              </a>
+                            ) : null}
+                            <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-medium text-zinc-200 active:bg-zinc-800">
+                              {uploadingPhotoFor === `issue-${menu.id}` ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Camera className="h-4 w-4" />
+                              )}
+                              {uploadingPhotoFor === `issue-${menu.id}`
+                                ? "Upload foto..."
+                                : issue.photoUrl
+                                  ? "Ganti foto"
+                                  : "Upload foto"}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                disabled={locked || uploadingPhotoFor === `issue-${menu.id}`}
+                                onChange={(e) => {
+                                  void uploadMenuIssuePhoto(menu.id, e.target.files?.[0] ?? null);
+                                  e.currentTarget.value = "";
+                                }}
+                                className="hidden"
+                              />
+                            </label>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+            ) : null}
+
             {activeTab === "sold" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
-                  Kamar 5 — Menu Terjual
+                  Kamar 6 — Menu Terjual
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
                   Kosong berarti tidak ada penjualan. Setelah semua kamar benar, submit laporan closing di bawah.
@@ -2678,6 +3027,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                 <Beaker className="h-5 w-5" />
               )}
               Simpan Premix
+            </button>
+          ) : null}
+
+          {activeTab === "issue" ? (
+            <button
+              type="button"
+              onClick={() => setActiveTab("sold")}
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-red-500/50 bg-red-600/20 font-bold text-red-100 active:bg-red-600/30"
+            >
+              <AlertTriangle className="h-5 w-5" />
+              Lanjut ke Menu Terjual
             </button>
           ) : null}
 

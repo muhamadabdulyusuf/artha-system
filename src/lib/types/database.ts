@@ -157,11 +157,33 @@ export type WorksheetInLineRow = {
   updated_at: string;
 };
 
+export type WorksheetReceiveEntryRow = {
+  id: string;
+  session_id: string;
+  ingredient_id: string;
+  staff_id: string | null;
+  quantity: number;
+  created_at: string;
+};
+
 export type WorksheetSoldLineRow = {
   id: string;
   session_id: string;
   menu_item_id: string;
   quantity_sold: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorksheetMenuIssueLineRow = {
+  id: string;
+  session_id: string;
+  menu_item_id: string;
+  quantity: number;
+  reason: string;
+  note: string;
+  photo_url: string | null;
+  photo_public_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -280,6 +302,20 @@ export type PurchaseOrderLineRow = {
   quantity: number;
   unit_price: number;
   line_total: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DemandEventRow = {
+  id: string;
+  title: string;
+  event_type: string;
+  department: Department | null;
+  start_date: string;
+  end_date: string;
+  expected_uplift_pct: number;
+  notes: string;
+  created_by_staff_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -432,6 +468,22 @@ export type Database = {
         Update: { quantity?: number; unit_price?: number; line_total?: number };
         Relationships: [];
       };
+      worksheet_receive_entry: {
+        Row: WorksheetReceiveEntryRow;
+        Insert: {
+          id?: string;
+          session_id: string;
+          ingredient_id: string;
+          staff_id?: string | null;
+          quantity: number;
+          created_at?: string;
+        };
+        Update: {
+          staff_id?: string | null;
+          quantity?: number;
+        };
+        Relationships: [];
+      };
       worksheet_sold_line: {
         Row: WorksheetSoldLineRow;
         Insert: {
@@ -441,6 +493,27 @@ export type Database = {
           quantity_sold: number;
         };
         Update: { quantity_sold?: number };
+        Relationships: [];
+      };
+      worksheet_menu_issue_line: {
+        Row: WorksheetMenuIssueLineRow;
+        Insert: {
+          id?: string;
+          session_id: string;
+          menu_item_id: string;
+          quantity: number;
+          reason?: string;
+          note?: string;
+          photo_url?: string | null;
+          photo_public_id?: string | null;
+        };
+        Update: {
+          quantity?: number;
+          reason?: string;
+          note?: string;
+          photo_url?: string | null;
+          photo_public_id?: string | null;
+        };
         Relationships: [];
       };
       worksheet_out_line: {
@@ -611,6 +684,30 @@ export type Database = {
           quantity?: number;
           unit_price?: number;
           line_total?: number;
+        };
+        Relationships: [];
+      };
+      demand_event: {
+        Row: DemandEventRow;
+        Insert: {
+          id?: string;
+          title: string;
+          event_type?: string;
+          department?: Department | null;
+          start_date: string;
+          end_date: string;
+          expected_uplift_pct?: number;
+          notes?: string;
+          created_by_staff_id?: string | null;
+        };
+        Update: {
+          title?: string;
+          event_type?: string;
+          department?: Department | null;
+          start_date?: string;
+          end_date?: string;
+          expected_uplift_pct?: number;
+          notes?: string;
         };
         Relationships: [];
       };

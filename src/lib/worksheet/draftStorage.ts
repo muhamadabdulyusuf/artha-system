@@ -15,7 +15,7 @@ export type WorksheetDraftPayload = {
   >;
   soldItems: Record<string, string>;
   premixQuantities?: Record<string, string>;
-  activeTab: "receive" | "outstock" | "opname" | "premix" | "sold";
+  activeTab: "receive" | "outstock" | "opname" | "premix" | "issue" | "sold";
   savedAt: string;
 };
 

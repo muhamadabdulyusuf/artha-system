@@ -23,6 +23,7 @@ import { getSupabaseClientOrNull } from "@/lib/supabase/client";
 import type {
   Department,
   IngredientRow,
+  DemandEventRow,
   MenuCategory,
   MenuItemRow,
   StockLedgerRow,
@@ -42,6 +43,17 @@ import { StockAdjustmentPanel } from "@/components/admin/StockAdjustmentPanel";
 const WIB_TIMEZONE = "Asia/Jakarta";
 const SPILLAGE_RATIO_THRESHOLD = 0.15;
 const RUNWAY_HISTORY_DAYS = 7;
+const DEMAND_SCENARIO_MULTIPLIER: Record<DemandScenario, number> = {
+  normal: 1,
+  weekend_holiday: 1.5,
+  promo_kol: 2,
+};
+
+const DEMAND_SCENARIO_LABEL: Record<DemandScenario, string> = {
+  normal: "Normal",
+  weekend_holiday: "Weekend / Libur",
+  promo_kol: "Promo / KOL",
+};
 
 type StockLedgerExportRow = {
   business_date: string;
@@ -62,6 +74,17 @@ type StockLedgerExportRow = {
   Catatan_Out_Stock: string;
   Foto_Out_Stock: string;
   Bukti_Foto_Excel: string;
+};
+
+type InventorySummaryRow = {
+  ingredient_id: string;
+  ingredient_name: string;
+  department: Department;
+  unit: string;
+  current_stock: number;
+  minimum_stock: number;
+  stock_status: "LOW STOCK" | "OK";
+  primary_supplier_name: string;
 };
 
 type SalesExportRow = {
@@ -103,6 +126,34 @@ type ReceiveLineJoined = {
     | null;
 };
 
+type ReceiveAuditJoined = {
+  id: string;
+  ingredient_id: string;
+  staff_id: string | null;
+  quantity: number;
+  created_at: string;
+  ingredient:
+    | Pick<IngredientRow, "id" | "name" | "unit" | "purchase_unit">
+    | Pick<IngredientRow, "id" | "name" | "unit" | "purchase_unit">[]
+    | null;
+  staff: { name: string } | { name: string }[] | null;
+  worksheet_session:
+    | { business_date: string; department: Department }
+    | { business_date: string; department: Department }[]
+    | null;
+};
+
+type ReceiveAuditRow = {
+  id: string;
+  businessDate: string;
+  department: Department;
+  ingredientName: string;
+  quantity: number;
+  unit: string;
+  staffName: string;
+  createdAt: string;
+};
+
 type ReceivePriceRow = {
   id: string;
   businessDate: string;
@@ -133,6 +184,23 @@ type RunwayEntry = {
   ingredientName: string;
   daysRemaining: number;
   urgency: "safe" | "warning" | "critical";
+};
+
+type DemandScenario = "normal" | "weekend_holiday" | "promo_kol";
+
+type SalesDemandRow = {
+  ingredientId: string;
+  ingredientName: string;
+  department: Department;
+  unit: string;
+  currentStock: number;
+  minimumStock: number;
+  dailyUsage: Record<string, number>;
+  totalUsage: number;
+  averageDailyUsage: number;
+  peakDailyUsage: number;
+  recommendedOrderQty: number;
+  supplierName: string;
 };
 
 type CogsAlert = {
@@ -202,6 +270,86 @@ type LowStockInventoryRow = {
   primarySupplierId: string | null;
   primarySupplierName: string;
   primarySupplierPhone: string | null;
+};
+
+type MenuIssueJoined = {
+  id: string;
+  menu_item_id: string;
+  quantity: number;
+  reason: string;
+  note: string;
+  photo_url: string | null;
+  created_at: string;
+  menu_item:
+    | Pick<MenuItemRow, "id" | "menu_name" | "department" | "price">
+    | Pick<MenuItemRow, "id" | "menu_name" | "department" | "price">[]
+    | null;
+  worksheet_session:
+    | { business_date: string; department: Department }
+    | { business_date: string; department: Department }[]
+    | null;
+};
+
+type MenuIssueReportRow = {
+  id: string;
+  businessDate: string;
+  department: Department;
+  menuName: string;
+  quantity: number;
+  reason: string;
+  reasonLabel: string;
+  note: string;
+  photoUrl: string;
+  createdAt: string;
+};
+
+type DemandEventReportRow = DemandEventRow & {
+  baselineQty: number;
+  eventQty: number;
+  actualUpliftPct: number | null;
+  effectiveness: "pending" | "effective" | "underperform" | "neutral";
+};
+
+type DemandEventForm = {
+  title: string;
+  eventType: string;
+  department: "" | Department;
+  startDate: string;
+  endDate: string;
+  expectedUpliftPct: string;
+  notes: string;
+};
+
+type MonitoringTabId = "overview" | "demand" | "inventory" | "sales" | "control" | "export";
+
+const MONITORING_TABS: { id: MonitoringTabId; label: string; icon: typeof Package }[] = [
+  { id: "overview", label: "Overview", icon: BarChart3 },
+  { id: "demand", label: "Demand & Order", icon: ShoppingCart },
+  { id: "inventory", label: "Inventory", icon: Package },
+  { id: "sales", label: "Sales", icon: TrendingUp },
+  { id: "control", label: "Control", icon: AlertTriangle },
+  { id: "export", label: "Export", icon: Download },
+];
+
+const MENU_ISSUE_REASON_LABEL: Record<string, string> = {
+  too_salty: "Terlalu asin",
+  undercooked: "Kurang matang",
+  burnt: "Gosong",
+  hair: "Ada rambut",
+  wrong_order: "Salah order",
+  spilled: "Jatuh / tumpah",
+  guest_complaint: "Complaint tamu",
+  staff_error: "Staff error",
+  other: "Lainnya",
+};
+
+const DEMAND_EVENT_TYPE_LABEL: Record<string, string> = {
+  promo: "Promo",
+  kol: "KOL",
+  national_holiday: "Libur Nasional",
+  private_event: "Private Event",
+  school_holiday: "Libur Sekolah",
+  other: "Lainnya",
 };
 
 type IngredientWithPrimarySupplier = IngredientRow & {
@@ -495,6 +643,166 @@ async function downloadInventoryXlsx(filename: string, rows: StockLedgerExportRo
   URL.revokeObjectURL(url);
 }
 
+async function downloadInventorySummaryXlsx(
+  filename: string,
+  rows: InventorySummaryRow[]
+): Promise<void> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Rekap Stok");
+
+  sheet.columns = [
+    { header: "Bahan", key: "ingredient", width: 32 },
+    { header: "Dept", key: "department", width: 12 },
+    { header: "Stok Sekarang", key: "currentStock", width: 18 },
+    { header: "Unit", key: "unit", width: 10 },
+    { header: "Minimum Stock", key: "minimumStock", width: 18 },
+    { header: "Status", key: "status", width: 14 },
+    { header: "Supplier", key: "supplier", width: 26 },
+  ];
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const row of rows) {
+    const excelRow = sheet.addRow({
+      ingredient: row.ingredient_name,
+      department: row.department,
+      currentStock: row.current_stock,
+      unit: row.unit,
+      minimumStock: row.minimum_stock,
+      status: row.stock_status,
+      supplier: row.primary_supplier_name || "Belum ada",
+    });
+
+    if (row.stock_status === "LOW STOCK") {
+      excelRow.getCell("status").font = { bold: true, color: { argb: "FFB91C1C" } };
+      excelRow.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFFFF1F2" },
+      };
+    }
+  }
+
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: sheet.columnCount },
+  };
+  sheet.getColumn("currentStock").numFmt = "#,##0.##";
+  sheet.getColumn("minimumStock").numFmt = "#,##0.##";
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+async function downloadDemandPlanningXlsx(params: {
+  filename: string;
+  rows: SalesDemandRow[];
+  dateKeys: string[];
+  scenarioLabel: string;
+  multiplier: number;
+  coverageDays: number;
+}): Promise<void> {
+  const { filename, rows, dateKeys, scenarioLabel, multiplier, coverageDays } = params;
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Demand Planning");
+
+  sheet.columns = [
+    { header: "Bahan", key: "ingredient", width: 30 },
+    { header: "Dept", key: "department", width: 12 },
+    { header: "Unit", key: "unit", width: 10 },
+    ...dateKeys.map((date) => ({
+      header: formatBusinessDateLabel(date),
+      key: `day_${date}`,
+      width: 16,
+    })),
+    { header: "Total 7 Hari", key: "totalUsage", width: 16 },
+    { header: "Avg/Hari", key: "avgDaily", width: 16 },
+    { header: "Peak/Hari", key: "peakDaily", width: 16 },
+    { header: "Stok Sekarang", key: "currentStock", width: 16 },
+    { header: "Minimum Stock", key: "minimumStock", width: 16 },
+    { header: "Skenario", key: "scenario", width: 18 },
+    { header: "Coverage Hari", key: "coverage", width: 14 },
+    { header: "Rekomendasi Order", key: "recommended", width: 20 },
+    { header: "Supplier", key: "supplier", width: 26 },
+  ];
+
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const row of rows) {
+    const dayValues = Object.fromEntries(
+      dateKeys.map((date) => [`day_${date}`, row.dailyUsage[date] ?? 0])
+    );
+    const excelRow = sheet.addRow({
+      ingredient: row.ingredientName,
+      department: row.department,
+      unit: row.unit,
+      ...dayValues,
+      totalUsage: row.totalUsage,
+      avgDaily: row.averageDailyUsage,
+      peakDaily: row.peakDailyUsage,
+      currentStock: row.currentStock,
+      minimumStock: row.minimumStock,
+      scenario: `${scenarioLabel} x${multiplier}`,
+      coverage: coverageDays,
+      recommended: row.recommendedOrderQty,
+      supplier: row.supplierName || "Belum ada",
+    });
+
+    if (row.recommendedOrderQty > 0) {
+      excelRow.getCell("recommended").font = { bold: true, color: { argb: "FF047857" } };
+    }
+  }
+
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: sheet.columnCount },
+  };
+
+  for (const column of sheet.columns) {
+    if (column.key && column.key !== "ingredient" && column.key !== "department" && column.key !== "unit") {
+      sheet.getColumn(column.key).numFmt = "#,##0.##";
+    }
+  }
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
 async function downloadSalesXlsx(filename: string, rows: SalesExportRow[]): Promise<void> {
   const ExcelJS = await import("exceljs");
   const workbook = new ExcelJS.Workbook();
@@ -613,6 +921,24 @@ function formatPoLineDraftQuantity(value: number): string {
 
 function formatInitialPoLineQuantity(value: number): string {
   return formatPoLineDraftQuantity(Math.max(value, 1));
+}
+
+function parseOptionalPercent(value: string): number {
+  const n = Number(String(value).replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function computeEventEffectiveness(params: {
+  expectedUpliftPct: number;
+  actualUpliftPct: number | null;
+  eventEndDate: string;
+}): DemandEventReportRow["effectiveness"] {
+  const { expectedUpliftPct, actualUpliftPct, eventEndDate } = params;
+  if (eventEndDate >= resolveBusinessDate()) return "pending";
+  if (actualUpliftPct === null) return "neutral";
+  if (actualUpliftPct >= expectedUpliftPct * 0.8) return "effective";
+  if (actualUpliftPct < Math.max(expectedUpliftPct * 0.5, 5)) return "underperform";
+  return "neutral";
 }
 
 function formatPoDateLocal(now: Date = new Date()): string {
@@ -912,13 +1238,30 @@ export function MonitoringDashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [startDate, setStartDate] = useState(() => resolveBusinessDate());
   const [endDate, setEndDate] = useState(() => resolveBusinessDate());
+  const [activeMonitoringTab, setActiveMonitoringTab] = useState<MonitoringTabId>("overview");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [ledgerExportRows, setLedgerExportRows] = useState<StockLedgerExportRow[]>([]);
+  const [inventorySummaryRows, setInventorySummaryRows] = useState<InventorySummaryRow[]>([]);
   const [lowStockInventoryRows, setLowStockInventoryRows] = useState<LowStockInventoryRow[]>([]);
   const [salesExportRows, setSalesExportRows] = useState<SalesExportRow[]>([]);
+  const [salesDemandRows, setSalesDemandRows] = useState<SalesDemandRow[]>([]);
+  const [receiveAuditRows, setReceiveAuditRows] = useState<ReceiveAuditRow[]>([]);
+  const [menuIssueRows, setMenuIssueRows] = useState<MenuIssueReportRow[]>([]);
+  const [demandEvents, setDemandEvents] = useState<DemandEventReportRow[]>([]);
+  const [eventForm, setEventForm] = useState<DemandEventForm>(() => ({
+    title: "",
+    eventType: "kol",
+    department: "",
+    startDate: resolveBusinessDate(),
+    endDate: resolveBusinessDate(),
+    expectedUpliftPct: "50",
+    notes: "",
+  }));
+  const [eventNotice, setEventNotice] = useState<{ message: string; variant: "success" | "error" } | null>(null);
+  const [eventSaving, setEventSaving] = useState(false);
   const [receivePriceRows, setReceivePriceRows] = useState<ReceivePriceRow[]>([]);
   const [receivePriceInputs, setReceivePriceInputs] = useState<Record<string, string>>({});
   const [savingReceivePriceId, setSavingReceivePriceId] = useState<string | null>(null);
@@ -937,6 +1280,7 @@ export function MonitoringDashboard() {
   const [supplierCatalog, setSupplierCatalog] = useState<SupplierPriceCatalog[]>([]);
   const [poLines, setPoLines] = useState<PoLineDraft[]>([]);
   const [coverageDays, setCoverageDays] = useState(1);
+  const [demandScenario, setDemandScenario] = useState<DemandScenario>("normal");
   const [ingredientDailyUsageById, setIngredientDailyUsageById] = useState<Record<string, number>>({});
   const [ingredientStockById, setIngredientStockById] = useState<
     Record<string, { currentStock: number; minimumStock: number }>
@@ -955,9 +1299,18 @@ export function MonitoringDashboard() {
     [startDate, endDate]
   );
 
+  const demandDateKeys = useMemo(
+    () =>
+      Array.from({ length: RUNWAY_HISTORY_DAYS }, (_, index) =>
+        addIsoDays(endDate, index - (RUNWAY_HISTORY_DAYS - 1))
+      ),
+    [endDate]
+  );
+
   const isSingleDayRange = startDate === endDate;
 
   const thursdayOrderClosed = useMemo(() => isThursdayLastOrderClosed(), [refreshKey]);
+  const demandMultiplier = DEMAND_SCENARIO_MULTIPLIER[demandScenario];
 
   const selectedSupplier = useMemo(
     () => suppliers.find((s) => s.id === selectedSupplierId) ?? null,
@@ -995,6 +1348,17 @@ export function MonitoringDashboard() {
     );
   }, [ledgerExportRows, normalizedSearch]);
 
+  const filteredInventorySummaryRows = useMemo(() => {
+    if (!normalizedSearch) return inventorySummaryRows;
+    return inventorySummaryRows.filter(
+      (row) =>
+        row.ingredient_name.toLowerCase().includes(normalizedSearch) ||
+        row.department.toLowerCase().includes(normalizedSearch) ||
+        row.primary_supplier_name.toLowerCase().includes(normalizedSearch) ||
+        row.stock_status.toLowerCase().includes(normalizedSearch)
+    );
+  }, [inventorySummaryRows, normalizedSearch]);
+
   const filteredSalesRows = useMemo(() => {
     if (!normalizedSearch) return salesExportRows;
     return salesExportRows.filter(
@@ -1003,6 +1367,69 @@ export function MonitoringDashboard() {
         row.category.toLowerCase().includes(normalizedSearch)
     );
   }, [salesExportRows, normalizedSearch]);
+
+  const filteredSalesDemandRows = useMemo(() => {
+    if (!normalizedSearch) return salesDemandRows;
+    return salesDemandRows.filter(
+      (row) =>
+        row.ingredientName.toLowerCase().includes(normalizedSearch) ||
+        row.department.toLowerCase().includes(normalizedSearch) ||
+        row.supplierName.toLowerCase().includes(normalizedSearch)
+    );
+  }, [normalizedSearch, salesDemandRows]);
+
+  const filteredReceiveAuditRows = useMemo(() => {
+    if (!normalizedSearch) return receiveAuditRows;
+    return receiveAuditRows.filter(
+      (row) =>
+        row.ingredientName.toLowerCase().includes(normalizedSearch) ||
+        row.department.toLowerCase().includes(normalizedSearch) ||
+        row.staffName.toLowerCase().includes(normalizedSearch)
+    );
+  }, [normalizedSearch, receiveAuditRows]);
+
+  const filteredMenuIssueRows = useMemo(() => {
+    if (!normalizedSearch) return menuIssueRows;
+    return menuIssueRows.filter(
+      (row) =>
+        row.menuName.toLowerCase().includes(normalizedSearch) ||
+        row.department.toLowerCase().includes(normalizedSearch) ||
+        row.reasonLabel.toLowerCase().includes(normalizedSearch) ||
+        row.note.toLowerCase().includes(normalizedSearch)
+    );
+  }, [menuIssueRows, normalizedSearch]);
+
+  const filteredDemandEvents = useMemo(() => {
+    if (!normalizedSearch) return demandEvents;
+    return demandEvents.filter(
+      (event) =>
+        event.title.toLowerCase().includes(normalizedSearch) ||
+        event.event_type.toLowerCase().includes(normalizedSearch) ||
+        event.notes.toLowerCase().includes(normalizedSearch) ||
+        (event.department ?? "").toLowerCase().includes(normalizedSearch)
+    );
+  }, [demandEvents, normalizedSearch]);
+
+  const demandPlanningRows = useMemo(
+    () =>
+      filteredSalesDemandRows
+        .map((row) => ({
+          ...row,
+          recommendedOrderQty: computeRecommendedPoQuantity(
+            row.averageDailyUsage * demandMultiplier,
+            coverageDays,
+            row.minimumStock,
+            row.currentStock
+          ),
+        }))
+        .sort((a, b) => {
+          if (b.recommendedOrderQty !== a.recommendedOrderQty) {
+            return b.recommendedOrderQty - a.recommendedOrderQty;
+          }
+          return b.totalUsage - a.totalUsage;
+        }),
+    [coverageDays, demandMultiplier, filteredSalesDemandRows]
+  );
 
   const filteredReceivePriceRows = useMemo(() => {
     if (!normalizedSearch) return receivePriceRows;
@@ -1048,6 +1475,62 @@ export function MonitoringDashboard() {
 
   const lowStockCountToday = lowStockInventoryRows.length;
 
+  const priorityItems = useMemo(() => {
+    const items: { tone: "critical" | "warning" | "info"; title: string; detail: string }[] = [];
+
+    for (const row of lowStockInventoryRows.slice(0, 3)) {
+      items.push({
+        tone: "critical",
+        title: `Order ${row.ingredientName}`,
+        detail: `Stok ${formatQtyWithUnit(row.currentStock, row.unit)} di bawah minimum ${formatQtyWithUnit(row.minimumStock, row.unit)}.`,
+      });
+    }
+
+    const criticalRunway = runwayEntries.filter((entry) => entry.urgency !== "safe").slice(0, 2);
+    for (const entry of criticalRunway) {
+      items.push({
+        tone: entry.urgency === "critical" ? "critical" : "warning",
+        title: `Cek runway ${entry.ingredientName}`,
+        detail: `Estimasi sisa ${entry.daysRemaining} hari berdasarkan pemakaian terakhir.`,
+      });
+    }
+
+    if (menuIssueRows.length > 0) {
+      const totalIssueQty = menuIssueRows.reduce((sum, row) => sum + row.quantity, 0);
+      items.push({
+        tone: "warning",
+        title: "Review remake / complaint",
+        detail: `${formatQtyId(totalIssueQty)} porsi tercatat dalam rentang ${dateRangeLabel}.`,
+      });
+    }
+
+    if (hasSpillageAlert) {
+      items.push({
+        tone: "critical",
+        title: "Review spillage alert",
+        detail: "Ada adjustment negatif yang melewati ambang kontrol operasional.",
+      });
+    }
+
+    if (cogsAlerts.length > 0) {
+      items.push({
+        tone: "info",
+        title: "Cek kenaikan HPP",
+        detail: `${cogsAlerts.length} bahan mengalami kenaikan harga supplier.`,
+      });
+    }
+
+    if (items.length === 0) {
+      items.push({
+        tone: "info",
+        title: "Operasional terlihat aman",
+        detail: "Belum ada prioritas kritis dari stok, remake, spillage, atau COGS.",
+      });
+    }
+
+    return items.slice(0, 5);
+  }, [cogsAlerts.length, dateRangeLabel, hasSpillageAlert, lowStockInventoryRows, menuIssueRows, runwayEntries]);
+
   const lowStockOrderGroups = useMemo<LowStockOrderGroup[]>(() => {
     const grouped = new Map<string, LowStockOrderGroup>();
 
@@ -1068,7 +1551,7 @@ export function MonitoringDashboard() {
             phoneNumber: null,
             unitPrice: 0,
           });
-      const dailyNeed = ingredientDailyUsageById[row.ingredientId] ?? 0;
+      const dailyNeed = (ingredientDailyUsageById[row.ingredientId] ?? 0) * demandMultiplier;
       const quantity = Math.max(
         computeRecommendedPoQuantity(dailyNeed, coverageDays, minimumStock, currentStock),
         1
@@ -1103,6 +1586,7 @@ export function MonitoringDashboard() {
       });
   }, [
     coverageDays,
+    demandMultiplier,
     ingredientDailyUsageById,
     lowStockInventoryRows,
     primarySupplierByIngredientId,
@@ -1226,6 +1710,29 @@ export function MonitoringDashboard() {
     const ingredientMap = new Map(
       ((ingredients ?? []) as IngredientWithPrimarySupplier[]).map((i) => [i.id, i])
     );
+    const summaryRows = ((ingredients ?? []) as IngredientWithPrimarySupplier[])
+      .map((ingredient) => {
+        const currentStock = Number(ingredient.current_stock ?? 0);
+        const minimumStock = Number(ingredient.minimum_stock ?? 0);
+        return {
+          ingredient_id: ingredient.id,
+          ingredient_name: ingredient.name,
+          department: ingredient.department,
+          unit: ingredient.unit,
+          current_stock: currentStock,
+          minimum_stock: minimumStock,
+          stock_status: isLowStockCondition(currentStock, minimumStock) ? "LOW STOCK" : "OK",
+          primary_supplier_name: ingredient.supplier?.name ?? "",
+        } satisfies InventorySummaryRow;
+      })
+      .sort((a, b) => {
+        const deptCmp = a.department.localeCompare(b.department);
+        if (deptCmp !== 0) return deptCmp;
+        if (a.stock_status !== b.stock_status) return a.stock_status === "LOW STOCK" ? -1 : 1;
+        return a.ingredient_name.localeCompare(b.ingredient_name);
+      });
+
+    setInventorySummaryRows(summaryRows);
     setLowStockInventoryRows(
       ((ingredients ?? []) as IngredientWithPrimarySupplier[])
         .map((ingredient) => ({
@@ -1361,9 +1868,101 @@ export function MonitoringDashboard() {
 
       setReceivePriceRows(receiveRows);
       setReceivePriceInputs(receiveInputs);
+
+      const { data: receiveEntryRaw, error: receiveEntryErr } = await supabase
+        .from("worksheet_receive_entry")
+        .select(
+          `
+          id,
+          ingredient_id,
+          staff_id,
+          quantity,
+          created_at,
+          ingredient:ingredient_id ( id, name, unit, purchase_unit ),
+          staff:staff_id ( name ),
+          worksheet_session:session_id ( business_date, department )
+        `
+        )
+        .in("session_id", sessionIds)
+        .order("created_at", { ascending: false });
+
+      if (receiveEntryErr) {
+        setReceiveAuditRows([]);
+      } else {
+        const auditRows: ReceiveAuditRow[] = [];
+        for (const entry of (receiveEntryRaw ?? []) as unknown as ReceiveAuditJoined[]) {
+          const sessionRaw = entry.worksheet_session;
+          const session = Array.isArray(sessionRaw) ? sessionRaw[0] : sessionRaw;
+          const ingredientRaw = entry.ingredient;
+          const ingredient = Array.isArray(ingredientRaw) ? ingredientRaw[0] : ingredientRaw;
+          const staffRaw = entry.staff;
+          const staff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+          if (!session || !ingredient) continue;
+
+          auditRows.push({
+            id: entry.id,
+            businessDate: session.business_date,
+            department: session.department,
+            ingredientName: ingredient.name,
+            quantity: Number(entry.quantity ?? 0),
+            unit: ingredient.purchase_unit?.trim() || ingredient.unit,
+            staffName: staff?.name ?? "Staff lama / tidak tercatat",
+            createdAt: entry.created_at,
+          });
+        }
+        setReceiveAuditRows(auditRows);
+      }
+
+      const { data: menuIssueRaw, error: menuIssueErr } = await supabase
+        .from("worksheet_menu_issue_line")
+        .select(
+          `
+          id,
+          menu_item_id,
+          quantity,
+          reason,
+          note,
+          photo_url,
+          created_at,
+          menu_item:menu_item_id ( id, menu_name, department, price ),
+          worksheet_session:session_id ( business_date, department )
+        `
+        )
+        .in("session_id", sessionIds)
+        .order("created_at", { ascending: false });
+
+      if (menuIssueErr) {
+        setMenuIssueRows([]);
+      } else {
+        const issueRows: MenuIssueReportRow[] = [];
+        for (const issue of (menuIssueRaw ?? []) as unknown as MenuIssueJoined[]) {
+          const sessionRaw = issue.worksheet_session;
+          const session = Array.isArray(sessionRaw) ? sessionRaw[0] : sessionRaw;
+          const menuRaw = issue.menu_item;
+          const menu = Array.isArray(menuRaw) ? menuRaw[0] : menuRaw;
+          if (!session || !menu) continue;
+
+          const reason = issue.reason || "other";
+          issueRows.push({
+            id: issue.id,
+            businessDate: session.business_date,
+            department: session.department,
+            menuName: menu.menu_name,
+            quantity: Number(issue.quantity ?? 0),
+            reason,
+            reasonLabel: MENU_ISSUE_REASON_LABEL[reason] ?? reason,
+            note: issue.note ?? "",
+            photoUrl: issue.photo_url ?? "",
+            createdAt: issue.created_at,
+          });
+        }
+        setMenuIssueRows(issueRows);
+      }
     } else {
       setReceivePriceRows([]);
       setReceivePriceInputs({});
+      setReceiveAuditRows([]);
+      setMenuIssueRows([]);
     }
 
     const { data: ledgers, error: ledErr } = await supabase
@@ -1438,9 +2037,14 @@ export function MonitoringDashboard() {
 
     const usageByIngredient = new Map<string, { totalUsage: number; days: Set<string> }>();
     const closingByIngredient = new Map<string, number>();
+    const dailyUsageByIngredient = new Map<string, Record<string, number>>();
 
     for (const row of historyLedgers ?? []) {
       const usage = Number(row.theoretical_usage);
+      const dailyBucket = dailyUsageByIngredient.get(row.ingredient_id) ?? {};
+      dailyBucket[row.business_date] = (dailyBucket[row.business_date] ?? 0) + usage;
+      dailyUsageByIngredient.set(row.ingredient_id, dailyBucket);
+
       if (usage > 0) {
         const bucket = usageByIngredient.get(row.ingredient_id) ?? { totalUsage: 0, days: new Set<string>() };
         bucket.totalUsage += usage;
@@ -1451,6 +2055,42 @@ export function MonitoringDashboard() {
         closingByIngredient.set(row.ingredient_id, Number(row.closing_stock));
       }
     }
+
+    const demandDateKeys = Array.from({ length: RUNWAY_HISTORY_DAYS }, (_, index) =>
+      addIsoDays(rangeEnd, index - (RUNWAY_HISTORY_DAYS - 1))
+    );
+    const demandRows: SalesDemandRow[] = [];
+
+    for (const ingredient of ingredientMap.values()) {
+      const dailyUsage = dailyUsageByIngredient.get(ingredient.id) ?? {};
+      const totalUsage = demandDateKeys.reduce((sum, date) => sum + (dailyUsage[date] ?? 0), 0);
+      if (totalUsage <= 0) continue;
+
+      const currentStock = Number(
+        closingByIngredient.get(ingredient.id) ?? ingredient.current_stock ?? 0
+      );
+      const minimumStock = Number(ingredient.minimum_stock ?? 0);
+      const averageDailyUsage = totalUsage / RUNWAY_HISTORY_DAYS;
+      const peakDailyUsage = Math.max(...demandDateKeys.map((date) => dailyUsage[date] ?? 0));
+
+      demandRows.push({
+        ingredientId: ingredient.id,
+        ingredientName: ingredient.name,
+        department: ingredient.department,
+        unit: ingredient.unit,
+        currentStock,
+        minimumStock,
+        dailyUsage,
+        totalUsage,
+        averageDailyUsage,
+        peakDailyUsage,
+        recommendedOrderQty: 0,
+        supplierName: ingredient.supplier?.name ?? "",
+      });
+    }
+
+    demandRows.sort((a, b) => b.totalUsage - a.totalUsage);
+    setSalesDemandRows(demandRows);
 
     const runway: RunwayEntry[] = [];
     for (const [ingredientId, closing] of closingByIngredient) {
@@ -1568,6 +2208,48 @@ export function MonitoringDashboard() {
     });
     setSalesExportRows(salesRows);
 
+    const eventLookupStart = addIsoDays(rangeStart, -30);
+    const { data: eventRows, error: eventErr } = await supabase
+      .from("demand_event")
+      .select("*")
+      .lte("start_date", rangeEnd)
+      .gte("end_date", eventLookupStart)
+      .order("start_date", { ascending: false });
+
+    if (eventErr) {
+      setDemandEvents([]);
+    } else {
+      const eventReports: DemandEventReportRow[] = ((eventRows ?? []) as DemandEventRow[]).map((event) => {
+        const durationDays = Math.max(1, Math.round((Date.parse(event.end_date) - Date.parse(event.start_date)) / 86400000) + 1);
+        const baselineStart = addIsoDays(event.start_date, -durationDays);
+        const baselineEnd = addIsoDays(event.start_date, -1);
+        const eventQty = salesRows
+          .filter((row) => row.session_date >= event.start_date && row.session_date <= event.end_date)
+          .filter((row) => !event.department || (event.department === "bar" ? row.category === "beverage" : row.category === "food"))
+          .reduce((sum, row) => sum + row.quantity_sold, 0);
+        const baselineQty = salesRows
+          .filter((row) => row.session_date >= baselineStart && row.session_date <= baselineEnd)
+          .filter((row) => !event.department || (event.department === "bar" ? row.category === "beverage" : row.category === "food"))
+          .reduce((sum, row) => sum + row.quantity_sold, 0);
+        const actualUpliftPct =
+          baselineQty > 0 ? ((eventQty - baselineQty) / baselineQty) * 100 : null;
+
+        return {
+          ...event,
+          baselineQty,
+          eventQty,
+          actualUpliftPct,
+          effectiveness: computeEventEffectiveness({
+            expectedUpliftPct: Number(event.expected_uplift_pct ?? 0),
+            actualUpliftPct,
+            eventEndDate: event.end_date,
+          }),
+        };
+      });
+
+      setDemandEvents(eventReports);
+    }
+
     setTopBeverages(buildTopSellingList(beverageAgg));
     setTopFoods(buildTopSellingList(foodAgg));
 
@@ -1664,13 +2346,13 @@ export function MonitoringDashboard() {
       const dailyTarget = ingredientDailyUsageById[ingredientId] ?? 0;
       const stock = ingredientStockById[ingredientId] ?? { currentStock: 0, minimumStock: 0 };
       return computeRecommendedPoQuantity(
-        dailyTarget,
+        dailyTarget * demandMultiplier,
         coverageDays,
         stock.minimumStock,
         stock.currentStock
       );
     },
-    [coverageDays, ingredientDailyUsageById, ingredientStockById]
+    [coverageDays, demandMultiplier, ingredientDailyUsageById, ingredientStockById]
   );
 
   useEffect(() => {
@@ -1699,9 +2381,27 @@ export function MonitoringDashboard() {
 
   const csvDateSuffix = `${startDate}_to_${endDate}`;
 
+  const handleExportInventorySummary = async () => {
+    const rows = normalizedSearch ? filteredInventorySummaryRows : inventorySummaryRows;
+    await downloadInventorySummaryXlsx(`rekap-stok-akumulasi-${resolveBusinessDate()}.xlsx`, rows);
+  };
+
   const handleExportInventory = async () => {
     const rows = normalizedSearch ? filteredLedgerRows : ledgerExportRows;
     await downloadInventoryXlsx(`inventory-ledger-${csvDateSuffix}.xlsx`, rows);
+  };
+
+  const handleExportDemandPlanning = async () => {
+    await downloadDemandPlanningXlsx({
+      filename: `demand-planning-7hari-${demandDateKeys[0]}_to_${
+        demandDateKeys[demandDateKeys.length - 1]
+      }.xlsx`,
+      rows: demandPlanningRows,
+      dateKeys: demandDateKeys,
+      scenarioLabel: DEMAND_SCENARIO_LABEL[demandScenario],
+      multiplier: demandMultiplier,
+      coverageDays,
+    });
   };
 
   const handleExportSales = async () => {
@@ -1816,6 +2516,86 @@ export function MonitoringDashboard() {
         },
       ];
     });
+  };
+
+  const handleGenerateDemandPo = () => {
+    if (!selectedSupplierId || supplierCatalog.length === 0) {
+      setPoError("Pilih supplier yang punya katalog bahan terlebih dahulu.");
+      return;
+    }
+
+    const catalogByIngredientId = new Map(
+      supplierCatalog.map((item) => [item.ingredient.id, item])
+    );
+    const recommendedLines = demandPlanningRows
+      .map((row) => {
+        const catalogItem = catalogByIngredientId.get(row.ingredientId);
+        if (!catalogItem || row.recommendedOrderQty <= 0) return null;
+        return {
+          ingredientId: row.ingredientId,
+          ingredientName: row.ingredientName,
+          unit: row.unit,
+          quantity: formatInitialPoLineQuantity(row.recommendedOrderQty),
+          unitPrice: Number(catalogItem.unit_price),
+        } satisfies PoLineDraft;
+      })
+      .filter((line): line is PoLineDraft => Boolean(line));
+
+    if (recommendedLines.length === 0) {
+      setPoError("Belum ada rekomendasi demand untuk supplier ini.");
+      return;
+    }
+
+    setPoLines(recommendedLines);
+    setPoError(null);
+    setPoSuccess(`${recommendedLines.length} bahan dari Demand Planning masuk ke Draft PO.`);
+  };
+
+  const handleEventFormChange = (patch: Partial<DemandEventForm>) => {
+    setEventForm((prev) => {
+      const next = { ...prev, ...patch };
+      if (next.startDate > next.endDate) next.endDate = next.startDate;
+      return next;
+    });
+  };
+
+  const handleSaveDemandEvent = async () => {
+    if (!supabase || !canEdit) return;
+    const title = eventForm.title.trim();
+    if (!title) {
+      setEventNotice({ message: "Nama event wajib diisi.", variant: "error" });
+      return;
+    }
+
+    const staff = getStaffSession();
+    setEventSaving(true);
+    setEventNotice(null);
+
+    const { error: insertErr } = await supabase.from("demand_event").insert({
+      title,
+      event_type: eventForm.eventType,
+      department: eventForm.department || null,
+      start_date: eventForm.startDate,
+      end_date: eventForm.endDate,
+      expected_uplift_pct: parseOptionalPercent(eventForm.expectedUpliftPct),
+      notes: eventForm.notes.trim(),
+      created_by_staff_id: staff?.id ?? null,
+    });
+
+    setEventSaving(false);
+
+    if (insertErr) {
+      setEventNotice({ message: insertErr.message, variant: "error" });
+      return;
+    }
+
+    setEventNotice({ message: "Demand event tersimpan.", variant: "success" });
+    setEventForm((prev) => ({
+      ...prev,
+      title: "",
+      notes: "",
+    }));
+    setRefreshKey((k) => k + 1);
   };
 
   const handleCoverageDaysChange = (next: number) => {
@@ -1995,10 +2775,12 @@ export function MonitoringDashboard() {
 
   return (
     <div className="space-y-6">
+      {activeMonitoringTab === "control" ? (
       <section className="grid gap-6 lg:grid-cols-2">
         <OpnameApprovalPanel />
         <StockAdjustmentPanel />
       </section>
+      ) : null}
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
@@ -2077,7 +2859,34 @@ export function MonitoringDashboard() {
         <p className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</p>
       )}
 
-      <MenuMovementPanel startDate={startDate} endDate={endDate} refreshKey={refreshKey} />
+      <nav
+        className="flex gap-2 overflow-x-auto rounded-xl border border-slate-800 bg-zinc-950 p-1.5"
+        aria-label="Monitoring tabs"
+      >
+        {MONITORING_TABS.map((tab) => {
+          const Icon = tab.icon;
+          const active = activeMonitoringTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveMonitoringTab(tab.id)}
+              className={`flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition ${
+                active
+                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-950/40"
+                  : "text-slate-400 hover:bg-zinc-900 hover:text-slate-100"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {activeMonitoringTab === "sales" ? (
+        <MenuMovementPanel startDate={startDate} endDate={endDate} refreshKey={refreshKey} />
+      ) : null}
 
       {loading ? (
         <div className="flex items-center justify-center gap-2 py-20 text-slate-500">
@@ -2086,6 +2895,34 @@ export function MonitoringDashboard() {
         </div>
       ) : (
         <>
+          {activeMonitoringTab === "overview" ? (
+            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-400" />
+                <h3 className="text-base font-semibold text-slate-100">Prioritas Hari Ini</h3>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {priorityItems.map((item, index) => (
+                  <div
+                    key={`${item.title}-${index}`}
+                    className={`rounded-lg border px-3 py-2.5 ${
+                      item.tone === "critical"
+                        ? "border-red-800/60 bg-red-950/20"
+                        : item.tone === "warning"
+                          ? "border-amber-700/50 bg-amber-950/20"
+                          : "border-slate-800 bg-zinc-950/60"
+                    }`}
+                  >
+                    <p className="text-sm font-semibold text-slate-100">{item.title}</p>
+                    <p className="mt-1 text-xs leading-snug text-slate-400">{item.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {activeMonitoringTab === "overview" || activeMonitoringTab === "control" ? (
+            <>
           <section className="grid gap-3 sm:grid-cols-3">
             <StatusIndicator
               label="Spillage Alert"
@@ -2185,7 +3022,78 @@ export function MonitoringDashboard() {
               </div>
             </section>
           )}
+          {activeMonitoringTab === "control" ? (
+            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-300" />
+                  <h3 className="text-sm font-semibold text-slate-200">Remake / Complaint Report</h3>
+                </div>
+                <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                  {filteredMenuIssueRows.length} catatan
+                </span>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-slate-800">
+                <table className="w-full min-w-[860px] text-left text-sm">
+                  <thead className="bg-zinc-950 text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Tanggal</th>
+                      <th className="px-3 py-2 font-medium">Dept</th>
+                      <th className="px-3 py-2 font-medium">Menu</th>
+                      <th className="px-3 py-2 text-right font-medium">Qty</th>
+                      <th className="px-3 py-2 font-medium">Alasan</th>
+                      <th className="px-3 py-2 font-medium">Catatan</th>
+                      <th className="px-3 py-2 font-medium">Foto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {filteredMenuIssueRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                          Belum ada remake / complaint dalam rentang ini.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredMenuIssueRows.slice(0, 40).map((row) => (
+                        <tr key={row.id} className="hover:bg-zinc-950/50">
+                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                            {formatBusinessDateLabel(row.businessDate)}
+                          </td>
+                          <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+                          <td className="px-3 py-2 text-slate-100">{row.menuName}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-red-200">
+                            {formatQtyId(row.quantity)}
+                          </td>
+                          <td className="px-3 py-2 text-amber-200">{row.reasonLabel}</td>
+                          <td className="max-w-xs px-3 py-2 text-slate-400">
+                            {row.note || "-"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {row.photoUrl ? (
+                              <a
+                                href={row.photoUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-indigo-300 underline decoration-indigo-500/40 underline-offset-4"
+                              >
+                                Lihat
+                              </a>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+            </>
+          ) : null}
 
+          {activeMonitoringTab === "overview" || activeMonitoringTab === "sales" ? (
           <section className="grid gap-4 lg:grid-cols-2">
             <TopSellingWidget
               title="Top 5 Best-Selling Beverages"
@@ -2210,169 +3118,342 @@ export function MonitoringDashboard() {
               }
             />
           </section>
+          ) : null}
 
+          {activeMonitoringTab === "demand" ? (
+            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-100">Demand Event Calendar</h3>
+                  <p className="text-xs text-slate-500">
+                    Catat promo/KOL/libur, lalu cek expected uplift vs actual uplift setelah event berjalan.
+                  </p>
+                </div>
+                <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                  {filteredDemandEvents.length} event
+                </span>
+              </div>
+
+              {eventNotice ? (
+                <p
+                  className={`mb-3 rounded-lg border px-3 py-2 text-sm ${
+                    eventNotice.variant === "success"
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      : "border-red-500/40 bg-red-500/10 text-red-300"
+                  }`}
+                >
+                  {eventNotice.message}
+                </p>
+              ) : null}
+
+              {canEdit ? (
+                <div className="mb-4 grid gap-3 rounded-xl border border-slate-800 bg-zinc-950/60 p-3 lg:grid-cols-[1.2fr_0.9fr_0.8fr_0.8fr_0.7fr]">
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-slate-500">Nama event</span>
+                    <input
+                      value={eventForm.title}
+                      onChange={(e) => handleEventFormChange({ title: e.target.value })}
+                      placeholder="Contoh: KOL TikTok weekend"
+                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100 placeholder:text-slate-600"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-slate-500">Tipe</span>
+                    <select
+                      value={eventForm.eventType}
+                      onChange={(e) => handleEventFormChange({ eventType: e.target.value })}
+                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                    >
+                      {Object.entries(DEMAND_EVENT_TYPE_LABEL).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-slate-500">Dept target</span>
+                    <select
+                      value={eventForm.department}
+                      onChange={(e) =>
+                        handleEventFormChange({ department: e.target.value as "" | Department })
+                      }
+                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                    >
+                      <option value="">Semua</option>
+                      <option value="bar">Bar</option>
+                      <option value="kitchen">Kitchen</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-slate-500">Mulai</span>
+                    <input
+                      type="date"
+                      value={eventForm.startDate}
+                      onChange={(e) => handleEventFormChange({ startDate: e.target.value })}
+                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs text-slate-500">Selesai</span>
+                    <input
+                      type="date"
+                      value={eventForm.endDate}
+                      onChange={(e) => handleEventFormChange({ endDate: e.target.value })}
+                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                    />
+                  </label>
+                  <label className="block lg:col-span-2">
+                    <span className="mb-1 block text-xs text-slate-500">Expected uplift %</span>
+                    <input
+                      type="number"
+                      value={eventForm.expectedUpliftPct}
+                      onChange={(e) => handleEventFormChange({ expectedUpliftPct: e.target.value })}
+                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm tabular-nums text-slate-100"
+                    />
+                  </label>
+                  <label className="block lg:col-span-2">
+                    <span className="mb-1 block text-xs text-slate-500">Catatan</span>
+                    <input
+                      value={eventForm.notes}
+                      onChange={(e) => handleEventFormChange({ notes: e.target.value })}
+                      placeholder="Contoh: fokus beverage, Reels IG, voucher 20%"
+                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100 placeholder:text-slate-600"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={eventSaving}
+                    onClick={() => void handleSaveDemandEvent()}
+                    className="min-h-10 self-end rounded-lg bg-indigo-600 px-3 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    {eventSaving ? "Menyimpan..." : "Simpan Event"}
+                  </button>
+                </div>
+              ) : null}
+
+              <div className="overflow-x-auto rounded-lg border border-slate-800">
+                <table className="w-full min-w-[940px] text-left text-sm">
+                  <thead className="bg-zinc-950 text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Event</th>
+                      <th className="px-3 py-2 font-medium">Periode</th>
+                      <th className="px-3 py-2 font-medium">Dept</th>
+                      <th className="px-3 py-2 text-right font-medium">Target</th>
+                      <th className="px-3 py-2 text-right font-medium">Baseline</th>
+                      <th className="px-3 py-2 text-right font-medium">Saat Event</th>
+                      <th className="px-3 py-2 text-right font-medium">Actual</th>
+                      <th className="px-3 py-2 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {filteredDemandEvents.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
+                          Belum ada demand event dalam rentang ini.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredDemandEvents.slice(0, 20).map((event) => (
+                        <tr key={event.id} className="hover:bg-zinc-950/50">
+                          <td className="px-3 py-2">
+                            <span className="flex flex-col">
+                              <span className="font-medium text-slate-100">{event.title}</span>
+                              <span className="text-xs text-slate-500">
+                                {DEMAND_EVENT_TYPE_LABEL[event.event_type] ?? event.event_type}
+                                {event.notes ? ` · ${event.notes}` : ""}
+                              </span>
+                            </span>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                            {formatBusinessDateLabel(event.start_date)} s/d {formatBusinessDateLabel(event.end_date)}
+                          </td>
+                          <td className="px-3 py-2 capitalize text-slate-400">{event.department ?? "semua"}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-indigo-200">
+                            +{Number(event.expected_uplift_pct).toFixed(0)}%
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                            {formatQtyId(event.baselineQty)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-100">
+                            {formatQtyId(event.eventQty)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-emerald-200">
+                            {event.actualUpliftPct === null ? "-" : `${event.actualUpliftPct.toFixed(1)}%`}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                event.effectiveness === "effective"
+                                  ? "bg-emerald-500/15 text-emerald-300"
+                                  : event.effectiveness === "underperform"
+                                    ? "bg-red-500/15 text-red-300"
+                                    : event.effectiveness === "pending"
+                                      ? "bg-indigo-500/15 text-indigo-300"
+                                      : "bg-slate-500/15 text-slate-300"
+                              }`}
+                            >
+                              {event.effectiveness === "effective"
+                                ? "Efektif"
+                                : event.effectiveness === "underperform"
+                                  ? "Kurang efektif"
+                                  : event.effectiveness === "pending"
+                                    ? "Berjalan"
+                                    : "Netral"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+
+          {activeMonitoringTab === "demand" ? (
           <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
-            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
               <div>
-                <h3 className="text-base font-semibold text-slate-100">Harga Receive Harian</h3>
+                <h3 className="text-base font-semibold text-slate-100">
+                  Sales-Based Demand Planning
+                </h3>
                 <p className="text-xs text-slate-500">
-                  Koreksi harga bahan yang diterima staff untuk rentang {dateRangeLabel}.
+                  Pemakaian bahan 7 hari terakhir dihitung dari sales menu × resep. Rekomendasi order
+                  mengikuti skenario demand dan target coverage PO.
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-xs uppercase tracking-wider text-slate-500">Total receive</p>
-                <p className="text-lg font-bold tabular-nums text-emerald-300">
-                  {formatRupiah(receiveCostTotal)}
+              <div className="flex flex-wrap gap-2">
+                {(Object.keys(DEMAND_SCENARIO_LABEL) as DemandScenario[]).map((scenario) => {
+                  const active = demandScenario === scenario;
+                  return (
+                    <button
+                      key={scenario}
+                      type="button"
+                      onClick={() => setDemandScenario(scenario)}
+                      className={`min-h-10 rounded-lg border px-3 text-sm font-semibold transition ${
+                        active
+                          ? "border-indigo-500 bg-indigo-600 text-white"
+                          : "border-slate-700 bg-zinc-950 text-slate-300 hover:border-indigo-500/60 hover:text-indigo-200"
+                      }`}
+                    >
+                      {DEMAND_SCENARIO_LABEL[scenario]} ×
+                      {DEMAND_SCENARIO_MULTIPLIER[scenario].toLocaleString("id-ID")}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => void handleExportDemandPlanning()}
+                  disabled={demandPlanningRows.length === 0}
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-emerald-500/50 bg-emerald-600/15 px-3 text-sm font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download className="h-4 w-4" />
+                  Export Demand
+                </button>
+              </div>
+            </div>
+
+            <div className="mb-3 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Basis data</p>
+                <p className="mt-1 text-sm font-semibold text-slate-200">
+                  {formatBusinessDateLabel(demandDateKeys[0])} s/d{" "}
+                  {formatBusinessDateLabel(demandDateKeys[demandDateKeys.length - 1])}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Skenario</p>
+                <p className="mt-1 text-sm font-semibold text-indigo-200">
+                  {DEMAND_SCENARIO_LABEL[demandScenario]} ×{demandMultiplier.toLocaleString("id-ID")}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Coverage</p>
+                <p className="mt-1 text-sm font-semibold text-emerald-200">
+                  {coverageDays} hari operasional
                 </p>
               </div>
             </div>
 
-            {receivePriceNotice ? (
-              <p
-                className={`mb-3 rounded-lg border px-3 py-2 text-sm ${
-                  receivePriceNotice.variant === "success"
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                    : "border-red-500/40 bg-red-500/10 text-red-300"
-                }`}
-              >
-                {receivePriceNotice.message}
-              </p>
-            ) : null}
-
-            {missingReceivePriceCount > 0 ? (
-              <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-                {missingReceivePriceCount} receive line belum punya harga.
-              </p>
-            ) : null}
-
             <div className="overflow-x-auto rounded-lg border border-slate-800">
-              <table className="w-full min-w-[760px] text-left text-sm">
+              <table className="w-full min-w-[1120px] text-left text-sm">
                 <thead className="bg-zinc-950 text-slate-400">
                   <tr>
-                    {!isSingleDayRange && <th className="px-3 py-2 font-medium">Tanggal</th>}
-                    <th className="px-3 py-2 font-medium">Dept</th>
                     <th className="px-3 py-2 font-medium">Bahan</th>
-                    <th className="px-3 py-2 text-right font-medium">Qty</th>
-                    <th className="px-3 py-2 text-right font-medium">Harga / Unit</th>
-                    <th className="px-3 py-2 text-right font-medium">Subtotal</th>
-                    {canEdit ? <th className="px-3 py-2 text-right font-medium">Aksi</th> : null}
+                    <th className="px-3 py-2 font-medium">Dept</th>
+                    {demandDateKeys.map((date) => (
+                      <th key={date} className="px-3 py-2 text-right font-medium">
+                        {formatBusinessDateLabel(date)}
+                      </th>
+                    ))}
+                    <th className="px-3 py-2 text-right font-medium">Total 7 Hari</th>
+                    <th className="px-3 py-2 text-right font-medium">Avg/Hari</th>
+                    <th className="px-3 py-2 text-right font-medium">Peak</th>
+                    <th className="px-3 py-2 text-right font-medium">Stok</th>
+                    <th className="px-3 py-2 text-right font-medium">Rekomendasi Order</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/80">
-                  {filteredReceivePriceRows.length === 0 ? (
+                  {demandPlanningRows.length === 0 ? (
                     <tr>
-                      <td
-                        colSpan={(isSingleDayRange ? 5 : 6) + (canEdit ? 1 : 0)}
-                        className="px-3 py-8 text-center text-slate-500"
-                      >
-                        Belum ada receive line dalam rentang tanggal ini.
+                      <td colSpan={14} className="px-3 py-8 text-center text-slate-500">
+                        Belum ada pemakaian bahan dari sales menu dalam 7 hari terakhir.
                       </td>
                     </tr>
                   ) : (
-                    filteredReceivePriceRows.map((row) => {
-                      const inputValue = receivePriceInputs[row.id] ?? "";
-                      const inputPrice = inputValue.trim()
-                        ? Number(inputValue.replace(",", "."))
-                        : 0;
-                      const previewTotal =
-                        Number.isFinite(inputPrice) && inputPrice >= 0
-                          ? row.quantity * inputPrice
-                          : row.lineTotal;
-                      const isSaving = savingReceivePriceId === row.id;
-
-                      return (
-                        <tr key={row.id} className="hover:bg-zinc-950/50">
-                          {!isSingleDayRange && (
-                            <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
-                              {formatBusinessDateLabel(row.businessDate)}
-                            </td>
-                          )}
-                          <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
-                          <td className="px-3 py-2 text-slate-100">
-                            <span className="flex flex-col">
-                              <span>{row.ingredientName}</span>
-                              {row.defaultUnitPrice > 0 ? (
-                                <span className="text-[10px] text-slate-500">
-                                  Default {formatRupiah(row.defaultUnitPrice)} / {row.purchaseUnit}
-                                </span>
-                              ) : null}
+                    demandPlanningRows.slice(0, 30).map((row) => (
+                      <tr key={row.ingredientId} className="hover:bg-zinc-950/50">
+                        <td className="px-3 py-2 text-slate-100">
+                          <span className="flex flex-col">
+                            <span>{row.ingredientName}</span>
+                            <span className="text-[10px] text-slate-500">
+                              Supplier: {row.supplierName || "Belum ada"}
                             </span>
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+                        {demandDateKeys.map((date) => (
+                          <td key={date} className="px-3 py-2 text-right tabular-nums text-slate-300">
+                            {formatQtyWithUnit(row.dailyUsage[date] ?? 0, row.unit)}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-slate-300">
-                            {formatQtyId(row.quantity)} {row.purchaseUnit}
-                          </td>
-                          <td className="px-3 py-2">
-                            {canEdit ? (
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                min={0}
-                                step="any"
-                                value={inputValue}
-                                onChange={(e) =>
-                                  handleReceivePriceInputChange(row.id, e.target.value)
-                                }
-                                placeholder="0"
-                                className="ml-auto block min-h-10 w-36 rounded-lg border border-slate-800 bg-zinc-950 px-3 text-right tabular-nums text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
-                            ) : (
-                              <span className="block text-right tabular-nums text-slate-300">
-                                {formatRupiah(row.unitPrice)}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
-                            {formatRupiah(previewTotal)}
-                          </td>
-                          {canEdit ? (
-                            <td className="px-3 py-2 text-right">
-                              <button
-                                type="button"
-                                disabled={isSaving}
-                                onClick={() => void handleSaveReceivePrice(row)}
-                                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-3 text-sm font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                                Simpan
-                              </button>
-                            </td>
-                          ) : null}
-                        </tr>
-                      );
-                    })
+                        ))}
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-100">
+                          {formatQtyWithUnit(row.totalUsage, row.unit)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-indigo-200">
+                          {formatQtyWithUnit(row.averageDailyUsage, row.unit)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-amber-200">
+                          {formatQtyWithUnit(row.peakDailyUsage, row.unit)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                          {formatQtyWithUnit(row.currentStock, row.unit)}
+                        </td>
+                        <td
+                          className={`px-3 py-2 text-right tabular-nums font-semibold ${
+                            row.recommendedOrderQty > 0 ? "text-emerald-300" : "text-slate-500"
+                          }`}
+                        >
+                          {formatQtyWithUnit(row.recommendedOrderQty, row.unit)}
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
             </div>
           </section>
+          ) : null}
 
+          {activeMonitoringTab === "inventory" ? (
           <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
             <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h3 className="text-base font-semibold text-slate-100">Log & Data Export Center</h3>
+                <h3 className="text-base font-semibold text-slate-100">Inventory Monitor</h3>
                 <p className="text-xs text-slate-500">
-                  Ekspor XLSX client-side — data mengikuti rentang tanggal ({dateRangeLabel}) & filter pencarian aktif.
+                  Low stock, receive audit, dan ledger detail untuk rentang {dateRangeLabel}.
                 </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleExportInventory()}
-                  disabled={ledgerExportRows.length === 0}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Download className="h-4 w-4" />
-                  Download XLSX: Inventory
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleExportSales()}
-                  disabled={salesExportRows.length === 0}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Download className="h-4 w-4" />
-                  Download XLSX: Penjualan
-                </button>
               </div>
             </div>
 
@@ -2446,6 +3527,60 @@ export function MonitoringDashboard() {
               </div>
             ) : null}
 
+            <div className="mb-4 rounded-xl border border-slate-800 bg-zinc-950/60 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-100">Receive Audit</h4>
+                  <p className="text-xs text-slate-500">
+                    Jejak siapa input barang masuk dan kapan.
+                  </p>
+                </div>
+                <span className="rounded-full bg-zinc-900 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                  {filteredReceiveAuditRows.length} entry
+                </span>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-slate-800">
+                <table className="w-full min-w-[760px] text-left text-sm">
+                  <thead className="bg-zinc-950 text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Tanggal</th>
+                      <th className="px-3 py-2 font-medium">Dept</th>
+                      <th className="px-3 py-2 font-medium">Bahan</th>
+                      <th className="px-3 py-2 font-medium">Staff</th>
+                      <th className="px-3 py-2 text-right font-medium">Qty</th>
+                      <th className="px-3 py-2 font-medium">Waktu Input</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {filteredReceiveAuditRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
+                          Belum ada receive entry dalam rentang ini.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredReceiveAuditRows.slice(0, 30).map((row) => (
+                        <tr key={row.id} className="hover:bg-zinc-900/60">
+                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                            {formatBusinessDateLabel(row.businessDate)}
+                          </td>
+                          <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+                          <td className="px-3 py-2 text-slate-100">{row.ingredientName}</td>
+                          <td className="px-3 py-2 text-slate-300">{row.staffName}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-100">
+                            {formatQtyWithUnit(row.quantity, row.unit)}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-500">
+                            {new Date(row.createdAt).toLocaleString("id-ID")}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             <div className="space-y-4">
               <DepartmentLedgerTable
                 title="Departemen Bar"
@@ -2473,7 +3608,58 @@ export function MonitoringDashboard() {
               />
             </div>
           </section>
+          ) : null}
 
+          {activeMonitoringTab === "export" ? (
+            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-slate-100">Export Center</h3>
+                <p className="text-xs text-slate-500">
+                  Download data operasional sesuai rentang tanggal dan filter pencarian aktif.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleExportInventorySummary()}
+                  disabled={inventorySummaryRows.length === 0}
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-emerald-500/50 bg-emerald-600/15 px-4 text-sm font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download className="h-4 w-4" />
+                  Download XLSX: Rekap Stok
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleExportInventory()}
+                  disabled={ledgerExportRows.length === 0}
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download className="h-4 w-4" />
+                  Download XLSX: Detail Ledger
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleExportSales()}
+                  disabled={salesExportRows.length === 0}
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download className="h-4 w-4" />
+                  Download XLSX: Penjualan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleExportDemandPlanning()}
+                  disabled={demandPlanningRows.length === 0}
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download className="h-4 w-4" />
+                  Download XLSX: Demand
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {activeMonitoringTab === "demand" ? (
           <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
             <div className="mb-4 flex items-center gap-2">
               <ShoppingCart className="h-5 w-5 text-indigo-400" />
@@ -2545,7 +3731,7 @@ export function MonitoringDashboard() {
                   +
                 </button>
                 <span className="text-xs text-slate-500">
-                  Rekomendasi qty = (kebutuhan harian × hari) + min. stok − stok saat ini
+                  Rekomendasi qty = (avg sales 7 hari × skenario demand × hari) + min. stok − stok saat ini
                 </span>
               </div>
             </div>
@@ -2570,12 +3756,25 @@ export function MonitoringDashboard() {
                 </select>
 
                 {selectedSupplier && (
-                  <p className="text-xs text-slate-400">
-                    Minimum order:{" "}
-                    <span className="font-semibold text-slate-200">
-                      {formatRupiah(Number(selectedSupplier.min_order_amount))}
-                    </span>
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-slate-400">
+                      Minimum order:{" "}
+                      <span className="font-semibold text-slate-200">
+                        {formatRupiah(Number(selectedSupplier.min_order_amount))}
+                      </span>
+                    </p>
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        disabled={thursdayOrderClosed || demandPlanningRows.length === 0}
+                        onClick={handleGenerateDemandPo}
+                        className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <ShoppingCart className="h-3.5 w-3.5" />
+                        Generate PO dari Demand
+                      </button>
+                    ) : null}
+                  </div>
                 )}
 
                 {selectedSupplierId && supplierCatalog.length > 0 && (
@@ -2706,8 +3905,9 @@ export function MonitoringDashboard() {
               </div>
             </div>
           </section>
+          ) : null}
 
-          {filteredSalesRows.length > 0 && (
+          {activeMonitoringTab === "sales" && filteredSalesRows.length > 0 && (
             <section className="rounded-xl border border-slate-800 bg-zinc-900/40 p-4">
               <div className="mb-3 flex items-center gap-2">
                 <TrendingDown className="h-4 w-4 text-slate-500" />
