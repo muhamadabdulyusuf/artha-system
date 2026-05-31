@@ -99,6 +99,19 @@ type MenuIssueLineState = {
   photoPublicId: string;
 };
 
+type SoldEntrySummary = {
+  staffId: string | null;
+  staffName: string;
+  quantity: number;
+};
+
+type SoldEntryJoined = {
+  menu_item_id: string;
+  staff_id: string | null;
+  quantity_sold: number;
+  staff: { name: string } | { name: string }[] | null;
+};
+
 type PremixRecipeComponent = {
   ingredient_id: string;
   qty_per_batch: number;
@@ -695,6 +708,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [lines, setLines] = useState<Record<string, IngredientLineState>>({});
   const [receiveEntryInputs, setReceiveEntryInputs] = useState<Record<string, string>>({});
   const [soldItems, setSoldItems] = useState<Record<string, string>>({});
+  const [soldEntrySummaries, setSoldEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
   const [menuIssues, setMenuIssues] = useState<Record<string, MenuIssueLineState>>({});
   const [premixQuantities, setPremixQuantities] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -951,6 +965,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     const soldPreset: Record<string, string> = {};
     const issuePreset: Record<string, MenuIssueLineState> = {};
     const premixPreset: Record<string, string> = {};
+    setSoldEntrySummaries({});
 
     if (ws?.id) {
       const { data: inLines } = await supabase
@@ -980,15 +995,54 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         };
       }
 
-      const { data: soldLines } = await supabase
-        .from("worksheet_sold_line")
-        .select("menu_item_id, quantity_sold")
+      const { data: soldEntries, error: soldEntryErr } = await supabase
+        .from("worksheet_sold_entry")
+        .select("menu_item_id, staff_id, quantity_sold, staff:staff_id ( name )")
         .eq("session_id", ws.id);
 
-      for (const row of soldLines ?? []) {
-        soldPreset[row.menu_item_id] =
-          Number(row.quantity_sold) === 0 ? "" : String(row.quantity_sold);
+      const soldSummaries: Record<string, SoldEntrySummary[]> = {};
+
+      if (!soldEntryErr && (soldEntries ?? []).length > 0) {
+        for (const row of (soldEntries ?? []) as unknown as SoldEntryJoined[]) {
+          const staffRaw = row.staff;
+          const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+          const quantity = Number(row.quantity_sold ?? 0);
+          if (quantity <= 0) continue;
+
+          soldSummaries[row.menu_item_id] = [
+            ...(soldSummaries[row.menu_item_id] ?? []),
+            {
+              staffId: row.staff_id,
+              staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+              quantity,
+            },
+          ];
+
+          if (row.staff_id === staff.id) {
+            soldPreset[row.menu_item_id] = String(quantity);
+          }
+        }
+      } else {
+        const { data: soldLines } = await supabase
+          .from("worksheet_sold_line")
+          .select("menu_item_id, quantity_sold")
+          .eq("session_id", ws.id);
+
+        for (const row of soldLines ?? []) {
+          const quantity = Number(row.quantity_sold);
+          if (quantity <= 0) continue;
+          soldPreset[row.menu_item_id] = String(quantity);
+          soldSummaries[row.menu_item_id] = [
+            {
+              staffId: null,
+              staffName: "Data lama / belum ada staff",
+              quantity,
+            },
+          ];
+        }
       }
+
+      setSoldEntrySummaries(soldSummaries);
 
       const { data: issueLines } = await supabase
         .from("worksheet_menu_issue_line")
@@ -1675,13 +1729,74 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     activeSessionId: string,
     menuList: MenuItemWithRecipe[]
   ): Promise<void> => {
-    const soldPayload = menuList
+    if (!staff?.id) {
+      throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
+    }
+
+    const soldEntryPayload = menuList
       .map((menu) => ({
         session_id: activeSessionId,
         menu_item_id: menu.id,
+        staff_id: staff.id,
         quantity_sold: parseQty(soldItems[menu.id] ?? ""),
       }))
       .filter((row) => row.quantity_sold > 0);
+
+    const { error: clearOwnSoldErr } = await supabase
+      .from("worksheet_sold_entry")
+      .delete()
+      .eq("session_id", activeSessionId)
+      .eq("staff_id", staff.id);
+
+    if (clearOwnSoldErr) {
+      throw new Error(`Gagal membersihkan sales menu milik staff ini: ${clearOwnSoldErr.message}`);
+    }
+
+    const { error: soldEntryErr } =
+      soldEntryPayload.length > 0
+        ? await supabase.from("worksheet_sold_entry").insert(soldEntryPayload)
+        : { error: null };
+
+    if (soldEntryErr) {
+      throw new Error(`Gagal menyimpan sales menu staff: ${soldEntryErr.message}`);
+    }
+
+    const { data: allSoldEntries, error: allSoldErr } = await supabase
+      .from("worksheet_sold_entry")
+      .select("menu_item_id, staff_id, quantity_sold, staff:staff_id ( name )")
+      .eq("session_id", activeSessionId);
+
+    if (allSoldErr) {
+      throw new Error(`Gagal memuat akumulasi sales menu: ${allSoldErr.message}`);
+    }
+
+    const aggregateByMenu = new Map<string, number>();
+    const nextSummaries: Record<string, SoldEntrySummary[]> = {};
+
+    for (const row of (allSoldEntries ?? []) as unknown as SoldEntryJoined[]) {
+      const quantity = Number(row.quantity_sold ?? 0);
+      if (quantity <= 0) continue;
+      aggregateByMenu.set(row.menu_item_id, (aggregateByMenu.get(row.menu_item_id) ?? 0) + quantity);
+
+      const staffRaw = row.staff;
+      const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+      nextSummaries[row.menu_item_id] = [
+        ...(nextSummaries[row.menu_item_id] ?? []),
+        {
+          staffId: row.staff_id,
+          staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+          quantity,
+        },
+      ];
+    }
+
+    const aggregatePayload = Array.from(aggregateByMenu.entries()).map(
+      ([menuItemId, quantitySold]) => ({
+        session_id: activeSessionId,
+        menu_item_id: menuItemId,
+        quantity_sold: quantitySold,
+      })
+    );
 
     const { error: clearSoldErr } = await supabase
       .from("worksheet_sold_line")
@@ -1693,13 +1808,15 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }
 
     const { error: soldErr } =
-      soldPayload.length > 0
-        ? await supabase.from("worksheet_sold_line").insert(soldPayload)
+      aggregatePayload.length > 0
+        ? await supabase.from("worksheet_sold_line").insert(aggregatePayload)
         : { error: null };
 
     if (soldErr) {
-      throw new Error(`Gagal menyimpan worksheet_sold_line: ${soldErr.message}`);
+      throw new Error(`Gagal menyimpan total worksheet_sold_line: ${soldErr.message}`);
     }
+
+    setSoldEntrySummaries(nextSummaries);
 
     const issuePayload = menuList
       .map((menu) => {
@@ -1929,7 +2046,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           String(receiveTotals.get(ingredientId) ?? 0)
         );
         const premixOutputQty = premixOutputMap.get(ingredientId) ?? 0;
-        const bookStock = previousClosingMap.get(ingredientId) ?? Number(ing.current_stock) ?? 0;
+        const masterStock = Number(ing.current_stock);
+        const bookStock = Number.isFinite(masterStock)
+          ? masterStock
+          : previousClosingMap.get(ingredientId) ?? 0;
         const physicalStock = !isBlankQty(line.closingStock)
           ? parseQty(line.closingStock)
           : Math.max(0, bookStock);
@@ -1952,9 +2072,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const localLedgerPayload: StockLedgerInsert[] = freshIngredients.map((ing) => {
         const line = lines[ing.id] ?? DEFAULT_LINE;
+        const masterStock = Number(ing.current_stock);
         const opening_stock = Math.max(
           0,
-          previousClosingMap.get(ing.id) ?? Number(ing.current_stock) ?? 0
+          Number.isFinite(masterStock) ? masterStock : previousClosingMap.get(ing.id) ?? 0
         );
         const receive_qty = receiveInputToStockQty(
           ing,
@@ -2015,9 +2136,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       const externalLedgerPayload: StockLedgerInsert[] = externalIngredients.map((ing) => {
         const existing = existingLedgerMap.get(ing.id);
+        const masterStock = Number(ing.current_stock);
         const opening_stock = existing
           ? existing.opening_stock
-          : Math.max(0, previousClosingMap.get(ing.id) ?? Number(ing.current_stock) ?? 0);
+          : Math.max(
+              0,
+              Number.isFinite(masterStock) ? masterStock : previousClosingMap.get(ing.id) ?? 0
+            );
         const in_qty = existing?.in_qty ?? 0;
         const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
         const issue_theoretical = issueTheoreticalMap.get(ing.id) ?? 0;
@@ -2995,54 +3120,82 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                   <ul className="space-y-2">
                     {filteredMenus.map((menu) => {
                       const soldValue = soldItems[menu.id] ?? "";
+                      const menuSoldEntries = soldEntrySummaries[menu.id] ?? [];
+                      const totalSold = menuSoldEntries.reduce((sum, entry) => sum + entry.quantity, 0);
                       return (
                         <li
                           key={menu.id}
-                          className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-3"
+                          className="rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-3"
                         >
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate font-medium text-zinc-50">{menu.menu_name}</p>
-                            <p className="text-xs text-zinc-500">
-                              Rp {Number(menu.price).toLocaleString("id-ID")}
-                              {getActiveRecipeLines(menu).length === 0 ? " · tanpa resep" : ""}
-                            </p>
-                          </div>
-                          <div className="shrink-0">
-                            <span className="mb-1 block text-right text-xs text-zinc-400">
-                              Terjual
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                disabled={locked}
-                                onClick={() => adjustSoldQty(menu.id, -1)}
-                                aria-label={`Kurangi ${menu.menu_name}`}
-                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 active:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <Minus className="h-5 w-5" />
-                              </button>
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                min={0}
-                                step={1}
-                                disabled={locked}
-                                value={soldValue}
-                                onChange={(e) => updateSoldQty(menu.id, e.target.value)}
-                                placeholder="-"
-                                className="min-h-12 w-16 rounded-lg border border-zinc-700 bg-zinc-950 px-1 text-center text-lg font-semibold tabular-nums text-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
-                              />
-                              <button
-                                type="button"
-                                disabled={locked}
-                                onClick={() => adjustSoldQty(menu.id, 1)}
-                                aria-label={`Tambah ${menu.menu_name}`}
-                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-indigo-500/50 bg-indigo-600/20 text-indigo-100 active:bg-indigo-600/35 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <Plus className="h-5 w-5" />
-                              </button>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate font-medium text-zinc-50">{menu.menu_name}</p>
+                              <p className="text-xs text-zinc-500">
+                                Rp {Number(menu.price).toLocaleString("id-ID")}
+                                {getActiveRecipeLines(menu).length === 0 ? " · tanpa resep" : ""}
+                              </p>
+                            </div>
+                            <div className="shrink-0">
+                              <span className="mb-1 block text-right text-xs text-zinc-400">
+                                Input kamu
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={locked}
+                                  onClick={() => adjustSoldQty(menu.id, -1)}
+                                  aria-label={`Kurangi ${menu.menu_name}`}
+                                  className="flex h-12 w-12 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 active:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Minus className="h-5 w-5" />
+                                </button>
+                                <input
+                                  type="number"
+                                  inputMode="decimal"
+                                  min={0}
+                                  step={1}
+                                  disabled={locked}
+                                  value={soldValue}
+                                  onChange={(e) => updateSoldQty(menu.id, e.target.value)}
+                                  placeholder="-"
+                                  className="min-h-12 w-16 rounded-lg border border-zinc-700 bg-zinc-950 px-1 text-center text-lg font-semibold tabular-nums text-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={locked}
+                                  onClick={() => adjustSoldQty(menu.id, 1)}
+                                  aria-label={`Tambah ${menu.menu_name}`}
+                                  className="flex h-12 w-12 items-center justify-center rounded-lg border border-indigo-500/50 bg-indigo-600/20 text-indigo-100 active:bg-indigo-600/35 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Plus className="h-5 w-5" />
+                                </button>
+                              </div>
                             </div>
                           </div>
+                          {menuSoldEntries.length > 0 ? (
+                            <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+                              <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                                <span className="font-medium text-zinc-400">Akumulasi tersimpan</span>
+                                <span className="font-semibold tabular-nums text-indigo-200">
+                                  {formatQty(totalSold)}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {menuSoldEntries.map((entry) => (
+                                  <span
+                                    key={`${menu.id}-${entry.staffId ?? entry.staffName}`}
+                                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                      entry.staffId === staff?.id
+                                        ? "bg-emerald-500/15 text-emerald-200"
+                                        : "bg-zinc-800 text-zinc-300"
+                                    }`}
+                                  >
+                                    {entry.staffName}: {formatQty(entry.quantity)}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
                         </li>
                       );
                     })}

@@ -176,6 +176,16 @@ export type WorksheetSoldLineRow = {
   updated_at: string;
 };
 
+export type WorksheetSoldEntryRow = {
+  id: string;
+  session_id: string;
+  menu_item_id: string;
+  staff_id: string | null;
+  quantity_sold: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type WorksheetMenuIssueLineRow = {
   id: string;
   session_id: string;
@@ -498,6 +508,21 @@ export type Database = {
           quantity_sold: number;
         };
         Update: { quantity_sold?: number };
+        Relationships: [];
+      };
+      worksheet_sold_entry: {
+        Row: WorksheetSoldEntryRow;
+        Insert: {
+          id?: string;
+          session_id: string;
+          menu_item_id: string;
+          staff_id?: string | null;
+          quantity_sold: number;
+        };
+        Update: {
+          staff_id?: string | null;
+          quantity_sold?: number;
+        };
         Relationships: [];
       };
       worksheet_menu_issue_line: {
