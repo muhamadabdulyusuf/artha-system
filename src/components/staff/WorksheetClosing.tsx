@@ -191,6 +191,7 @@ type LedgerSnapshotForCalc = Omit<StockLedgerInsert, "business_date">;
 type WorksheetClosingProps = {
   department: Department;
   title: string;
+  embedded?: boolean;
 };
 
 type WorksheetEditRequestSummary = Pick<
@@ -216,6 +217,15 @@ const TAB_CONFIG: { id: WorksheetTab; label: string; icon: typeof Package }[] = 
   { id: "issue", label: "Remake", icon: AlertTriangle },
   { id: "sold", label: "Menu", icon: UtensilsCrossed },
 ];
+
+const DEFAULT_WORKSHEET_FEATURES: Record<WorksheetTab, boolean> = {
+  receive: true,
+  outstock: true,
+  opname: true,
+  premix: true,
+  issue: true,
+  sold: true,
+};
 
 const MENU_ISSUE_REASONS = [
   { id: "too_salty", label: "Terlalu asin" },
@@ -780,12 +790,15 @@ async function fetchLatestLedgerClosingMap(
   return map;
 }
 
-export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
+export function WorksheetClosing({ department, title, embedded = false }: WorksheetClosingProps) {
   const router = useRouter();
   const supabase = getSupabaseClient();
 
   const [staff, setStaff] = useState<StaffSession | null>(null);
   const [activeTab, setActiveTab] = useState<WorksheetTab>("receive");
+  const [worksheetFeatures, setWorksheetFeatures] = useState<Record<WorksheetTab, boolean>>({
+    ...DEFAULT_WORKSHEET_FEATURES,
+  });
   const [selectedBusinessDate, setSelectedBusinessDate] = useState(() => resolveWorksheetBusinessDate());
   const [businessDate, setBusinessDate] = useState<string>("");
   const [worksheetStatus, setWorksheetStatus] = useState<ClosingStatus | null>(null);
@@ -878,6 +891,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     if (!normalizedSearch) return premixItems;
     return premixItems.filter((item) => item.name.toLowerCase().includes(normalizedSearch));
   }, [normalizedSearch, premixItems]);
+
+  const visibleTabs = useMemo(
+    () => TAB_CONFIG.filter((tab) => worksheetFeatures[tab.id]),
+    [worksheetFeatures]
+  );
 
   const outstockHasBlockingErrors = useMemo(
     () => hasOutstockValidationErrors(ingredients, lines),
@@ -1212,6 +1230,30 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     setTestBusinessDate(date);
     setSelectedBusinessDate(date);
     setEditRequest(null);
+
+    const { data: featureRows, error: featureErr } = await supabase
+      .from("worksheet_staff_setting")
+      .select("tab_id, is_enabled")
+      .eq("department", department);
+
+    if (featureErr) {
+      setError(`Gagal memuat setting worksheet staff: ${featureErr.message}`);
+      setIsLoading(false);
+      return;
+    }
+
+    const nextFeatures = { ...DEFAULT_WORKSHEET_FEATURES };
+    for (const row of featureRows ?? []) {
+      if (row.tab_id in nextFeatures) {
+        nextFeatures[row.tab_id as WorksheetTab] = Boolean(row.is_enabled);
+      }
+    }
+    setWorksheetFeatures(nextFeatures);
+    setActiveTab((current) => {
+      if (nextFeatures[current]) return current;
+      const firstEnabled = TAB_CONFIG.find((tab) => nextFeatures[tab.id]);
+      return firstEnabled?.id ?? current;
+    });
 
     const { error: dayErr } = await supabase
       .from("business_day")
@@ -1779,6 +1821,40 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     const rawIngredients = ingredients.filter((ing) => ing.kind === "raw");
     const rawIngredientIds = rawIngredients.map((ing) => ing.id);
+    const previousOwnReceive = new Map<string, number>();
+
+    if (rawIngredientIds.length > 0) {
+      const { data: previousRows, error: previousErr } = await supabase
+        .from("worksheet_receive_entry")
+        .select("ingredient_id, quantity")
+        .eq("session_id", activeSessionId)
+        .eq("staff_id", staff.id)
+        .in("ingredient_id", rawIngredientIds);
+
+      if (previousErr) {
+        throw new Error(`Gagal membaca receive sebelumnya: ${previousErr.message}`);
+      }
+
+      for (const row of previousRows ?? []) {
+        previousOwnReceive.set(
+          row.ingredient_id,
+          (previousOwnReceive.get(row.ingredient_id) ?? 0) + Number(row.quantity ?? 0)
+        );
+      }
+    }
+
+    const entryPayload = rawIngredients
+      .map((ing) => ({
+        session_id: activeSessionId,
+        ingredient_id: ing.id,
+        staff_id: staff.id,
+        quantity: parseQty(receiveEntryInputs[ing.id] ?? ""),
+      }))
+      .filter((row) => row.quantity > 0);
+    const nextOwnReceive = new Map(
+      entryPayload.map((row) => [row.ingredient_id, row.quantity])
+    );
+    const deltaByIngredient = new Map<string, number>();
 
     if (rawIngredientIds.length > 0) {
       const { error: clearOwnErr } = await supabase
@@ -1793,15 +1869,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
     }
 
-    const entryPayload = rawIngredients
-      .map((ing) => ({
-        session_id: activeSessionId,
-        ingredient_id: ing.id,
-        staff_id: staff.id,
-        quantity: parseQty(receiveEntryInputs[ing.id] ?? ""),
-      }))
-      .filter((row) => row.quantity > 0);
-
     if (entryPayload.length > 0) {
       const { error: insertErr } = await supabase
         .from("worksheet_receive_entry")
@@ -1810,6 +1877,74 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       if (insertErr) {
         throw new Error(`Gagal menyimpan entry receive: ${insertErr.message}`);
       }
+    }
+
+    for (const ing of rawIngredients) {
+      const previousQty = previousOwnReceive.get(ing.id) ?? 0;
+      const nextQty = nextOwnReceive.get(ing.id) ?? 0;
+      const deltaPurchaseQty = nextQty - previousQty;
+      const deltaStockQty = receiveInputToStockQty(ing, String(deltaPurchaseQty));
+      if (deltaStockQty !== 0) deltaByIngredient.set(ing.id, deltaStockQty);
+    }
+
+    if (deltaByIngredient.size > 0) {
+      const { data: stockRows, error: stockErr } = await supabase
+        .from("ingredient")
+        .select("id, name, current_stock")
+        .in("id", Array.from(deltaByIngredient.keys()));
+
+      if (stockErr) {
+        throw new Error(`Receive tersimpan, tapi stok admin gagal dibaca: ${stockErr.message}`);
+      }
+
+      const stockUpdateResults = await Promise.all(
+        (stockRows ?? []).map((row) => {
+          const delta = deltaByIngredient.get(row.id) ?? 0;
+          const nextStock = Math.max(0, Number(row.current_stock ?? 0) + delta);
+          return supabase.from("ingredient").update({ current_stock: nextStock }).eq("id", row.id);
+        })
+      );
+      const stockUpdateErr = stockUpdateResults.find((result) => result.error)?.error;
+      if (stockUpdateErr) {
+        throw new Error(
+          `Receive tersimpan, tapi stok admin gagal diupdate: ${stockUpdateErr.message}`
+        );
+      }
+
+      const logPayload = (stockRows ?? []).flatMap((row) => {
+        const delta = deltaByIngredient.get(row.id) ?? 0;
+        if (delta === 0) return [];
+        const before = Number(row.current_stock ?? 0);
+        const after = Math.max(0, before + delta);
+        return [
+          {
+            ingredient_id: row.id,
+            business_date: businessDate || resolveWorksheetBusinessDate(),
+            event_type: "RECEIVE" as const,
+            qty_before: before,
+            qty_after: after,
+            reason: "receive saved from worksheet",
+            message: `Receive ${row.name}: ${before} -> ${after}`,
+            worksheet_session_id: activeSessionId,
+            created_by_staff_id: staff.id,
+          },
+        ];
+      });
+
+      if (logPayload.length > 0) {
+        const { error: logErr } = await supabase.from("stock_log").insert(logPayload);
+        if (logErr) {
+          throw new Error(`Stok admin terupdate, tapi audit log receive gagal: ${logErr.message}`);
+        }
+      }
+
+      setIngredients((prev) =>
+        prev.map((ing) => {
+          const delta = deltaByIngredient.get(ing.id) ?? 0;
+          if (delta === 0) return ing;
+          return { ...ing, current_stock: Math.max(0, Number(ing.current_stock ?? 0) + delta) };
+        })
+      );
     }
 
     const totals = await syncReceiveAggregate(activeSessionId);
@@ -1950,7 +2085,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       await savePendingReceiveEntries(activeSessionId);
       showSuccessToast(
-        "Receive ditambahkan. Total pasokan hari ini otomatis terakumulasi untuk semua staff."
+        "Receive tersimpan. Persediaan admin langsung ikut terupdate."
       );
     } catch (err) {
       showTranslatedSubmitError(err);
@@ -2504,12 +2639,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       activeSessionId = ensuredSessionId;
 
       const receiveTotals = await savePendingReceiveEntries(ensuredSessionId);
+      const ledgerFreshIngredients = await refreshIngredientStockFromDb();
 
-      const editableOutIngredientIds = freshIngredients
+      const editableOutIngredientIds = ledgerFreshIngredients
         .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
         .map((ing) => ing.id);
       const editableOutOwnerIds = getEditableOwnerIds(outLineOwners, editableOutIngredientIds);
-      const outLinePayload = freshIngredients
+      const outLinePayload = ledgerFreshIngredients
         .filter((ing) => editableOutIngredientIds.includes(ing.id))
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
@@ -2591,7 +2727,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan worksheet_premix_line: ${premixErr.message}`);
       }
 
-      const editableOpnameIngredients = freshIngredients.filter(
+      const editableOpnameIngredients = ledgerFreshIngredients.filter(
         (ing) => !isOwnedByOther(opnameLineOwners[ing.id])
       );
       const editableOpnameIngredientIds = editableOpnameIngredients.map((ing) => ing.id);
@@ -2707,7 +2843,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       );
       const premixUsageMap = aggregatePremixEffects.usageMap;
       const premixOutputMap = aggregatePremixEffects.outputMap;
-      const freshById = new Map(freshIngredients.map((ing) => [ing.id, ing]));
+      const freshById = new Map(ledgerFreshIngredients.map((ing) => [ing.id, ing]));
       const theoreticalIngredientIds = new Set([
         ...menuTheoreticalMap.keys(),
         ...issueTheoreticalMap.keys(),
@@ -2716,7 +2852,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const externalIngredients = (
         await fetchIngredientsByIds(supabase, externalIngredientIds)
       ).filter((ing) => ing.is_active && ing.is_stock_tracked);
-      const ledgerIngredients = [...freshIngredients, ...externalIngredients];
+      const ledgerIngredients = [...ledgerFreshIngredients, ...externalIngredients];
       const ledgerIngredientById = new Map(
         ledgerIngredients.map((ingredient) => [ingredient.id, ingredient])
       );
@@ -2732,15 +2868,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         date
       );
 
-      const localLedgerPayload: StockLedgerInsert[] = freshIngredients.map((ing) => {
+      const localLedgerPayload: StockLedgerInsert[] = ledgerFreshIngredients.map((ing) => {
         const masterStock = Number(ing.current_stock);
-        const opening_stock = Math.max(
-          0,
-          Number.isFinite(masterStock) ? masterStock : previousClosingMap.get(ing.id) ?? 0
-        );
         const receive_qty = receiveInputToStockQty(
           ing,
           String(receiveTotals.get(ing.id) ?? 0)
+        );
+        const opening_stock = Math.max(
+          0,
+          Number.isFinite(masterStock)
+            ? masterStock - receive_qty
+            : previousClosingMap.get(ing.id) ?? 0
         );
         const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
         const in_qty = receive_qty + premix_output_qty;
@@ -2862,7 +3000,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Ledger tersimpan tetapi audit log gagal dibuat: ${logErr.message}`);
       }
 
-      const aggregatedLinesForEvaluation = freshIngredients.reduce<Record<string, IngredientLineState>>(
+      const aggregatedLinesForEvaluation = ledgerFreshIngredients.reduce<Record<string, IngredientLineState>>(
         (acc, ing) => {
           const existing = lines[ing.id] ?? DEFAULT_LINE;
           acc[ing.id] = {
@@ -2876,7 +3014,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       );
 
       opnameEvalForAsync = evaluateOpnameSubmission({
-        ingredients: freshIngredients,
+        ingredients: ledgerFreshIngredients,
         lines: aggregatedLinesForEvaluation,
         ledgerRows: localLedgerPayload.map((row) => ({
           ingredient_id: row.ingredient_id,
@@ -2964,6 +3102,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                 ? "Menyimpan sales menu…"
                 : "Menyimpan opname…";
 
+  const activeTabEnabled = worksheetFeatures[activeTab];
+
   const stickySaveReceive = () =>
     runWithTypoGuard(["inQty"], () => void handleSaveReceive());
   const stickySaveOutStock = () =>
@@ -2976,7 +3116,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     runWithTypoGuard(["inQty", "closingStock", "outQty"], () => void handleSubmit());
 
   return (
-    <main className="mx-auto min-h-screen max-w-lg bg-zinc-950 pb-48">
+    <main
+      className={
+        embedded
+          ? "mx-auto w-full max-w-3xl rounded-xl border border-zinc-800 bg-zinc-950 pb-48"
+          : "mx-auto min-h-screen max-w-lg bg-zinc-950 pb-48"
+      }
+    >
       <Toast
         message={toast?.message ?? null}
         title={toast?.title}
@@ -3018,7 +3164,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         </div>
       ) : null}
 
-      <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur">
+      <header
+        className={`z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur ${
+          embedded ? "" : "sticky top-0"
+        }`}
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
@@ -3043,16 +3193,20 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               </p>
             ) : null}
           </div>
-          <LogoutButton className="shrink-0 min-h-10 rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-300 hover:border-zinc-600" />
+          {embedded ? null : (
+            <LogoutButton className="shrink-0 min-h-10 rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-300 hover:border-zinc-600" />
+          )}
         </div>
       </header>
 
       <nav
-        className="sticky top-[100px] z-10 border-b border-zinc-800 bg-zinc-950/95 px-2 py-2 backdrop-blur"
+        className={`sticky z-10 border-b border-zinc-800 bg-zinc-950/95 px-2 py-2 backdrop-blur ${
+          embedded ? "top-0" : "top-[100px]"
+        }`}
         aria-label="Worksheet tabs"
       >
         <ul className="grid grid-cols-4 gap-1">
-          {TAB_CONFIG.map(({ id, label, icon: Icon }) => {
+          {visibleTabs.map(({ id, label, icon: Icon }) => {
             const active = activeTab === id;
             return (
               <li key={id}>
@@ -3075,6 +3229,12 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           })}
         </ul>
       </nav>
+
+      {visibleTabs.length === 0 ? (
+        <section className="mx-4 mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          Worksheet staff untuk departemen ini sedang dinonaktifkan dari Master Admin.
+        </section>
+      ) : null}
 
       <section className="border-b border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-indigo-300">
@@ -3245,7 +3405,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           </p>
         ) : (
           <>
-            {activeTab === "receive" ? (
+            {activeTabEnabled && activeTab === "receive" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
                   Kamar 1 — Receive
@@ -3358,7 +3518,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               </section>
             ) : null}
 
-            {activeTab === "outstock" ? (
+            {activeTabEnabled && activeTab === "outstock" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
                   Kamar 2 — Out Stock
@@ -3520,7 +3680,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               </section>
             ) : null}
 
-            {activeTab === "opname" ? (
+            {activeTabEnabled && activeTab === "opname" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
                   Kamar 3 — Stock Opname
@@ -3586,7 +3746,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               </section>
             ) : null}
 
-            {activeTab === "premix" ? (
+            {activeTabEnabled && activeTab === "premix" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-emerald-400">
                   Kamar 4 — Produksi Premix
@@ -3745,7 +3905,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               </section>
             ) : null}
 
-            {activeTab === "issue" ? (
+            {activeTabEnabled && activeTab === "issue" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-red-400">
                   Kamar 5 — Remake / Complaint
@@ -3902,7 +4062,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               </section>
             ) : null}
 
-            {activeTab === "sold" ? (
+            {activeTabEnabled && activeTab === "sold" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
                   Kamar 6 — Menu Terjual
@@ -4012,7 +4172,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
       {!locked && canEdit && !isLoading && ingredients.length > 0 ? (
         <WorksheetStickyActionBar>
-          {activeTab === "receive" ? (
+          {activeTabEnabled && activeTab === "receive" ? (
             <button
               type="button"
               disabled={isSavingReceive || isSubmitting}
@@ -4028,7 +4188,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
             </button>
           ) : null}
 
-          {activeTab === "outstock" ? (
+          {activeTabEnabled && activeTab === "outstock" ? (
             <button
               type="button"
               disabled={isSavingOutStock || isSubmitting || outstockHasBlockingErrors}
@@ -4044,7 +4204,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
             </button>
           ) : null}
 
-          {activeTab === "opname" ? (
+          {activeTabEnabled && activeTab === "opname" ? (
             <button
               type="button"
               disabled={isSavingOpname || isSubmitting}
@@ -4060,7 +4220,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
             </button>
           ) : null}
 
-          {activeTab === "premix" ? (
+          {activeTabEnabled && activeTab === "premix" ? (
             <button
               type="button"
               disabled={isSavingPremix || isSubmitting}
@@ -4076,7 +4236,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
             </button>
           ) : null}
 
-          {activeTab === "issue" ? (
+          {activeTabEnabled && activeTab === "issue" ? (
             <div className="grid w-full gap-2 sm:grid-cols-2">
               <button
                 type="button"
@@ -4091,18 +4251,20 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                 )}
                 Simpan Remake
               </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("sold")}
-                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 font-bold text-zinc-100 active:bg-zinc-800"
-              >
-                <UtensilsCrossed className="h-5 w-5" />
-                Lanjut ke Menu
-              </button>
+              {worksheetFeatures.sold ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("sold")}
+                  className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 font-bold text-zinc-100 active:bg-zinc-800"
+                >
+                  <UtensilsCrossed className="h-5 w-5" />
+                  Lanjut ke Menu
+                </button>
+              ) : null}
             </div>
           ) : null}
 
-          {activeTab === "sold" ? (
+          {activeTabEnabled && activeTab === "sold" ? (
             <div className="grid w-full gap-2">
               <button
                 type="button"

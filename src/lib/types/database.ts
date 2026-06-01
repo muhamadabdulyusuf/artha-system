@@ -353,6 +353,13 @@ export type DemandEventRow = {
   updated_at: string;
 };
 
+export type WorksheetStaffSettingRow = {
+  department: Department;
+  tab_id: string;
+  is_enabled: boolean;
+  updated_at: string;
+};
+
 export type MenuCategory = "food" | "beverage";
 
 export type Database = {
@@ -467,6 +474,20 @@ export type Database = {
         Row: BusinessDayRow;
         Insert: { business_date: string; status?: ClosingStatus };
         Update: { status?: ClosingStatus };
+        Relationships: [];
+      };
+      worksheet_staff_setting: {
+        Row: WorksheetStaffSettingRow;
+        Insert: {
+          department: Department;
+          tab_id: string;
+          is_enabled?: boolean;
+          updated_at?: string;
+        };
+        Update: {
+          is_enabled?: boolean;
+          updated_at?: string;
+        };
         Relationships: [];
       };
       worksheet_session: {

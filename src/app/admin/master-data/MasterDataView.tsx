@@ -1,24 +1,28 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LayoutDashboard, LogOut, Package, Shield, Truck } from "lucide-react";
+import { ClipboardList, LayoutDashboard, LogOut, Package, Settings2, Shield, Truck } from "lucide-react";
 import { LogoutButton } from "@/components/auth/LogoutButton";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ADMIN_ROLES } from "@/lib/auth/routeAccess";
 import { isViewerRole } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
 import { IngredientsTab } from "@/components/admin/IngredientsTab";
+import { AdminWorksheetTab } from "@/components/admin/AdminWorksheetTab";
 import { MenuRecipeTab } from "@/components/admin/MenuRecipeTab";
 import { MonitoringDashboard } from "@/components/admin/MonitoringDashboard";
 import { SuppliersTab } from "@/components/admin/SuppliersTab";
+import { WorksheetStaffSettingsTab } from "@/components/admin/WorksheetStaffSettingsTab";
 
-type TabId = "ingredients" | "menu" | "suppliers" | "monitoring";
+type TabId = "ingredients" | "menu" | "suppliers" | "worksheet" | "monitoring" | "settings";
 
 const TABS: { id: TabId; label: string; icon: typeof Package }[] = [
   { id: "ingredients", label: "Ingredients", icon: Package },
   { id: "menu", label: "Menu & Resep", icon: LayoutDashboard },
   { id: "suppliers", label: "Supplier", icon: Truck },
+  { id: "worksheet", label: "Worksheet", icon: ClipboardList },
   { id: "monitoring", label: "Monitoring", icon: Shield },
+  { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
 export default function MasterDataView() {
@@ -40,6 +44,9 @@ function MasterDataContent() {
   }, [session]);
 
   if (!session) return null;
+  const visibleTabs = isViewerRole(session.role)
+    ? TABS.filter((tab) => tab.id === "monitoring")
+    : TABS;
 
   const roleLabel =
     session.role === "admin"
@@ -78,7 +85,7 @@ function MasterDataContent() {
           className="mb-6 flex flex-wrap gap-2 rounded-xl border border-zinc-800 bg-zinc-900/80 p-1.5"
           aria-label="Tab admin"
         >
-          {TABS.map((tab) => {
+          {visibleTabs.map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
             return (
@@ -101,7 +108,11 @@ function MasterDataContent() {
                       ? "Menu"
                       : tab.id === "suppliers"
                         ? "Supplier"
-                        : "Monitor"}
+                        : tab.id === "worksheet"
+                          ? "Worksheet"
+                        : tab.id === "monitoring"
+                          ? "Monitor"
+                          : "Setting"}
                 </span>
               </button>
             );
@@ -112,7 +123,9 @@ function MasterDataContent() {
           {activeTab === "ingredients" && <IngredientsTab />}
           {activeTab === "menu" && <MenuRecipeTab />}
           {activeTab === "suppliers" && <SuppliersTab />}
+          {activeTab === "worksheet" && <AdminWorksheetTab />}
           {activeTab === "monitoring" && <MonitoringDashboard />}
+          {activeTab === "settings" && <WorksheetStaffSettingsTab />}
         </section>
       </div>
     </div>
