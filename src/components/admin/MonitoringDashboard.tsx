@@ -26,6 +26,7 @@ import type {
   DemandEventRow,
   MenuCategory,
   MenuItemRow,
+  RecipeLineForCalc,
   StockLedgerRow,
   WorksheetEditRequestRow,
   SupplierIngredientPriceRow,
@@ -83,9 +84,31 @@ type InventorySummaryRow = {
   department: Department;
   unit: string;
   current_stock: number;
+  live_stock: number;
+  live_delta: number;
   minimum_stock: number;
   stock_status: "LOW STOCK" | "OK";
   primary_supplier_name: string;
+};
+
+type LiveStockRow = {
+  ingredientId: string;
+  ingredientName: string;
+  department: Department;
+  unit: string;
+  officialStock: number;
+  receiveQty: number;
+  premixOutputQty: number;
+  premixUsageQty: number;
+  menuUsageQty: number;
+  issueUsageQty: number;
+  outQty: number;
+  opnameQty: number | null;
+  liveStock: number;
+  liveDelta: number;
+  minimumStock: number;
+  status: "LOW STOCK" | "OK";
+  sourceCount: number;
 };
 
 type SalesExportRow = {
@@ -310,6 +333,24 @@ type PublicHolidayApiRow = {
   name?: string;
 };
 
+type WorksheetSessionMonitorRow = {
+  id: string;
+  business_date: string;
+  department: Department;
+  status: string | null;
+};
+
+type PremixRecipeRow = {
+  id: string;
+  yield_quantity: number;
+};
+
+type PremixComponentRow = {
+  recipe_id: string;
+  ingredient_id: string;
+  qty_per_batch: number;
+};
+
 type MonitoringTabId = "overview" | "demand" | "inventory" | "sales" | "control" | "export";
 
 const MONITORING_TABS: { id: MonitoringTabId; label: string; icon: typeof Package }[] = [
@@ -341,6 +382,8 @@ const DEMAND_EVENT_TYPE_LABEL: Record<string, string> = {
   school_holiday: "Libur Sekolah",
   other: "Lainnya",
 };
+
+const FINAL_WORKSHEET_STATUSES = new Set(["SUBMITTED", "ADJUSTED", "LOCKED", "PENDING_APPROVAL_ADMIN"]);
 
 type IngredientWithPrimarySupplier = IngredientRow & {
   supplier?: { id: string; name: string; phone_number: string | null } | null;
@@ -412,6 +455,19 @@ function firstCsvUrl(value: string): string {
     .split(";")
     .map((url) => url.trim())
     .find(Boolean) ?? "";
+}
+
+function addToNumericMap(map: Map<string, number>, key: string, value: number): void {
+  if (!Number.isFinite(value) || value === 0) return;
+  map.set(key, (map.get(key) ?? 0) + value);
+}
+
+function receiveQtyToStockUnit(
+  ingredient: Pick<IngredientRow, "purchase_to_stock_factor"> | undefined,
+  quantity: number
+): number {
+  const factor = Number(ingredient?.purchase_to_stock_factor ?? 1);
+  return quantity * (Number.isFinite(factor) && factor > 0 ? factor : 1);
 }
 
 function excelHyperlinkFormula(url: string): string {
@@ -644,7 +700,9 @@ async function downloadInventorySummaryXlsx(
   sheet.columns = [
     { header: "Bahan", key: "ingredient", width: 32 },
     { header: "Dept", key: "department", width: 12 },
-    { header: "Stok Sekarang", key: "currentStock", width: 18 },
+    { header: "Stok Resmi", key: "currentStock", width: 18 },
+    { header: "Live Stock", key: "liveStock", width: 18 },
+    { header: "Selisih Live", key: "liveDelta", width: 18 },
     { header: "Unit", key: "unit", width: 10 },
     { header: "Minimum Stock", key: "minimumStock", width: 18 },
     { header: "Status", key: "status", width: 14 },
@@ -663,6 +721,8 @@ async function downloadInventorySummaryXlsx(
       ingredient: row.ingredient_name,
       department: row.department,
       currentStock: row.current_stock,
+      liveStock: row.live_stock,
+      liveDelta: row.live_delta,
       unit: row.unit,
       minimumStock: row.minimum_stock,
       status: row.stock_status,
@@ -1103,6 +1163,133 @@ function LowStockBadge() {
   );
 }
 
+function LiveStockTable({
+  rows,
+  businessDate,
+}: {
+  rows: LiveStockRow[];
+  businessDate: string;
+}) {
+  const changedRows = rows.filter((row) => row.sourceCount > 0).length;
+
+  return (
+    <div className="mb-4 rounded-xl border border-indigo-500/25 bg-zinc-950/60 p-4">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-100">Live Stock Worksheet</h4>
+          <p className="text-xs text-slate-500">
+            Stok resmi + draft worksheet per {formatBusinessDateLabel(businessDate)}.
+          </p>
+        </div>
+        <span className="rounded-full bg-indigo-500/10 px-2.5 py-1 text-xs font-medium tabular-nums text-indigo-200">
+          {changedRows} bahan bergerak
+        </span>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-slate-800">
+        <table className="w-full min-w-[1080px] text-left text-sm">
+          <thead className="bg-zinc-950 text-slate-400">
+            <tr>
+              <th className="px-3 py-2 font-medium">Bahan</th>
+              <th className="px-3 py-2 font-medium">Dept</th>
+              <th className="px-3 py-2 text-right font-medium">Stok Resmi</th>
+              <th className="px-3 py-2 text-right font-medium">Receive</th>
+              <th className="px-3 py-2 text-right font-medium">Premix +/-</th>
+              <th className="px-3 py-2 text-right font-medium">Sales</th>
+              <th className="px-3 py-2 text-right font-medium">Remake</th>
+              <th className="px-3 py-2 text-right font-medium">Out</th>
+              <th className="px-3 py-2 text-right font-medium">Opname</th>
+              <th className="px-3 py-2 text-right font-medium">Live</th>
+              <th className="px-3 py-2 text-right font-medium">Delta</th>
+              <th className="px-3 py-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/80">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
+                  Tidak ada bahan cocok dengan pencarian.
+                </td>
+              </tr>
+            ) : (
+              rows.slice(0, 80).map((row) => {
+                const premixNet = row.premixOutputQty - row.premixUsageQty;
+                return (
+                  <tr
+                    key={row.ingredientId}
+                    className={row.status === "LOW STOCK" ? "bg-red-950/10" : "hover:bg-zinc-900/60"}
+                  >
+                    <td className="px-3 py-2 font-medium text-slate-100">
+                      <div className="flex items-center gap-2">
+                        <span>{row.ingredientName}</span>
+                        {row.status === "LOW STOCK" ? <LowStockBadge /> : null}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                      {formatQtyWithUnit(row.officialStock, row.unit)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
+                      {row.receiveQty > 0 ? `+${formatQtyWithUnit(row.receiveQty, row.unit)}` : "-"}
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right tabular-nums ${
+                        premixNet >= 0 ? "text-emerald-300" : "text-red-300"
+                      }`}
+                    >
+                      {premixNet === 0
+                        ? "-"
+                        : `${premixNet > 0 ? "+" : ""}${formatQtyWithUnit(premixNet, row.unit)}`}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-red-300">
+                      {row.menuUsageQty > 0 ? `-${formatQtyWithUnit(row.menuUsageQty, row.unit)}` : "-"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-red-300">
+                      {row.issueUsageQty > 0 ? `-${formatQtyWithUnit(row.issueUsageQty, row.unit)}` : "-"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-red-300">
+                      {row.outQty > 0 ? `-${formatQtyWithUnit(row.outQty, row.unit)}` : "-"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-indigo-200">
+                      {row.opnameQty === null ? "-" : formatQtyWithUnit(row.opnameQty, row.unit)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-100">
+                      {formatQtyWithUnit(row.liveStock, row.unit)}
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right tabular-nums ${
+                        row.liveDelta < 0
+                          ? "text-red-300"
+                          : row.liveDelta > 0
+                            ? "text-emerald-300"
+                            : "text-slate-500"
+                      }`}
+                    >
+                      {row.liveDelta === 0
+                        ? "-"
+                        : `${row.liveDelta > 0 ? "+" : ""}${formatQtyWithUnit(row.liveDelta, row.unit)}`}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          row.status === "LOW STOCK"
+                            ? "bg-red-500/15 text-red-300"
+                            : "bg-emerald-500/10 text-emerald-300"
+                        }`}
+                      >
+                        {row.status}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DepartmentLedgerTable({
   title,
   emoji,
@@ -1449,11 +1636,13 @@ export function MonitoringDashboard() {
   const [endDate, setEndDate] = useState(() => resolveBusinessDate());
   const [activeMonitoringTab, setActiveMonitoringTab] = useState<MonitoringTabId>("overview");
   const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [ledgerExportRows, setLedgerExportRows] = useState<StockLedgerExportRow[]>([]);
   const [inventorySummaryRows, setInventorySummaryRows] = useState<InventorySummaryRow[]>([]);
+  const [liveStockRows, setLiveStockRows] = useState<LiveStockRow[]>([]);
   const [lowStockInventoryRows, setLowStockInventoryRows] = useState<LowStockInventoryRow[]>([]);
   const [salesExportRows, setSalesExportRows] = useState<SalesExportRow[]>([]);
   const [salesDemandRows, setSalesDemandRows] = useState<SalesDemandRow[]>([]);
@@ -1561,6 +1750,16 @@ export function MonitoringDashboard() {
         row.stock_status.toLowerCase().includes(normalizedSearch)
     );
   }, [inventorySummaryRows, normalizedSearch]);
+
+  const filteredLiveStockRows = useMemo(() => {
+    if (!normalizedSearch) return liveStockRows;
+    return liveStockRows.filter(
+      (row) =>
+        row.ingredientName.toLowerCase().includes(normalizedSearch) ||
+        row.department.toLowerCase().includes(normalizedSearch) ||
+        row.status.toLowerCase().includes(normalizedSearch)
+    );
+  }, [liveStockRows, normalizedSearch]);
 
   const filteredSalesRows = useMemo(() => {
     if (!normalizedSearch) return salesExportRows;
@@ -1872,7 +2071,7 @@ export function MonitoringDashboard() {
       return;
     }
 
-    setLoading(true);
+    if (!hasLoadedOnce) setLoading(true);
     setError(null);
 
     const rangeStart = startDate;
@@ -1904,6 +2103,8 @@ export function MonitoringDashboard() {
           department: ingredient.department,
           unit: ingredient.unit,
           current_stock: currentStock,
+          live_stock: currentStock,
+          live_delta: 0,
           minimum_stock: minimumStock,
           stock_status: isLowStockCondition(currentStock, minimumStock) ? "LOW STOCK" : "OK",
           primary_supplier_name: ingredient.supplier?.name ?? "",
@@ -1934,7 +2135,7 @@ export function MonitoringDashboard() {
 
     const { data: sessionsInRange, error: sessionRangeErr } = await supabase
       .from("worksheet_session")
-      .select("id, business_date, department")
+      .select("id, business_date, department, status")
       .gte("business_date", rangeStart)
       .lte("business_date", rangeEnd);
 
@@ -1943,6 +2144,285 @@ export function MonitoringDashboard() {
       setLoading(false);
       return;
     }
+
+    const liveSessions = ((sessionsInRange ?? []) as WorksheetSessionMonitorRow[]).filter(
+      (session) =>
+        session.business_date === rangeEnd &&
+        !FINAL_WORKSHEET_STATUSES.has(String(session.status ?? "DRAFT"))
+    );
+    const liveSessionIds = liveSessions.map((session) => session.id);
+    const receiveLiveMap = new Map<string, number>();
+    const outLiveMap = new Map<string, number>();
+    const opnameLiveMap = new Map<string, number>();
+    const premixOutputLiveMap = new Map<string, number>();
+    const premixUsageLiveMap = new Map<string, number>();
+    const menuUsageLiveMap = new Map<string, number>();
+    const issueUsageLiveMap = new Map<string, number>();
+
+    if (liveSessionIds.length > 0) {
+      const [
+        receiveLiveResult,
+        outLiveResult,
+        opnameLiveResult,
+        premixLiveResult,
+        soldLiveResult,
+        issueLiveResult,
+      ] = await Promise.all([
+        supabase
+          .from("worksheet_receive_entry")
+          .select("ingredient_id, quantity")
+          .in("session_id", liveSessionIds),
+        supabase
+          .from("worksheet_out_line")
+          .select("ingredient_id, quantity")
+          .in("session_id", liveSessionIds),
+        supabase
+          .from("worksheet_opname_line")
+          .select("ingredient_id, closing_stock")
+          .in("session_id", liveSessionIds),
+        supabase
+          .from("worksheet_premix_line")
+          .select("output_ingredient_id, recipe_id, batch_quantity")
+          .in("session_id", liveSessionIds),
+        supabase
+          .from("worksheet_sold_line")
+          .select("menu_item_id, quantity_sold")
+          .in("session_id", liveSessionIds),
+        supabase
+          .from("worksheet_menu_issue_line")
+          .select("menu_item_id, quantity")
+          .in("session_id", liveSessionIds),
+      ]);
+
+      const liveLoadError =
+        receiveLiveResult.error ??
+        outLiveResult.error ??
+        opnameLiveResult.error ??
+        premixLiveResult.error ??
+        soldLiveResult.error ??
+        issueLiveResult.error;
+
+      if (liveLoadError) {
+        setError(`Gagal memuat live stock: ${liveLoadError.message}`);
+        setLoading(false);
+        return;
+      }
+
+      for (const row of receiveLiveResult.data ?? []) {
+        const ingredient = ingredientMap.get(row.ingredient_id);
+        addToNumericMap(
+          receiveLiveMap,
+          row.ingredient_id,
+          receiveQtyToStockUnit(ingredient, Number(row.quantity ?? 0))
+        );
+      }
+
+      for (const row of outLiveResult.data ?? []) {
+        addToNumericMap(outLiveMap, row.ingredient_id, Number(row.quantity ?? 0));
+      }
+
+      for (const row of opnameLiveResult.data ?? []) {
+        addToNumericMap(opnameLiveMap, row.ingredient_id, Number(row.closing_stock ?? 0));
+      }
+
+      const premixRows = premixLiveResult.data ?? [];
+      const recipeIds = Array.from(new Set(premixRows.map((row) => row.recipe_id).filter(Boolean)));
+      const menuQtyById = new Map<string, number>();
+      const issueQtyByMenuId = new Map<string, number>();
+
+      for (const row of soldLiveResult.data ?? []) {
+        addToNumericMap(menuQtyById, row.menu_item_id, Number(row.quantity_sold ?? 0));
+      }
+
+      for (const row of issueLiveResult.data ?? []) {
+        addToNumericMap(issueQtyByMenuId, row.menu_item_id, Number(row.quantity ?? 0));
+      }
+
+      if (recipeIds.length > 0) {
+        const [recipeResult, componentResult] = await Promise.all([
+          supabase.from("recipes").select("id, yield_quantity").in("id", recipeIds),
+          supabase.from("recipe_component").select("recipe_id, ingredient_id, qty_per_batch").in("recipe_id", recipeIds),
+        ]);
+
+        if (recipeResult.error || componentResult.error) {
+          setError(
+            `Gagal memuat resep premix live: ${
+              recipeResult.error?.message ?? componentResult.error?.message ?? ""
+            }`
+          );
+          setLoading(false);
+          return;
+        }
+
+        const recipeById = new Map(
+          ((recipeResult.data ?? []) as PremixRecipeRow[]).map((recipe) => [recipe.id, recipe])
+        );
+        const componentsByRecipeId = new Map<string, PremixComponentRow[]>();
+        for (const component of (componentResult.data ?? []) as PremixComponentRow[]) {
+          componentsByRecipeId.set(component.recipe_id, [
+            ...(componentsByRecipeId.get(component.recipe_id) ?? []),
+            component,
+          ]);
+        }
+
+        for (const row of premixRows) {
+          const batchQty = Number(row.batch_quantity ?? 0);
+          if (batchQty <= 0) continue;
+          const recipe = recipeById.get(row.recipe_id);
+          const outputQty = batchQty * Number(recipe?.yield_quantity ?? 1);
+          addToNumericMap(premixOutputLiveMap, row.output_ingredient_id, outputQty);
+
+          for (const component of componentsByRecipeId.get(row.recipe_id) ?? []) {
+            addToNumericMap(
+              premixUsageLiveMap,
+              component.ingredient_id,
+              Number(component.qty_per_batch ?? 0) * batchQty
+            );
+          }
+        }
+      }
+
+      const liveMenuIds = Array.from(
+        new Set([...menuQtyById.keys(), ...issueQtyByMenuId.keys()])
+      );
+
+      if (liveMenuIds.length > 0) {
+        const { data: recipeVersions, error: menuRecipeErr } = await supabase
+          .from("menu_recipe_version")
+          .select(
+            `
+            menu_item_id,
+            recipe_line (
+              ingredient_id,
+              quantity_per_serving
+            )
+          `
+          )
+          .in("menu_item_id", liveMenuIds)
+          .eq("is_active", true);
+
+        if (menuRecipeErr) {
+          setError(`Gagal memuat resep menu live: ${menuRecipeErr.message}`);
+          setLoading(false);
+          return;
+        }
+
+        const versions = (recipeVersions ?? []) as unknown as {
+          menu_item_id: string;
+          recipe_line?: RecipeLineForCalc[];
+        }[];
+
+        for (const version of versions) {
+          const soldQty = menuQtyById.get(version.menu_item_id) ?? 0;
+          const issueQty = issueQtyByMenuId.get(version.menu_item_id) ?? 0;
+          for (const recipeLine of version.recipe_line ?? []) {
+            const perServing = Number(recipeLine.quantity_per_serving ?? 0);
+            addToNumericMap(menuUsageLiveMap, recipeLine.ingredient_id, soldQty * perServing);
+            addToNumericMap(issueUsageLiveMap, recipeLine.ingredient_id, issueQty * perServing);
+          }
+        }
+      }
+    }
+
+    const liveRows = Array.from(ingredientMap.values())
+      .map((ingredient) => {
+        const officialStock = Number(ingredient.current_stock ?? 0);
+        const receiveQty = receiveLiveMap.get(ingredient.id) ?? 0;
+        const premixOutputQty = premixOutputLiveMap.get(ingredient.id) ?? 0;
+        const premixUsageQty = premixUsageLiveMap.get(ingredient.id) ?? 0;
+        const menuUsageQty = menuUsageLiveMap.get(ingredient.id) ?? 0;
+        const issueUsageQty = issueUsageLiveMap.get(ingredient.id) ?? 0;
+        const outQty = outLiveMap.get(ingredient.id) ?? 0;
+        const opnameQty = opnameLiveMap.has(ingredient.id)
+          ? opnameLiveMap.get(ingredient.id) ?? 0
+          : null;
+        const movementStock =
+          officialStock +
+          receiveQty +
+          premixOutputQty -
+          premixUsageQty -
+          menuUsageQty -
+          issueUsageQty -
+          outQty;
+        const liveStock = opnameQty ?? movementStock;
+        const minimumStock = Number(ingredient.minimum_stock ?? 0);
+        const sourceCount = [
+          receiveQty,
+          premixOutputQty,
+          premixUsageQty,
+          menuUsageQty,
+          issueUsageQty,
+          outQty,
+          opnameQty ?? 0,
+        ].filter((value) => Math.abs(value) > 0).length;
+
+        return {
+          ingredientId: ingredient.id,
+          ingredientName: ingredient.name,
+          department: ingredient.department,
+          unit: ingredient.unit,
+          officialStock,
+          receiveQty,
+          premixOutputQty,
+          premixUsageQty,
+          menuUsageQty,
+          issueUsageQty,
+          outQty,
+          opnameQty,
+          liveStock,
+          liveDelta: liveStock - officialStock,
+          minimumStock,
+          status: isLowStockCondition(liveStock, minimumStock) ? "LOW STOCK" : "OK",
+          sourceCount,
+        } satisfies LiveStockRow;
+      })
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === "LOW STOCK" ? -1 : 1;
+        if (b.sourceCount !== a.sourceCount) return b.sourceCount - a.sourceCount;
+        const deptCmp = a.department.localeCompare(b.department);
+        if (deptCmp !== 0) return deptCmp;
+        return a.ingredientName.localeCompare(b.ingredientName);
+      });
+
+    setLiveStockRows(liveRows);
+
+    const liveRowByIngredientId = new Map(liveRows.map((row) => [row.ingredientId, row]));
+    setInventorySummaryRows(
+      summaryRows
+        .map((row) => {
+          const liveRow = liveRowByIngredientId.get(row.ingredient_id);
+          const liveStock = liveRow?.liveStock ?? row.current_stock;
+          return {
+            ...row,
+            live_stock: liveStock,
+            live_delta: liveStock - row.current_stock,
+            stock_status: isLowStockCondition(liveStock, row.minimum_stock) ? "LOW STOCK" : "OK",
+          } satisfies InventorySummaryRow;
+        })
+        .sort((a, b) => {
+          const deptCmp = a.department.localeCompare(b.department);
+          if (deptCmp !== 0) return deptCmp;
+          if (a.stock_status !== b.stock_status) return a.stock_status === "LOW STOCK" ? -1 : 1;
+          return a.ingredient_name.localeCompare(b.ingredient_name);
+        })
+    );
+    setLowStockInventoryRows(
+      liveRows
+        .filter((row) => row.status === "LOW STOCK")
+        .map((row) => {
+          const ingredient = ingredientMap.get(row.ingredientId);
+          return {
+            ingredientId: row.ingredientId,
+            ingredientName: row.ingredientName,
+            unit: row.unit,
+            currentStock: row.liveStock,
+            minimumStock: row.minimumStock,
+            primarySupplierId: ingredient?.primary_supplier_id ?? null,
+            primarySupplierName: ingredient?.supplier?.name ?? "",
+            primarySupplierPhone: ingredient?.supplier?.phone_number ?? null,
+          };
+        })
+    );
 
     const sessionIds = (sessionsInRange ?? []).map((s) => s.id);
 
@@ -2514,12 +2994,25 @@ export function MonitoringDashboard() {
       setSuppliers(supplierRows ?? []);
     }
 
+    setHasLoadedOnce(true);
     setLoading(false);
-  }, [supabase, startDate, endDate, dateRangeInvalid]);
+  }, [supabase, startDate, endDate, dateRangeInvalid, hasLoadedOnce]);
 
   useEffect(() => {
     void loadDashboard();
   }, [loadDashboard, refreshKey]);
+
+  useEffect(() => {
+    if (!["overview", "inventory", "control"].includes(activeMonitoringTab)) return;
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        setRefreshKey((key) => key + 1);
+      }
+    }, 15_000);
+
+    return () => window.clearInterval(timer);
+  }, [activeMonitoringTab]);
 
   useEffect(() => {
     if (getWibWeekdayIndex() === 4) {
@@ -3740,6 +4233,8 @@ export function MonitoringDashboard() {
                 {isSingleDayRange ? "hari ini" : `per ${formatBusinessDateLabel(endDate)}`}.
               </p>
             </div>
+
+            <LiveStockTable rows={filteredLiveStockRows} businessDate={endDate} />
 
             {lowStockOrderGroups.length > 0 ? (
               <div className="mb-4 rounded-xl border border-slate-800 bg-zinc-950/60 p-4">

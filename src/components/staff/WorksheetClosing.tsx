@@ -432,6 +432,22 @@ function computePremixEffects(
   return { outputMap, usageMap };
 }
 
+function computePremixEffectsFromTotals(
+  premixItems: PremixItemWithRecipe[],
+  premixQuantityTotals: Map<string, number>
+): {
+  outputMap: Map<string, number>;
+  usageMap: Map<string, number>;
+} {
+  const quantities = Object.fromEntries(
+    Array.from(premixQuantityTotals.entries()).map(([id, quantity]) => [
+      id,
+      String(quantity),
+    ])
+  );
+  return computePremixEffects(premixItems, quantities);
+}
+
 function createDefaultLine(preset?: Partial<IngredientLineState>): IngredientLineState {
   return {
     inQty: preset?.inQty ?? "",
@@ -784,6 +800,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [receiveEntrySummaries, setReceiveEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
   const [soldItems, setSoldItems] = useState<Record<string, string>>({});
   const [soldEntrySummaries, setSoldEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
+  const [outEntrySummaries, setOutEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
+  const [opnameEntrySummaries, setOpnameEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
+  const [premixEntrySummaries, setPremixEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
+  const [issueEntrySummaries, setIssueEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
   const [outLineOwners, setOutLineOwners] = useState<Record<string, WorksheetLineOwner>>({});
   const [opnameLineOwners, setOpnameLineOwners] = useState<Record<string, WorksheetLineOwner>>({});
   const [premixLineOwners, setPremixLineOwners] = useState<Record<string, WorksheetLineOwner>>({});
@@ -859,11 +879,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     return premixItems.filter((item) => item.name.toLowerCase().includes(normalizedSearch));
   }, [normalizedSearch, premixItems]);
 
-  const premixEffects = useMemo(
-    () => computePremixEffects(premixItems, premixQuantities),
-    [premixItems, premixQuantities]
-  );
-
   const outstockHasBlockingErrors = useMemo(
     () => hasOutstockValidationErrors(ingredients, lines),
     [ingredients, lines]
@@ -924,6 +939,14 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     [lines, receiveEntryInputs]
   );
 
+  const summarizeStaffEntry = useCallback(
+    (summary: SoldEntrySummary) =>
+      isCurrentStaffOwner({ staffId: summary.staffId, staffName: summary.staffName })
+        ? `${summary.staffName}: ${formatQty(summary.quantity)} - punya kamu`
+        : `${summary.staffName}: ${formatQty(summary.quantity)}`,
+    [isCurrentStaffOwner]
+  );
+
   const getEditableOwnerIds = useCallback(
     (ownerMap: Record<string, WorksheetLineOwner>, lineIds: string[]) => {
       const ids = new Set<string>();
@@ -935,6 +958,68 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       return Array.from(ids);
     },
     [isCurrentStaffOwner, staff?.id]
+  );
+
+  const replaceCurrentStaffSummaries = useCallback(
+    (
+      previous: Record<string, SoldEntrySummary[]>,
+      lineIds: string[],
+      quantitiesByLineId: Map<string, number>
+    ) => {
+      const next = { ...previous };
+      for (const lineId of lineIds) {
+        const retained = (next[lineId] ?? []).filter(
+          (entry) => !isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
+        );
+        const quantity = quantitiesByLineId.get(lineId) ?? 0;
+        next[lineId] =
+          quantity > 0
+            ? [...retained, { ...currentStaffOwner(), quantity }]
+            : retained;
+        if (next[lineId].length === 0) delete next[lineId];
+      }
+      return next;
+    },
+    [currentStaffOwner, isCurrentStaffOwner]
+  );
+
+  const renderEntrySummaries = useCallback(
+    (entries: SoldEntrySummary[], unit: string, totalLabel = "Akumulasi tersimpan") => {
+      if (entries.length === 0) return null;
+      const total = entries.reduce((sum, entry) => sum + entry.quantity, 0);
+
+      return (
+        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+          <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+            <span className="font-medium text-zinc-400">{totalLabel}</span>
+            <span className="font-semibold tabular-nums text-indigo-200">
+              {formatQty(total)} {unit}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {entries.map((entry, index) => {
+              const ownEntry = isCurrentStaffOwner({
+                staffId: entry.staffId,
+                staffName: entry.staffName,
+              });
+              return (
+                <span
+                  key={`${entry.staffId ?? entry.staffName}-${index}`}
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                    ownEntry
+                      ? "bg-emerald-500/15 text-emerald-200"
+                      : "bg-zinc-800 text-zinc-300"
+                  }`}
+                >
+                  {summarizeStaffEntry(entry)} {unit}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      );
+    },
+    [isCurrentStaffOwner, summarizeStaffEntry]
   );
 
   const refreshIngredientStockFromDb = useCallback(async () => {
@@ -1179,6 +1264,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     let receivePreset: Record<string, string> = {};
     setReceiveEntrySummaries({});
     setSoldEntrySummaries({});
+    setOutEntrySummaries({});
+    setOpnameEntrySummaries({});
+    setPremixEntrySummaries({});
+    setIssueEntrySummaries({});
     setOutLineOwners({});
     setOpnameLineOwners({});
     setPremixLineOwners({});
@@ -1209,17 +1298,28 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         .eq("session_id", ws.id);
 
       const nextOutOwners: Record<string, WorksheetLineOwner> = {};
+      const nextOutSummaries: Record<string, SoldEntrySummary[]> = {};
       for (const row of (outLines ?? []) as unknown as OutLineJoined[]) {
-        ingredientPreset[row.ingredient_id] = {
-          ...ingredientPreset[row.ingredient_id],
-          outQty: Number(row.quantity) === 0 ? "" : String(row.quantity),
-          outNote: row.note ?? "",
-          outPhotoUrl: row.photo_url ?? "",
-          outPhotoPublicId: row.photo_public_id ?? "",
-        };
-        nextOutOwners[row.ingredient_id] = resolveLineOwner(row);
+        const quantity = Number(row.quantity);
+        if (quantity <= 0) continue;
+        const owner = resolveLineOwner(row);
+        nextOutSummaries[row.ingredient_id] = [
+          ...(nextOutSummaries[row.ingredient_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+        ];
+        if (isCurrentStaffOwner(owner)) {
+          ingredientPreset[row.ingredient_id] = {
+            ...ingredientPreset[row.ingredient_id],
+            outQty: String(row.quantity),
+            outNote: row.note ?? "",
+            outPhotoUrl: row.photo_url ?? "",
+            outPhotoPublicId: row.photo_public_id ?? "",
+          };
+          nextOutOwners[row.ingredient_id] = owner;
+        }
       }
       setOutLineOwners(nextOutOwners);
+      setOutEntrySummaries(nextOutSummaries);
 
       const { data: soldEntries, error: soldEntryErr } = await supabase
         .from("worksheet_sold_entry")
@@ -1276,17 +1376,28 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         .eq("session_id", ws.id);
 
       const nextIssueOwners: Record<string, WorksheetLineOwner> = {};
+      const nextIssueSummaries: Record<string, SoldEntrySummary[]> = {};
       for (const row of (issueLines ?? []) as unknown as IssueLineJoined[]) {
-        issuePreset[row.menu_item_id] = {
-          quantity: Number(row.quantity) === 0 ? "" : String(row.quantity),
-          reason: normalizeIssueReason(row.reason),
-          note: row.note ?? "",
-          photoUrl: row.photo_url ?? "",
-          photoPublicId: row.photo_public_id ?? "",
-        };
-        nextIssueOwners[row.menu_item_id] = resolveLineOwner(row);
+        const quantity = Number(row.quantity);
+        if (quantity <= 0) continue;
+        const owner = resolveLineOwner(row);
+        nextIssueSummaries[row.menu_item_id] = [
+          ...(nextIssueSummaries[row.menu_item_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+        ];
+        if (isCurrentStaffOwner(owner)) {
+          issuePreset[row.menu_item_id] = {
+            quantity: String(row.quantity),
+            reason: normalizeIssueReason(row.reason),
+            note: row.note ?? "",
+            photoUrl: row.photo_url ?? "",
+            photoPublicId: row.photo_public_id ?? "",
+          };
+          nextIssueOwners[row.menu_item_id] = owner;
+        }
       }
       setIssueLineOwners(nextIssueOwners);
+      setIssueEntrySummaries(nextIssueSummaries);
 
       const { data: premixLines } = await supabase
         .from("worksheet_premix_line")
@@ -1294,12 +1405,22 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         .eq("session_id", ws.id);
 
       const nextPremixOwners: Record<string, WorksheetLineOwner> = {};
+      const nextPremixSummaries: Record<string, SoldEntrySummary[]> = {};
       for (const row of (premixLines ?? []) as unknown as PremixLineJoined[]) {
-        premixPreset[row.output_ingredient_id] =
-          Number(row.batch_quantity) === 0 ? "" : String(row.batch_quantity);
-        nextPremixOwners[row.output_ingredient_id] = resolveLineOwner(row);
+        const quantity = Number(row.batch_quantity);
+        if (quantity <= 0) continue;
+        const owner = resolveLineOwner(row);
+        nextPremixSummaries[row.output_ingredient_id] = [
+          ...(nextPremixSummaries[row.output_ingredient_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+        ];
+        if (isCurrentStaffOwner(owner)) {
+          premixPreset[row.output_ingredient_id] = String(row.batch_quantity);
+          nextPremixOwners[row.output_ingredient_id] = owner;
+        }
       }
       setPremixLineOwners(nextPremixOwners);
+      setPremixEntrySummaries(nextPremixSummaries);
 
       const { data: opnameLines } = await supabase
         .from("worksheet_opname_line")
@@ -1307,14 +1428,24 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         .eq("session_id", ws.id);
 
       const nextOpnameOwners: Record<string, WorksheetLineOwner> = {};
+      const nextOpnameSummaries: Record<string, SoldEntrySummary[]> = {};
       for (const row of (opnameLines ?? []) as unknown as OpnameLineJoined[]) {
-        ingredientPreset[row.ingredient_id] = {
-          ...ingredientPreset[row.ingredient_id],
-          closingStock: String(row.closing_stock),
-        };
-        nextOpnameOwners[row.ingredient_id] = resolveLineOwner(row);
+        const quantity = Number(row.closing_stock);
+        const owner = resolveLineOwner(row);
+        nextOpnameSummaries[row.ingredient_id] = [
+          ...(nextOpnameSummaries[row.ingredient_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+        ];
+        if (isCurrentStaffOwner(owner)) {
+          ingredientPreset[row.ingredient_id] = {
+            ...ingredientPreset[row.ingredient_id],
+            closingStock: String(row.closing_stock),
+          };
+          nextOpnameOwners[row.ingredient_id] = owner;
+        }
       }
       setOpnameLineOwners(nextOpnameOwners);
+      setOpnameEntrySummaries(nextOpnameSummaries);
 
       const { data: ledgers } = await supabase
         .from("stock_ledger")
@@ -1352,6 +1483,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     initIngredientLines,
     initPremixQuantities,
     initSoldItems,
+    isCurrentStaffOwner,
     refreshReceiveEntrySummaries,
     selectedBusinessDate,
     staff,
@@ -1861,6 +1993,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       for (const ingredientId of editableIngredientIds) delete nextOwners[ingredientId];
       for (const row of outLinePayload) nextOwners[row.ingredient_id] = currentStaffOwner();
       setOutLineOwners(nextOwners);
+      setOutEntrySummaries((prev) =>
+        replaceCurrentStaffSummaries(
+          prev,
+          editableIngredientIds,
+          new Map(outLinePayload.map((row) => [row.ingredient_id, row.quantity]))
+        )
+      );
 
       showSuccessToast("Out stock tersimpan. Form tetap bisa diedit untuk koreksi typo.");
     } catch (err) {
@@ -1882,7 +2021,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const freshIngredients = await refreshIngredientStockFromDb();
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
 
-      const blankIngredientIds: string[] = [];
       const editableIngredients = freshIngredients.filter(
         (ing) => !isOwnedByOther(opnameLineOwners[ing.id])
       );
@@ -1893,7 +2031,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const opnamePayload = editableIngredients.flatMap((ing) => {
         const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
         if (isBlankQty(raw)) {
-          blankIngredientIds.push(ing.id);
           return [];
         }
 
@@ -1912,25 +2049,24 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         ];
       });
 
-      const { error: clearBlankErr } =
-        blankIngredientIds.length > 0
+      const editableOpnameIngredientIds = editableIngredients.map((ing) => ing.id);
+      const { error: clearOpnameErr } =
+        editableOpnameIngredientIds.length > 0
           ? await supabase
               .from("worksheet_opname_line")
               .delete()
               .eq("session_id", activeSessionId)
-              .in("ingredient_id", blankIngredientIds)
+              .in("ingredient_id", editableOpnameIngredientIds)
               .or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
           : { error: null };
 
-      if (clearBlankErr) {
-        throw new Error(`Gagal membersihkan draft opname kosong: ${clearBlankErr.message}`);
+      if (clearOpnameErr) {
+        throw new Error(`Gagal membersihkan draft opname: ${clearOpnameErr.message}`);
       }
 
       const { error: opnameErr } =
         opnamePayload.length > 0
-          ? await supabase
-              .from("worksheet_opname_line")
-              .upsert(opnamePayload, { onConflict: "session_id,ingredient_id" })
+          ? await supabase.from("worksheet_opname_line").insert(opnamePayload)
           : { error: null };
 
       if (opnameErr) {
@@ -1938,9 +2074,16 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
 
       const nextOwners = { ...opnameLineOwners };
-      for (const ingredientId of blankIngredientIds) delete nextOwners[ingredientId];
+      for (const ingredientId of editableOpnameIngredientIds) delete nextOwners[ingredientId];
       for (const row of opnamePayload) nextOwners[row.ingredient_id] = currentStaffOwner();
       setOpnameLineOwners(nextOwners);
+      setOpnameEntrySummaries((prev) =>
+        replaceCurrentStaffSummaries(
+          prev,
+          editableOpnameIngredientIds,
+          new Map(opnamePayload.map((row) => [row.ingredient_id, row.closing_stock]))
+        )
+      );
 
       showSuccessToast("Draft opname tersimpan. Ledger final dibuat saat Submit Report Closing.");
     } catch (err) {
@@ -2011,6 +2154,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       for (const premixId of editablePremixIds) delete nextOwners[premixId];
       for (const row of payload) nextOwners[row.output_ingredient_id] = currentStaffOwner();
       setPremixLineOwners(nextOwners);
+      setPremixEntrySummaries((prev) =>
+        replaceCurrentStaffSummaries(
+          prev,
+          editablePremixIds,
+          new Map(payload.map((row) => [row.output_ingredient_id, row.batch_quantity]))
+        )
+      );
 
       showSuccessToast(
         hasPendingReceive
@@ -2235,6 +2385,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     for (const menuId of editableIssueMenuIds) delete nextIssueOwners[menuId];
     for (const row of issuePayload) nextIssueOwners[row.menu_item_id] = currentStaffOwner();
     setIssueLineOwners(nextIssueOwners);
+    setIssueEntrySummaries((prev) =>
+      replaceCurrentStaffSummaries(
+        prev,
+        editableIssueMenuIds,
+        new Map(issuePayload.map((row) => [row.menu_item_id, row.quantity]))
+      )
+    );
   };
 
   const handleSaveMenuProgress = async () => {
@@ -2407,6 +2564,110 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Gagal menyimpan worksheet_premix_line: ${premixErr.message}`);
       }
 
+      const editableOpnameIngredients = freshIngredients.filter(
+        (ing) => !isOwnedByOther(opnameLineOwners[ing.id])
+      );
+      const editableOpnameIngredientIds = editableOpnameIngredients.map((ing) => ing.id);
+      const editableOpnameOwnerIds = getEditableOwnerIds(
+        opnameLineOwners,
+        editableOpnameIngredientIds
+      );
+      const opnamePayload = editableOpnameIngredients.flatMap((ing) => {
+        const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
+        if (isBlankQty(raw)) return [];
+        const closing_stock = parseQty(raw);
+        if (closing_stock < 0) {
+          throw new Error(`Stok fisik ${ing.name} tidak boleh negatif.`);
+        }
+        return [
+          {
+            session_id: ensuredSessionId,
+            ingredient_id: ing.id,
+            staff_id: submittingStaffId,
+            closing_stock,
+          },
+        ];
+      });
+
+      const { error: clearOpnameErr } =
+        editableOpnameIngredientIds.length > 0
+          ? await supabase
+              .from("worksheet_opname_line")
+              .delete()
+              .eq("session_id", ensuredSessionId)
+              .in("ingredient_id", editableOpnameIngredientIds)
+              .or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
+          : { error: null };
+
+      if (clearOpnameErr) {
+        throw new Error(`Gagal membersihkan worksheet_opname_line: ${clearOpnameErr.message}`);
+      }
+
+      const { error: opnameLineErr } =
+        opnamePayload.length > 0
+          ? await supabase.from("worksheet_opname_line").insert(opnamePayload)
+          : { error: null };
+
+      if (opnameLineErr) {
+        throw new Error(`Gagal menyimpan worksheet_opname_line: ${opnameLineErr.message}`);
+      }
+
+      const [outAggregateResult, opnameAggregateResult, premixAggregateResult] = await Promise.all([
+        supabase
+          .from("worksheet_out_line")
+          .select("ingredient_id, quantity")
+          .eq("session_id", ensuredSessionId),
+        supabase
+          .from("worksheet_opname_line")
+          .select("ingredient_id, closing_stock")
+          .eq("session_id", ensuredSessionId),
+        supabase
+          .from("worksheet_premix_line")
+          .select("output_ingredient_id, batch_quantity")
+          .eq("session_id", ensuredSessionId),
+      ]);
+
+      if (outAggregateResult.error) {
+        throw new Error(`Gagal memuat akumulasi out stock: ${outAggregateResult.error.message}`);
+      }
+      if (opnameAggregateResult.error) {
+        throw new Error(`Gagal memuat akumulasi opname: ${opnameAggregateResult.error.message}`);
+      }
+      if (premixAggregateResult.error) {
+        throw new Error(`Gagal memuat akumulasi premix: ${premixAggregateResult.error.message}`);
+      }
+
+      const outTotalMap = new Map<string, number>();
+      for (const row of outAggregateResult.data ?? []) {
+        const quantity = Number(row.quantity ?? 0);
+        if (quantity <= 0) continue;
+        outTotalMap.set(row.ingredient_id, (outTotalMap.get(row.ingredient_id) ?? 0) + quantity);
+      }
+
+      const opnameTotalMap = new Map<string, number>();
+      for (const row of opnameAggregateResult.data ?? []) {
+        const quantity = Number(row.closing_stock ?? 0);
+        opnameTotalMap.set(
+          row.ingredient_id,
+          (opnameTotalMap.get(row.ingredient_id) ?? 0) + quantity
+        );
+      }
+
+      const premixQuantityTotals = new Map<string, number>();
+      for (const row of premixAggregateResult.data ?? []) {
+        const quantity = Number(row.batch_quantity ?? 0);
+        if (quantity <= 0) continue;
+        premixQuantityTotals.set(
+          row.output_ingredient_id,
+          (premixQuantityTotals.get(row.output_ingredient_id) ?? 0) + quantity
+        );
+      }
+
+      const aggregatePremixEffects = computePremixEffectsFromTotals(
+        premixItems,
+        premixQuantityTotals
+      );
+
       const menuTheoreticalMap = await fetchSoldMenuTheoreticalUsage(
         supabase,
         date,
@@ -2417,8 +2678,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         date,
         ensuredSessionId
       );
-      const premixUsageMap = premixEffects.usageMap;
-      const premixOutputMap = premixEffects.outputMap;
+      const premixUsageMap = aggregatePremixEffects.usageMap;
+      const premixOutputMap = aggregatePremixEffects.outputMap;
       const freshById = new Map(freshIngredients.map((ing) => [ing.id, ing]));
       const theoreticalIngredientIds = new Set([
         ...menuTheoreticalMap.keys(),
@@ -2445,7 +2706,6 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       );
 
       const localLedgerPayload: StockLedgerInsert[] = freshIngredients.map((ing) => {
-        const line = lines[ing.id] ?? DEFAULT_LINE;
         const masterStock = Number(ing.current_stock);
         const opening_stock = Math.max(
           0,
@@ -2457,16 +2717,16 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         );
         const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
         const in_qty = receive_qty + premix_output_qty;
-        const out_qty = parseQty(line.outQty);
+        const out_qty = outTotalMap.get(ing.id) ?? 0;
         const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
         const issue_theoretical = issueTheoreticalMap.get(ing.id) ?? 0;
         const premix_theoretical = premixUsageMap.get(ing.id) ?? 0;
         const theoretical_usage = menu_theoretical + issue_theoretical + premix_theoretical;
         const expected_closing = opening_stock + in_qty - theoretical_usage;
-        const hasPhysicalOpname = !isBlankQty(line.closingStock);
+        const hasPhysicalOpname = opnameTotalMap.has(ing.id);
 
         const closing_stock = hasPhysicalOpname
-          ? parseQty(line.closingStock)
+          ? opnameTotalMap.get(ing.id) ?? 0
           : Math.max(0, expected_closing - out_qty);
         const adjustment_qty = closing_stock - expected_closing;
 
@@ -2575,9 +2835,22 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         throw new Error(`Ledger tersimpan tetapi audit log gagal dibuat: ${logErr.message}`);
       }
 
+      const aggregatedLinesForEvaluation = freshIngredients.reduce<Record<string, IngredientLineState>>(
+        (acc, ing) => {
+          const existing = lines[ing.id] ?? DEFAULT_LINE;
+          acc[ing.id] = {
+            ...existing,
+            outQty: outTotalMap.has(ing.id) ? String(outTotalMap.get(ing.id)) : "",
+            closingStock: opnameTotalMap.has(ing.id) ? String(opnameTotalMap.get(ing.id)) : "",
+          };
+          return acc;
+        },
+        {}
+      );
+
       opnameEvalForAsync = evaluateOpnameSubmission({
         ingredients: freshIngredients,
-        lines,
+        lines: aggregatedLinesForEvaluation,
         ledgerRows: localLedgerPayload.map((row) => ({
           ingredient_id: row.ingredient_id,
           opening_stock: row.opening_stock,
@@ -3082,6 +3355,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     const owner = outLineOwners[ing.id];
                     const ownedByOther = isOwnedByOther(owner);
                     const inputDisabled = locked || ownedByOther;
+                    const outSummaries = outEntrySummaries[ing.id] ?? [];
 
                     return (
                       <li
@@ -3097,10 +3371,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               {formatOwnerLabel(owner)}
                             </p>
                           ) : null}
+                          {renderEntrySummaries(outSummaries, ing.unit)}
                         </div>
                         <label className="mb-3 block">
                           <span className="mb-1 block text-xs text-zinc-400">
-                            Qty keluar (out_qty)
+                            Out stock kamu ({ing.unit})
                           </span>
                           <p className="mb-2 text-xs font-medium text-sky-300/90">
                             {formatStockAvailability(ing)}
@@ -3124,6 +3399,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                           {qtyInputInvalid ? (
                             <p className="mt-2 text-xs text-red-300" role="alert">
                               {OUTSTOCK_LOGICAL_FALLACY_MESSAGE}
+                            </p>
+                          ) : null}
+                          {owner && !ownedByOther ? (
+                            <p className="mt-1 text-[11px] text-indigo-300">
+                              Angka ini milik kamu. Ubah lalu Simpan Out Stock untuk koreksi.
                             </p>
                           ) : null}
                         </label>
@@ -3232,6 +3512,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                     const line = lines[ing.id] ?? DEFAULT_LINE;
                     const owner = opnameLineOwners[ing.id];
                     const ownedByOther = isOwnedByOther(owner);
+                    const opnameSummaries = opnameEntrySummaries[ing.id] ?? [];
                     return (
                       <li
                         key={ing.id}
@@ -3245,10 +3526,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               {formatOwnerLabel(owner)}
                             </p>
                           ) : null}
+                          {renderEntrySummaries(opnameSummaries, ing.unit)}
                         </div>
                         <label className="block">
                           <span className="mb-1 block text-xs text-zinc-400">
-                            Sisa fisik (closing_stock)
+                            Opname kamu ({ing.unit})
                           </span>
                           <p className="mb-2 text-xs font-medium text-sky-300/90">
                             {formatSystemStockGuide(ing)}
@@ -3264,6 +3546,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             placeholder="Kosong = ikut stok sistem"
                             className={INPUT_CLASS}
                           />
+                          {owner && !ownedByOther ? (
+                            <p className="mt-1 text-[11px] text-indigo-300">
+                              Angka ini milik kamu. Ubah lalu Simpan Opname untuk koreksi.
+                            </p>
+                          ) : null}
                         </label>
                       </li>
                     );
@@ -3300,6 +3587,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                       const owner = premixLineOwners[premix.id];
                       const ownedByOther = isOwnedByOther(owner);
                       const inputDisabled = locked || ownedByOther;
+                      const premixSummaries = premixEntrySummaries[premix.id] ?? [];
 
                       return (
                         <li
@@ -3317,13 +3605,14 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                   {formatOwnerLabel(owner)}
                                 </p>
                               ) : null}
+                              {renderEntrySummaries(premixSummaries, "batch")}
                             </div>
                             <Beaker className="h-5 w-5 shrink-0 text-emerald-400" />
                           </div>
 
                           <label className="block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Jumlah dibuat hari ini
+                              Jumlah dibuat kamu
                             </span>
                             <div className="flex items-center gap-1">
                               <button
@@ -3358,6 +3647,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                           {qty > 0 && recipe ? (
                             <p className="mt-2 text-xs font-medium text-emerald-300">
                               Output masuk stok: {outputQty.toLocaleString("id-ID")} {premix.unit}
+                            </p>
+                          ) : null}
+                          {owner && !ownedByOther ? (
+                            <p className="mt-1 text-[11px] text-indigo-300">
+                              Angka ini milik kamu. Ubah lalu Simpan Premix untuk koreksi.
                             </p>
                           ) : null}
 
@@ -3437,6 +3731,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                       const owner = issueLineOwners[menu.id];
                       const ownedByOther = isOwnedByOther(owner);
                       const inputDisabled = locked || ownedByOther;
+                      const issueSummaries = issueEntrySummaries[menu.id] ?? [];
                       return (
                         <li
                           key={menu.id}
@@ -3454,6 +3749,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                 {formatOwnerLabel(owner)}
                               </p>
                             ) : null}
+                            {renderEntrySummaries(issueSummaries, "porsi")}
                           </div>
                           <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
                             <label className="block">
@@ -3471,6 +3767,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                 placeholder="-"
                                 className={INPUT_CLASS}
                               />
+                              {owner && !ownedByOther ? (
+                                <p className="mt-1 text-[11px] text-indigo-300">
+                                  Angka ini milik kamu. Ubah lalu Simpan Remake untuk koreksi.
+                                </p>
+                              ) : null}
                             </label>
                             <label className="block">
                               <span className="mb-1 block text-xs text-zinc-400">Alasan</span>
@@ -3741,14 +4042,29 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
           ) : null}
 
           {activeTab === "issue" ? (
-            <button
-              type="button"
-              onClick={() => setActiveTab("sold")}
-              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-red-500/50 bg-red-600/20 font-bold text-red-100 active:bg-red-600/30"
-            >
-              <AlertTriangle className="h-5 w-5" />
-              Lanjut ke Menu Terjual
-            </button>
+            <div className="grid w-full gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={isSavingMenuProgress || isSubmitting}
+                onClick={stickySaveMenuProgress}
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-red-500/50 bg-red-600/20 font-bold text-red-100 active:bg-red-600/30 disabled:opacity-50"
+              >
+                {isSavingMenuProgress ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <AlertTriangle className="h-5 w-5" />
+                )}
+                Simpan Remake
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("sold")}
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 font-bold text-zinc-100 active:bg-zinc-800"
+              >
+                <UtensilsCrossed className="h-5 w-5" />
+                Lanjut ke Menu
+              </button>
+            </div>
           ) : null}
 
           {activeTab === "sold" ? (
