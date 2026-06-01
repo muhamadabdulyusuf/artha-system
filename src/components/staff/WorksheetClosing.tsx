@@ -939,6 +939,33 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     [lines, receiveEntryInputs]
   );
 
+  const getOpnameBaseStockQtyForIngredient = useCallback(
+    (ingredient: Pick<IngredientRow, "id" | "current_stock">) => {
+      const otherSavedOpnameQty = (opnameEntrySummaries[ingredient.id] ?? [])
+        .filter((entry) => !isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName }))
+        .reduce((sum, entry) => sum + entry.quantity, 0);
+      const ownDraft = lines[ingredient.id]?.closingStock ?? "";
+      const ownSavedOpnameQty = (opnameEntrySummaries[ingredient.id] ?? [])
+        .filter((entry) => isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName }))
+        .reduce((sum, entry) => sum + entry.quantity, 0);
+      const hasOwnDraft = !isBlankQty(ownDraft);
+      const hasSavedOpname = otherSavedOpnameQty > 0 || ownSavedOpnameQty > 0;
+
+      if (hasOwnDraft || hasSavedOpname) {
+        return {
+          quantity: otherSavedOpnameQty + (hasOwnDraft ? parseQty(ownDraft) : ownSavedOpnameQty),
+          source: "opname" as const,
+        };
+      }
+
+      return {
+        quantity: Number(ingredient.current_stock ?? 0),
+        source: "master" as const,
+      };
+    },
+    [isCurrentStaffOwner, lines, opnameEntrySummaries]
+  );
+
   const summarizeStaffEntry = useCallback(
     (summary: SoldEntrySummary) =>
       isCurrentStaffOwner({ staffId: summary.staffId, staffName: summary.staffName })
@@ -3566,7 +3593,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
                   Input premix yang dibuat hari ini. Kebutuhan bahan dihitung dari resep dan
-                  stok tersedia = stok sistem + receive hari ini.
+                  stok tersedia = opname/stok fisik + receive hari ini.
                 </p>
                 {premixItems.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
@@ -3671,9 +3698,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                   const receive = componentIng
                                     ? getReceiveStockQtyForIngredient(componentIng)
                                     : 0;
-                                  const baseStock = Number(componentIng?.current_stock ?? 0);
+                                  const baseStock = componentIng
+                                    ? getOpnameBaseStockQtyForIngredient(componentIng)
+                                    : { quantity: 0, source: "master" as const };
                                   const available = componentIng
-                                    ? baseStock + receive
+                                    ? baseStock.quantity + receive
                                     : 0;
                                   const unlimited = componentIng?.is_stock_tracked === false;
                                   const enough = unlimited || required <= available;
@@ -3692,7 +3721,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                         </span>
                                         {!unlimited && receive > 0 ? (
                                           <span className="text-[11px] text-emerald-300">
-                                            stok {baseStock.toLocaleString("id-ID")} + receive {receive.toLocaleString("id-ID")}
+                                            {baseStock.source === "opname" ? "opname" : "stok"}{" "}
+                                            {baseStock.quantity.toLocaleString("id-ID")} + receive{" "}
+                                            {receive.toLocaleString("id-ID")}
+                                          </span>
+                                        ) : !unlimited && baseStock.source === "opname" ? (
+                                          <span className="text-[11px] text-indigo-300">
+                                            pakai opname {baseStock.quantity.toLocaleString("id-ID")}
                                           </span>
                                         ) : null}
                                       </span>

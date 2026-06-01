@@ -2336,15 +2336,16 @@ export function MonitoringDashboard() {
         const opnameQty = opnameLiveMap.has(ingredient.id)
           ? opnameLiveMap.get(ingredient.id) ?? 0
           : null;
+        const baseStock = opnameQty ?? officialStock;
         const movementStock =
-          officialStock +
+          baseStock +
           receiveQty +
           premixOutputQty -
           premixUsageQty -
           menuUsageQty -
           issueUsageQty -
           outQty;
-        const liveStock = opnameQty ?? movementStock;
+        const liveStock = movementStock;
         const minimumStock = Number(ingredient.minimum_stock ?? 0);
         const sourceCount = [
           receiveQty,
