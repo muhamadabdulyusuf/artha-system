@@ -54,6 +54,8 @@ import { formatSystemStockGuide } from "@/lib/worksheet/opnameVariance";
 import { ledgerRowToSnapshot } from "@/lib/worksheet/stockLedgerSnapshot";
 import {
   findTypoGuardWarnings,
+  findTypoGuardPreviewEntries,
+  type TypoGuardPreviewEntry,
   type TypoGuardWarning,
 } from "@/lib/worksheet/typoGuard";
 import { useWorksheetDraft } from "@/hooks/useWorksheetDraft";
@@ -807,6 +809,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [typoModalOpen, setTypoModalOpen] = useState(false);
   const [typoWarnings, setTypoWarnings] = useState<TypoGuardWarning[]>([]);
+  const [typoPreviewEntries, setTypoPreviewEntries] = useState<TypoGuardPreviewEntry[]>([]);
   const [showTestDateControls, setShowTestDateControls] = useState(false);
   const [testBusinessDate, setTestBusinessDate] = useState("");
   const [uploadingPhotoFor, setUploadingPhotoFor] = useState<string | null>(null);
@@ -904,6 +907,21 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       staffName: staff?.name ?? "Staff ini",
     }),
     [staff?.id, staff?.name]
+  );
+
+  const getReceiveStockQtyForIngredient = useCallback(
+    (ingredient: Pick<IngredientRow, "id" | "purchase_to_stock_factor">) => {
+      const savedReceiveQty = receiveInputToStockQty(
+        ingredient,
+        lines[ingredient.id]?.inQty ?? ""
+      );
+      const pendingReceiveQty = receiveInputToStockQty(
+        ingredient,
+        receiveEntryInputs[ingredient.id] ?? ""
+      );
+      return savedReceiveQty + pendingReceiveQty;
+    },
+    [lines, receiveEntryInputs]
   );
 
   const getEditableOwnerIds = useCallback(
@@ -1036,24 +1054,39 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
 
       const nextSummaries: Record<string, SoldEntrySummary[]> = {};
+      const quantityByIngredientAndStaff = new Map<string, SoldEntrySummary>();
+      const currentStaffInputs: Record<string, string> = {};
+
       for (const row of (data ?? []) as unknown as ReceiveEntryJoined[]) {
         const quantity = Number(row.quantity ?? 0);
         if (quantity <= 0) continue;
         const staffRaw = row.staff;
         const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
-        nextSummaries[row.ingredient_id] = [
-          ...(nextSummaries[row.ingredient_id] ?? []),
-          {
-            staffId: row.staff_id,
-            staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
-            quantity,
-          },
-        ];
+        const summary: SoldEntrySummary = {
+          staffId: row.staff_id,
+          staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+          quantity,
+        };
+        const key = `${row.ingredient_id}:${summary.staffId ?? summary.staffName}`;
+        const existing = quantityByIngredientAndStaff.get(key);
+        quantityByIngredientAndStaff.set(key, {
+          ...summary,
+          quantity: (existing?.quantity ?? 0) + quantity,
+        });
+      }
+
+      for (const [key, summary] of quantityByIngredientAndStaff.entries()) {
+        const ingredientId = key.split(":")[0];
+        nextSummaries[ingredientId] = [...(nextSummaries[ingredientId] ?? []), summary];
+        if (isCurrentStaffOwner({ staffId: summary.staffId, staffName: summary.staffName })) {
+          currentStaffInputs[ingredientId] = formatQty(summary.quantity);
+        }
       }
 
       setReceiveEntrySummaries(nextSummaries);
+      return currentStaffInputs;
     },
-    [supabase]
+    [isCurrentStaffOwner, supabase]
   );
 
   const loadData = useCallback(async (dateOverride?: string) => {
@@ -1143,6 +1176,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     const soldPreset: Record<string, string> = {};
     const issuePreset: Record<string, MenuIssueLineState> = {};
     const premixPreset: Record<string, string> = {};
+    let receivePreset: Record<string, string> = {};
     setReceiveEntrySummaries({});
     setSoldEntrySummaries({});
     setOutLineOwners({});
@@ -1164,7 +1198,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
 
       try {
-        await refreshReceiveEntrySummaries(ws.id);
+        receivePreset = await refreshReceiveEntrySummaries(ws.id);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Gagal memuat detail receive staff.");
       }
@@ -1308,7 +1342,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }
 
     initIngredientLines(ingredientList, ingredientPreset);
-    setReceiveEntryInputs({});
+    setReceiveEntryInputs(receivePreset);
     initSoldItems(menuList, soldPreset);
     setMenuIssues(issuePreset);
     initPremixQuantities(premixList, premixPreset);
@@ -1377,11 +1411,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     action: () => void | Promise<void>
   ) => {
     const warnings = findTypoGuardWarnings(ingredients, lines, fields);
-    if (warnings.length === 0) {
+    const previewEntries = findTypoGuardPreviewEntries(ingredients, lines, fields);
+    if (warnings.length === 0 && previewEntries.length === 0) {
       void action();
       return;
     }
     setTypoWarnings(warnings);
+    setTypoPreviewEntries(previewEntries);
     pendingTypoActionRef.current = () => void action();
     setTypoModalOpen(true);
   };
@@ -1582,8 +1618,23 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
     }
 
-    const entryPayload = ingredients
-      .filter((ing) => ing.kind === "raw")
+    const rawIngredients = ingredients.filter((ing) => ing.kind === "raw");
+    const rawIngredientIds = rawIngredients.map((ing) => ing.id);
+
+    if (rawIngredientIds.length > 0) {
+      const { error: clearOwnErr } = await supabase
+        .from("worksheet_receive_entry")
+        .delete()
+        .eq("session_id", activeSessionId)
+        .eq("staff_id", staff.id)
+        .in("ingredient_id", rawIngredientIds);
+
+      if (clearOwnErr) {
+        throw new Error(`Gagal membersihkan receive milik staff ini: ${clearOwnErr.message}`);
+      }
+    }
+
+    const entryPayload = rawIngredients
       .map((ing) => ({
         session_id: activeSessionId,
         ingredient_id: ing.id,
@@ -1603,8 +1654,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     }
 
     const totals = await syncReceiveAggregate(activeSessionId);
-    await refreshReceiveEntrySummaries(activeSessionId);
-    setReceiveEntryInputs({});
+    const ownInputs = await refreshReceiveEntrySummaries(activeSessionId);
+    setReceiveEntryInputs(ownInputs);
     return totals;
   };
 
@@ -1730,11 +1781,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     try {
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
       const hasPendingReceive = ingredients.some(
-        (ing) => ing.kind === "raw" && parseQty(receiveEntryInputs[ing.id] ?? "") > 0
+        (ing) => ing.kind === "raw" && !isBlankQty(receiveEntryInputs[ing.id] ?? "")
       );
 
       if (!hasPendingReceive) {
-        showPlainErrorToast("Isi jumlah tambahan receive terlebih dahulu.");
+        showPlainErrorToast("Isi atau koreksi jumlah receive kamu terlebih dahulu.");
         return;
       }
 
@@ -1908,6 +1959,13 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     try {
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
+      const hasPendingReceive = ingredients.some(
+        (ing) => ing.kind === "raw" && !isBlankQty(receiveEntryInputs[ing.id] ?? "")
+      );
+      if (hasPendingReceive) {
+        await savePendingReceiveEntries(activeSessionId);
+      }
+
       const editablePremixIds = premixItems
         .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
         .map((premix) => premix.id);
@@ -1954,7 +2012,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       for (const row of payload) nextOwners[row.output_ingredient_id] = currentStaffOwner();
       setPremixLineOwners(nextOwners);
 
-      showSuccessToast("Produksi premix tersimpan. Stok final dihitung saat Submit Report Closing.");
+      showSuccessToast(
+        hasPendingReceive
+          ? "Receive pending dan produksi premix tersimpan. Stok final dihitung saat Submit Report Closing."
+          : "Produksi premix tersimpan. Stok final dihitung saat Submit Report Closing."
+      );
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -2626,12 +2688,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       <TypoConfirmModal
         open={typoModalOpen}
         warnings={typoWarnings}
+        previewEntries={typoPreviewEntries}
         onCancel={() => {
           setTypoModalOpen(false);
+          setTypoWarnings([]);
+          setTypoPreviewEntries([]);
           pendingTypoActionRef.current = null;
         }}
         onConfirm={() => {
           setTypoModalOpen(false);
+          setTypoWarnings([]);
+          setTypoPreviewEntries([]);
           const action = pendingTypoActionRef.current;
           pendingTypoActionRef.current = null;
           if (action) action();
@@ -2903,6 +2970,15 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                       receiveEntryInputs[ing.id] ?? ""
                     );
                     const receiveSummaries = receiveEntrySummaries[ing.id] ?? [];
+                    const ownSavedReceiveQty = receiveSummaries
+                      .filter((entry) =>
+                        isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
+                      )
+                      .reduce((sum, entry) => sum + entry.quantity, 0);
+                    const afterSaveReceiveQty = Math.max(
+                      0,
+                      totalReceiveQty - ownSavedReceiveQty + entryQty
+                    );
                     return (
                       <li
                         key={ing.id}
@@ -2924,9 +3000,16 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               {receiveSummaries.map((entry, index) => (
                                 <span
                                   key={`${entry.staffId ?? "legacy"}-${index}`}
-                                  className="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-200"
+                                  className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
+                                    isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
+                                      ? "border-indigo-400/30 bg-indigo-500/10 text-indigo-200"
+                                      : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+                                  }`}
                                 >
                                   {entry.staffName}: {formatQty(entry.quantity)} {purchaseUnit}
+                                  {isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
+                                    ? " · punya kamu"
+                                    : ""}
                                 </span>
                               ))}
                             </div>
@@ -2935,7 +3018,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                         <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                           <label className="block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Tambah receive ({purchaseUnit})
+                              Receive kamu ({purchaseUnit})
                             </span>
                             <input
                               type="number"
@@ -2945,16 +3028,21 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               disabled={locked}
                               value={receiveEntryInputs[ing.id] ?? ""}
                               onChange={(e) => updateReceiveEntryQty(ing.id, e.target.value)}
-                              placeholder="Kosong"
+                              placeholder="Kosong = hapus receive kamu"
                               className={INPUT_CLASS}
                             />
+                            {ownSavedReceiveQty > 0 ? (
+                              <p className="mt-1 text-[11px] text-indigo-300">
+                                Angka ini milik kamu. Ubah lalu Simpan Pasokan untuk koreksi.
+                              </p>
+                            ) : null}
                           </label>
                           <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-right">
                             <p className="text-[10px] uppercase tracking-wide text-zinc-500">
                               Setelah save
                             </p>
                             <p className="text-sm font-semibold tabular-nums text-zinc-100">
-                              {formatQty(totalReceiveQty + entryQty)} {purchaseUnit}
+                              {formatQty(afterSaveReceiveQty)} {purchaseUnit}
                             </p>
                           </div>
                         </div>
@@ -3287,10 +3375,11 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                   const componentIng = component.ingredient;
                                   const required = Number(component.qty_per_batch) * qty;
                                   const receive = componentIng
-                                    ? receiveInputToStockQty(componentIng, lines[componentIng.id]?.inQty ?? "")
+                                    ? getReceiveStockQtyForIngredient(componentIng)
                                     : 0;
+                                  const baseStock = Number(componentIng?.current_stock ?? 0);
                                   const available = componentIng
-                                    ? Number(componentIng.current_stock ?? 0) + receive
+                                    ? baseStock + receive
                                     : 0;
                                   const unlimited = componentIng?.is_stock_tracked === false;
                                   const enough = unlimited || required <= available;
@@ -3300,11 +3389,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                                       className="flex justify-between gap-3 text-zinc-300"
                                     >
                                       <span>{componentIng?.name ?? component.ingredient_id}</span>
-                                      <span className={enough ? "text-zinc-400" : "text-red-300"}>
-                                        {required.toLocaleString("id-ID")} {componentIng?.unit ?? ""}{" "}
-                                        {unlimited
-                                          ? "(non-stok)"
-                                          : `/ tersedia ${available.toLocaleString("id-ID")}`}
+                                      <span className="flex flex-col items-end text-right">
+                                        <span className={enough ? "text-zinc-400" : "text-red-300"}>
+                                          {required.toLocaleString("id-ID")} {componentIng?.unit ?? ""}{" "}
+                                          {unlimited
+                                            ? "(non-stok)"
+                                            : `/ tersedia ${available.toLocaleString("id-ID")}`}
+                                        </span>
+                                        {!unlimited && receive > 0 ? (
+                                          <span className="text-[11px] text-emerald-300">
+                                            stok {baseStock.toLocaleString("id-ID")} + receive {receive.toLocaleString("id-ID")}
+                                          </span>
+                                        ) : null}
                                       </span>
                                     </li>
                                   );

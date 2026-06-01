@@ -15,6 +15,14 @@ export type TypoGuardWarning = {
   reason: "absolute" | "spike";
 };
 
+export type TypoGuardPreviewEntry = {
+  ingredientId: string;
+  ingredientName: string;
+  field: "inQty" | "closingStock" | "outQty";
+  value: number;
+  unit: string;
+};
+
 type LineFields = {
   inQty: string;
   closingStock: string;
@@ -77,6 +85,35 @@ export function findTypoGuardWarnings(
   }
 
   return warnings;
+}
+
+export function findTypoGuardPreviewEntries(
+  ingredients: IngredientRow[],
+  lines: Record<string, LineFields>,
+  fields: Array<keyof LineFields>
+): TypoGuardPreviewEntry[] {
+  const entries: TypoGuardPreviewEntry[] = [];
+
+  for (const ing of ingredients) {
+    const line = lines[ing.id];
+    if (!line) continue;
+
+    for (const field of fields) {
+      const rawValue = line[field]?.trim();
+      if (!rawValue) continue;
+
+      const value = parseWorksheetQty(rawValue);
+      entries.push({
+        ingredientId: ing.id,
+        ingredientName: ing.name,
+        field,
+        value,
+        unit: ing.unit,
+      });
+    }
+  }
+
+  return entries;
 }
 
 export function formatTypoGuardMessage(warnings: TypoGuardWarning[]): string {
