@@ -1020,30 +1020,6 @@ function openSupplierWhatsAppChat(supplierPhone: string, messageText: string): v
   window.open(`https://api.whatsapp.com/send?phone=${phone}&text=${encodedText}`, "_blank");
 }
 
-function buildPurchasingLowStockMessage(params: {
-  groups: LowStockOrderGroup[];
-  dateLabel: string;
-}): string {
-  const { groups, dateLabel } = params;
-  if (groups.length === 0) {
-    return `*LOW STOCK ORDER - ARTHA SYSTEM*\nTanggal: ${dateLabel}\n\nTidak ada bahan low stock.`;
-  }
-
-  return [
-    "*LOW STOCK ORDER - ARTHA SYSTEM*",
-    `Tanggal: ${dateLabel}`,
-    "",
-    ...groups.flatMap((group) => [
-      `${group.supplierName}:`,
-      ...group.lines.map(
-        (line) => `- ${line.ingredientName} ${formatPoWaQuantity(line.quantity)} ${line.unit}`
-      ),
-      "",
-    ]),
-    "Mohon diproses sesuai supplier masing-masing.",
-  ].join("\n");
-}
-
 function TopSellingWidget({
   title,
   items,
@@ -1975,15 +1951,6 @@ export function MonitoringDashboard() {
     primarySupplierByIngredientId,
   ]);
 
-  const lowStockPurchasingText = useMemo(
-    () =>
-      buildPurchasingLowStockMessage({
-        groups: lowStockOrderGroups,
-        dateLabel: formatBusinessDateLabel(endDate),
-      }),
-    [endDate, lowStockOrderGroups]
-  );
-
   const selectedSupplierLowStockGroups = useMemo(
     () => lowStockOrderGroups.filter((group) => group.supplierId === selectedSupplierId),
     [lowStockOrderGroups, selectedSupplierId]
@@ -2669,7 +2636,7 @@ export function MonitoringDashboard() {
       if (totalUsage <= 0) continue;
 
       const currentStock = Number(
-        closingByIngredient.get(ingredient.id) ?? ingredient.current_stock ?? 0
+        ingredient.current_stock ?? closingByIngredient.get(ingredient.id) ?? 0
       );
       const minimumStock = Number(ingredient.minimum_stock ?? 0);
       const averageDailyUsage = totalUsage / RUNWAY_HISTORY_DAYS;
@@ -2695,14 +2662,16 @@ export function MonitoringDashboard() {
     setSalesDemandRows(demandRows);
 
     const runway: RunwayEntry[] = [];
-    for (const [ingredientId, closing] of closingByIngredient) {
+    for (const [ingredientId, usageBucket] of usageByIngredient) {
       const ingredient = ingredientMap.get(ingredientId);
       if (!ingredient) continue;
-      const usageBucket = usageByIngredient.get(ingredientId);
       if (!usageBucket || usageBucket.days.size === 0) continue;
       const avgDailyUsage = usageBucket.totalUsage / usageBucket.days.size;
       if (avgDailyUsage <= 0) continue;
-      const daysRemaining = Math.max(0, Math.floor(closing / avgDailyUsage));
+      const currentStock = Number(
+        ingredient.current_stock ?? closingByIngredient.get(ingredientId) ?? 0
+      );
+      const daysRemaining = Math.max(0, Math.floor(currentStock / avgDailyUsage));
       let urgency: RunwayEntry["urgency"] = "safe";
       if (daysRemaining <= 1) urgency = "critical";
       else if (daysRemaining <= 3) urgency = "warning";
@@ -2715,17 +2684,18 @@ export function MonitoringDashboard() {
     const dailyUsageById: Record<string, number> = {};
     const stockById: Record<string, { currentStock: number; minimumStock: number }> = {};
 
-    for (const [ingredientId, closing] of closingByIngredient) {
+    for (const [ingredientId, usageBucket] of usageByIngredient) {
       const ingredient = ingredientMap.get(ingredientId);
       if (!ingredient) continue;
 
-      const usageBucket = usageByIngredient.get(ingredientId);
       if (usageBucket && usageBucket.days.size > 0) {
         dailyUsageById[ingredientId] = usageBucket.totalUsage / usageBucket.days.size;
       }
 
       stockById[ingredientId] = {
-        currentStock: closing,
+        currentStock: Number(
+          ingredient.current_stock ?? closingByIngredient.get(ingredientId) ?? 0
+        ),
         minimumStock: Number(ingredient.minimum_stock ?? 0),
       };
     }
@@ -2736,8 +2706,9 @@ export function MonitoringDashboard() {
         dailyUsageById[row.ingredient_id] = row.theoretical_usage;
       }
       if (!stockById[row.ingredient_id]) {
+        const ingredient = ingredientMap.get(row.ingredient_id);
         stockById[row.ingredient_id] = {
-          currentStock: row.closing_stock,
+          currentStock: Number(ingredient?.current_stock ?? row.closing_stock),
           minimumStock: row.minimum_stock,
         };
       }
@@ -3004,13 +2975,13 @@ export function MonitoringDashboard() {
   }, [loadDashboard, refreshKey]);
 
   useEffect(() => {
-    if (!["overview", "inventory", "control"].includes(activeMonitoringTab)) return;
+    if (!["overview", "demand", "inventory", "control"].includes(activeMonitoringTab)) return;
 
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         setRefreshKey((key) => key + 1);
       }
-    }, 15_000);
+    }, 5_000);
 
     return () => window.clearInterval(timer);
   }, [activeMonitoringTab]);
@@ -3087,29 +3058,6 @@ export function MonitoringDashboard() {
   const handleExportSales = async () => {
     const rows = normalizedSearch ? filteredSalesRows : salesExportRows;
     await downloadSalesXlsx(`laporan-penjualan-${csvDateSuffix}.xlsx`, rows);
-  };
-
-  const handleShareLowStockToPurchasing = async () => {
-    if (lowStockOrderGroups.length === 0) {
-      window.alert("Belum ada bahan low stock untuk dikirim ke purchasing.");
-      return;
-    }
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: "Low Stock Order - Artha System",
-          text: lowStockPurchasingText,
-        });
-      } else {
-        await navigator.clipboard.writeText(lowStockPurchasingText);
-        window.alert("List order per supplier sudah disalin. Kirim ke purchasing via WhatsApp.");
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      await navigator.clipboard.writeText(lowStockPurchasingText);
-      window.alert("List order per supplier sudah disalin. Kirim ke purchasing via WhatsApp.");
-    }
   };
 
   const handleStartDateChange = (value: string) => {
@@ -3499,6 +3447,31 @@ export function MonitoringDashboard() {
 
   return (
     <div className="space-y-6">
+      <nav
+        className="sticky top-0 z-20 -mx-1 flex gap-2 overflow-x-auto border-b border-zinc-800 bg-zinc-900/95 px-1 pb-3 pt-1 backdrop-blur"
+        aria-label="Monitoring tabs"
+      >
+        {MONITORING_TABS.map((tab) => {
+          const Icon = tab.icon;
+          const active = activeMonitoringTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveMonitoringTab(tab.id)}
+              className={`flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition sm:px-4 ${
+                active
+                  ? "border-cyan-300 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
+                  : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-100"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </nav>
+
       {activeMonitoringTab === "control" ? (
       <section className="grid gap-6 lg:grid-cols-2">
         <WorksheetEditRequestPanel
@@ -3511,25 +3484,12 @@ export function MonitoringDashboard() {
       </section>
       ) : null}
 
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-slate-100">Dashboard Monitoring</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Admin & OPS Manager · Rentang{" "}
-            <span className="font-medium text-indigo-300">{dateRangeLabel}</span>
-          </p>
+      <div className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 xl:flex-row xl:items-center">
+        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-200">
+          <span className="h-2 w-2 rounded-full bg-cyan-300" />
+          {dateRangeLabel}
         </div>
-        <button
-          type="button"
-          onClick={() => setRefreshKey((k) => k + 1)}
-          className="flex min-h-10 items-center justify-center gap-2 self-start rounded-lg border border-slate-800 bg-zinc-900 px-4 text-sm text-slate-300 transition hover:border-indigo-500/60 hover:text-indigo-300"
-        >
-          <RefreshCw className="h-4 w-4" />
-          Refresh Data
-        </button>
-      </div>
 
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
@@ -3537,7 +3497,7 @@ export function MonitoringDashboard() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Live search menu atau bahan baku…"
-            className="min-h-11 w-full rounded-xl border border-slate-800 bg-zinc-950 py-2.5 pl-10 pr-10 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="min-h-11 w-full rounded-xl border border-zinc-800 bg-zinc-950 py-2.5 pl-10 pr-10 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400/40"
             aria-label="Pencarian live dashboard monitoring"
           />
           {searchTerm.length > 0 && (
@@ -3552,8 +3512,8 @@ export function MonitoringDashboard() {
           )}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-xl border border-slate-800 bg-zinc-950 px-3 py-2">
-          <CalendarDays className="h-4 w-4 text-indigo-400" aria-hidden />
+        <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+          <CalendarDays className="h-4 w-4 text-cyan-300" aria-hidden />
           <label className="sr-only" htmlFor="monitoring-start-date">
             Tanggal mulai
           </label>
@@ -3562,7 +3522,7 @@ export function MonitoringDashboard() {
             type="date"
             value={startDate}
             onChange={(e) => handleStartDateChange(e.target.value)}
-            className="min-h-9 rounded-lg border border-slate-800 bg-zinc-900 px-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="min-h-9 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400/40"
           />
           <span className="text-xs text-slate-500">s/d</span>
           <label className="sr-only" htmlFor="monitoring-end-date">
@@ -3573,9 +3533,18 @@ export function MonitoringDashboard() {
             type="date"
             value={endDate}
             onChange={(e) => handleEndDateChange(e.target.value)}
-            className="min-h-9 rounded-lg border border-slate-800 bg-zinc-900 px-2.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="min-h-9 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400/40"
           />
         </div>
+
+        <button
+          type="button"
+          onClick={() => setRefreshKey((k) => k + 1)}
+          className="flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 text-sm font-semibold text-zinc-200 transition hover:border-cyan-400/60 hover:text-cyan-200"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Refresh
+        </button>
       </div>
 
       {dateRangeInvalid && (
@@ -3587,31 +3556,6 @@ export function MonitoringDashboard() {
       {error && (
         <p className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</p>
       )}
-
-      <nav
-        className="flex gap-2 overflow-x-auto rounded-xl border border-slate-800 bg-zinc-950 p-1.5"
-        aria-label="Monitoring tabs"
-      >
-        {MONITORING_TABS.map((tab) => {
-          const Icon = tab.icon;
-          const active = activeMonitoringTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveMonitoringTab(tab.id)}
-              className={`flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition ${
-                active
-                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-950/40"
-                  : "text-slate-400 hover:bg-zinc-900 hover:text-slate-100"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {tab.label}
-            </button>
-          );
-        })}
-      </nav>
 
       {activeMonitoringTab === "sales" ? (
         <MenuMovementPanel startDate={startDate} endDate={endDate} refreshKey={refreshKey} />
@@ -4136,7 +4080,7 @@ export function MonitoringDashboard() {
                     <th className="px-3 py-2 text-right font-medium">Total 7 Hari</th>
                     <th className="px-3 py-2 text-right font-medium">Avg/Hari</th>
                     <th className="px-3 py-2 text-right font-medium">Peak</th>
-                    <th className="px-3 py-2 text-right font-medium">Stok</th>
+                    <th className="px-3 py-2 text-right font-medium">Stok Sekarang</th>
                     <th className="px-3 py-2 text-right font-medium">Rekomendasi Order</th>
                   </tr>
                 </thead>
@@ -4236,44 +4180,6 @@ export function MonitoringDashboard() {
             </div>
 
             <LiveStockTable rows={filteredLiveStockRows} businessDate={endDate} />
-
-            {lowStockOrderGroups.length > 0 ? (
-              <div className="mb-4 rounded-xl border border-slate-800 bg-zinc-950/60 p-4">
-                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h4 className="text-sm font-semibold text-slate-100">Order Low Stock per Supplier</h4>
-                    <p className="text-xs text-slate-500">
-                      Otomatis dikelompokkan dari supplier terbaru di katalog harga bahan.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleShareLowStockToPurchasing()}
-                    className="flex min-h-10 items-center justify-center gap-2 rounded-lg border border-indigo-500/40 bg-indigo-600/15 px-3 text-sm font-semibold text-indigo-200 hover:bg-indigo-600/25"
-                  >
-                    <Send className="h-4 w-4" />
-                    Share ke Purchasing
-                  </button>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  {lowStockOrderGroups.map((group) => (
-                    <div key={group.supplierId} className="rounded-lg border border-slate-800 bg-zinc-900/70 p-3">
-                      <p className="mb-2 text-sm font-semibold text-slate-100">{group.supplierName}</p>
-                      <ul className="space-y-1 text-sm text-slate-300">
-                        {group.lines.map((line) => (
-                          <li key={line.ingredientId} className="flex justify-between gap-3">
-                            <span>{line.ingredientName}</span>
-                            <span className="shrink-0 tabular-nums text-slate-100">
-                              {formatPoWaQuantity(line.quantity)} {line.unit}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
 
             <div className="mb-4 rounded-xl border border-slate-800 bg-zinc-950/60 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">

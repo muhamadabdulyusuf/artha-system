@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ClipboardList } from "lucide-react";
+import { Building2 } from "lucide-react";
 import { WorksheetClosing } from "@/components/staff/WorksheetClosing";
 import type { Department } from "@/lib/types/database";
 
@@ -15,20 +15,18 @@ export function AdminWorksheetTab() {
   const selected = DEPARTMENTS.find((item) => item.id === department) ?? DEPARTMENTS[0];
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+    <div className="space-y-3">
+      <div className="flex flex-col gap-3 border-b border-zinc-800 pb-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <div className="mb-2 flex items-center gap-2">
-            <ClipboardList className="h-5 w-5 text-indigo-400" />
-            <h2 className="text-lg font-bold text-zinc-50">Admin Worksheet</h2>
-          </div>
-          <p className="max-w-2xl text-sm leading-relaxed text-zinc-400">
-            Tempat kerja inventory/admin untuk input receive, out stock, opname, premix/WIP,
-            remake, dan sales menu dari satu halaman Master Admin.
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+            Inventory Control Desk
+          </p>
+          <p className="mt-1 text-sm text-zinc-400">
+            Full worksheet admin untuk input dan koreksi operasional.
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 rounded-xl border border-zinc-800 bg-zinc-950 p-1.5">
+        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
           {DEPARTMENTS.map((item) => {
             const active = item.id === department;
             return (
@@ -36,12 +34,13 @@ export function AdminWorksheetTab() {
                 key={item.id}
                 type="button"
                 onClick={() => setDepartment(item.id)}
-                className={`min-h-10 rounded-lg px-4 text-sm font-semibold transition ${
+                className={`flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-semibold transition ${
                   active
-                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-950/40"
+                    ? "bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/40"
                     : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
                 }`}
               >
+                <Building2 className="h-4 w-4" />
                 {item.label}
               </button>
             );
@@ -49,7 +48,9 @@ export function AdminWorksheetTab() {
         </div>
       </div>
 
-      <WorksheetClosing key={department} department={department} title={selected.title} embedded />
+      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/20">
+        <WorksheetClosing key={department} department={department} title={selected.title} embedded />
+      </div>
     </div>
   );
 }

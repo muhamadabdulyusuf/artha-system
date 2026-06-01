@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { LogoutButton } from "@/components/auth/LogoutButton";
+import { AbdulCompanyMark } from "@/components/brand/AbdulCompanyMark";
 import { Toast, type ToastVariant } from "@/components/ui/Toast";
 import { translateWorksheetSubmitError } from "@/lib/worksheet/errorTranslator";
 import { canEditStaffData } from "@/lib/auth/permissions";
@@ -69,7 +70,6 @@ const SUBMITTED_LOCK_STATUSES: ClosingStatus[] = [
   "PENDING_APPROVAL_ADMIN",
 ];
 const OUTLET_TIMEZONE = "Asia/Jakarta";
-const CLOSING_SUBMIT_UNLOCK_HOUR = 0;
 const BUSINESS_DATE_CUTOFF_HOUR = 5;
 
 type WorksheetTab = "receive" | "outstock" | "opname" | "premix" | "issue" | "sold";
@@ -340,21 +340,6 @@ function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
 
 function canRequestResubmit(status: ClosingStatus | null | undefined): boolean {
   return status === "SUBMITTED" || status === "PENDING_APPROVAL_ADMIN";
-}
-
-function getHourInOutletTimeZone(date: Date = new Date()): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: OUTLET_TIMEZONE,
-    hour: "numeric",
-    hour12: false,
-  }).formatToParts(date);
-  const hourPart = parts.find((part) => part.type === "hour");
-  return hourPart ? Number(hourPart.value) : 0;
-}
-
-function isClosingSubmitWindowOpen(date: Date = new Date()): boolean {
-  const hour = getHourInOutletTimeZone(date);
-  return hour >= CLOSING_SUBMIT_UNLOCK_HOUR && hour < BUSINESS_DATE_CUTOFF_HOUR;
 }
 
 function resolveLineOwner(row: StaffJoin): WorksheetLineOwner {
@@ -764,32 +749,6 @@ async function fetchLedgerClosingMap(
   return map;
 }
 
-async function fetchLatestLedgerClosingMap(
-  supabase: ReturnType<typeof getSupabaseClient>,
-  ingredientIds: string[]
-): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
-  if (ingredientIds.length === 0) return map;
-
-  const { data, error } = await supabase
-    .from("stock_ledger")
-    .select("ingredient_id, business_date, closing_stock")
-    .in("ingredient_id", ingredientIds)
-    .order("business_date", { ascending: false });
-
-  if (error) {
-    throw new Error(`Gagal memuat cache stok terbaru: ${error.message}`);
-  }
-
-  for (const row of data ?? []) {
-    if (!map.has(row.ingredient_id)) {
-      map.set(row.ingredient_id, Number(row.closing_stock) || 0);
-    }
-  }
-
-  return map;
-}
-
 export function WorksheetClosing({ department, title, embedded = false }: WorksheetClosingProps) {
   const router = useRouter();
   const supabase = getSupabaseClient();
@@ -846,7 +805,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   const [showTestDateControls, setShowTestDateControls] = useState(false);
   const [testBusinessDate, setTestBusinessDate] = useState("");
   const [uploadingPhotoFor, setUploadingPhotoFor] = useState<string | null>(null);
-  const [clockTick, setClockTick] = useState(() => Date.now());
   const pendingTypoActionRef = useRef<(() => void) | null>(null);
 
   const locked = isWorksheetLocked(worksheetStatus ?? undefined);
@@ -855,7 +813,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   const canEdit = canEditStaffData(staff?.role);
   const canApproveCorrection = staff?.role === "admin" || staff?.role === "op_manager";
   const correctionReasonReady = correctionReason.trim().length >= 5;
-  const closingSubmitOpen = useMemo(() => isClosingSubmitWindowOpen(new Date(clockTick)), [clockTick]);
 
   const businessDateLabel = useMemo(
     () => (businessDate ? formatBusinessDateLabel(businessDate) : ""),
@@ -893,8 +850,8 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   }, [normalizedSearch, premixItems]);
 
   const visibleTabs = useMemo(
-    () => TAB_CONFIG.filter((tab) => worksheetFeatures[tab.id]),
-    [worksheetFeatures]
+    () => (embedded ? TAB_CONFIG : TAB_CONFIG.filter((tab) => worksheetFeatures[tab.id])),
+    [embedded, worksheetFeatures]
   );
 
   const outstockHasBlockingErrors = useMemo(
@@ -1231,21 +1188,23 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     setSelectedBusinessDate(date);
     setEditRequest(null);
 
-    const { data: featureRows, error: featureErr } = await supabase
-      .from("worksheet_staff_setting")
-      .select("tab_id, is_enabled")
-      .eq("department", department);
-
-    if (featureErr) {
-      setError(`Gagal memuat setting worksheet staff: ${featureErr.message}`);
-      setIsLoading(false);
-      return;
-    }
-
     const nextFeatures = { ...DEFAULT_WORKSHEET_FEATURES };
-    for (const row of featureRows ?? []) {
-      if (row.tab_id in nextFeatures) {
-        nextFeatures[row.tab_id as WorksheetTab] = Boolean(row.is_enabled);
+    if (!embedded) {
+      const { data: featureRows, error: featureErr } = await supabase
+        .from("worksheet_staff_setting")
+        .select("tab_id, is_enabled")
+        .eq("department", department);
+
+      if (featureErr) {
+        setError(`Gagal memuat setting worksheet staff: ${featureErr.message}`);
+        setIsLoading(false);
+        return;
+      }
+
+      for (const row of featureRows ?? []) {
+        if (row.tab_id in nextFeatures) {
+          nextFeatures[row.tab_id as WorksheetTab] = Boolean(row.is_enabled);
+        }
       }
     }
     setWorksheetFeatures(nextFeatures);
@@ -1549,6 +1508,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     setIsLoading(false);
   }, [
     department,
+    embedded,
     initIngredientLines,
     initPremixQuantities,
     initSoldItems,
@@ -1572,11 +1532,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   useEffect(() => {
     if (staff) void loadData();
   }, [staff, loadData]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setClockTick(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useWorksheetDraft({
     department,
@@ -2580,11 +2535,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       return;
     }
 
-    if (!closingSubmitOpen) {
-      showPlainErrorToast("Submit Closing aktif otomatis setelah jam 00:00 WIB. Untuk sekarang gunakan Simpan Sales Menu / Simpan Progress dulu.");
-      return;
-    }
-
     const blocker = getClosingSubmitBlocker(ingredients, lines, { locked });
     if (blocker) {
       showPlainErrorToast(blocker.message);
@@ -2844,11 +2794,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       const premixUsageMap = aggregatePremixEffects.usageMap;
       const premixOutputMap = aggregatePremixEffects.outputMap;
       const freshById = new Map(ledgerFreshIngredients.map((ing) => [ing.id, ing]));
-      const theoreticalIngredientIds = new Set([
+      const affectedIngredientIds = new Set([
         ...menuTheoreticalMap.keys(),
         ...issueTheoreticalMap.keys(),
+        ...premixUsageMap.keys(),
+        ...premixOutputMap.keys(),
       ]);
-      const externalIngredientIds = [...theoreticalIngredientIds].filter((ingredientId) => !freshById.has(ingredientId));
+      const externalIngredientIds = [...affectedIngredientIds].filter(
+        (ingredientId) => !freshById.has(ingredientId)
+      );
       const externalIngredients = (
         await fetchIngredientsByIds(supabase, externalIngredientIds)
       ).filter((ing) => ing.is_active && ing.is_stock_tracked);
@@ -2925,14 +2879,20 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
               0,
               Number.isFinite(masterStock) ? masterStock : previousClosingMap.get(ing.id) ?? 0
             );
-        const in_qty = existing?.in_qty ?? 0;
+        const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
+        const existing_other_in = existing
+          ? Math.max(0, Number(existing.in_qty) - premix_output_qty)
+          : 0;
+        const in_qty = existing_other_in + premix_output_qty;
         const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
         const issue_theoretical = issueTheoreticalMap.get(ing.id) ?? 0;
-        const current_menu_issue_theoretical = menu_theoretical + issue_theoretical;
+        const premix_theoretical = premixUsageMap.get(ing.id) ?? 0;
+        const current_known_theoretical =
+          menu_theoretical + issue_theoretical + premix_theoretical;
         const existing_other_theoretical = existing
-          ? Math.max(0, Number(existing.theoretical_usage) - current_menu_issue_theoretical)
+          ? Math.max(0, Number(existing.theoretical_usage) - current_known_theoretical)
           : 0;
-        const theoretical_usage = current_menu_issue_theoretical + existing_other_theoretical;
+        const theoretical_usage = current_known_theoretical + existing_other_theoretical;
         const expected_closing = opening_stock + in_qty - theoretical_usage;
         const closing_stock = existing
           ? existing.closing_stock
@@ -2960,19 +2920,13 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         throw new Error(`Gagal upsert stock_ledger: ${ledgerErr.message}`);
       }
 
-      const latestClosingMap = await fetchLatestLedgerClosingMap(
-        supabase,
-        ledgerPayload.map((row) => row.ingredient_id)
-      );
-
       const stockUpdateResults = await Promise.all(
-        ledgerPayload.map((row) => {
-          const latestClosing = latestClosingMap.get(row.ingredient_id) ?? row.closing_stock;
-          return supabase
+        ledgerPayload.map((row) =>
+          supabase
             .from("ingredient")
-            .update({ current_stock: latestClosing })
-            .eq("id", row.ingredient_id);
-        })
+            .update({ current_stock: row.closing_stock })
+            .eq("id", row.ingredient_id)
+        )
       );
       const stockUpdateErr = stockUpdateResults.find((result) => result.error)?.error;
       if (stockUpdateErr) {
@@ -3119,7 +3073,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     <main
       className={
         embedded
-          ? "mx-auto w-full max-w-3xl rounded-xl border border-zinc-800 bg-zinc-950 pb-48"
+          ? "w-full bg-zinc-950 pb-32"
           : "mx-auto min-h-screen max-w-lg bg-zinc-950 pb-48"
       }
     >
@@ -3164,63 +3118,73 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         </div>
       ) : null}
 
-      <header
-        className={`z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur ${
-          embedded ? "" : "sticky top-0"
-        }`}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
-              {title}
-            </p>
-            <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-              Penanggung jawab (otomatis dari login)
-            </p>
-            <h1 className="text-lg font-bold text-zinc-50">{staff.name}</h1>
-            {businessDateLabel ? (
-              <p className="mt-1 text-sm text-zinc-300">
-                Hari Bisnis: <span className="font-medium text-zinc-50">{businessDateLabel}</span>
+      {!embedded ? (
+        <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <AbdulCompanyMark
+                size="sm"
+                subtitle="Operational Worksheet"
+                className="mb-3"
+              />
+              <p className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
+                {title}
               </p>
-            ) : null}
-            {sessionId ? (
-              <p className="mt-0.5 text-[10px] text-zinc-500">Session: {sessionId.slice(0, 8)}…</p>
-            ) : null}
-            {worksheetStatus ? (
-              <p className="mt-1 inline-flex items-center gap-1 rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
-                {locked ? <Lock className="h-3 w-3 text-sky-400" /> : null}
-                Status: {worksheetStatus}
+              <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                Penanggung jawab (otomatis dari login)
               </p>
-            ) : null}
-          </div>
-          {embedded ? null : (
+              <h1 className="text-lg font-bold text-zinc-50">{staff.name}</h1>
+              {businessDateLabel ? (
+                <p className="mt-1 text-sm text-zinc-300">
+                  Hari Bisnis: <span className="font-medium text-zinc-50">{businessDateLabel}</span>
+                </p>
+              ) : null}
+              {sessionId ? (
+                <p className="mt-0.5 text-[10px] text-zinc-500">Session: {sessionId.slice(0, 8)}…</p>
+              ) : null}
+              {worksheetStatus ? (
+                <p className="mt-1 inline-flex items-center gap-1 rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                  {locked ? <Lock className="h-3 w-3 text-sky-400" /> : null}
+                  Status: {worksheetStatus}
+                </p>
+              ) : null}
+            </div>
             <LogoutButton className="shrink-0 min-h-10 rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-300 hover:border-zinc-600" />
-          )}
-        </div>
-      </header>
+          </div>
+        </header>
+      ) : null}
 
       <nav
-        className={`sticky z-10 border-b border-zinc-800 bg-zinc-950/95 px-2 py-2 backdrop-blur ${
+        className={`sticky z-10 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur ${
           embedded ? "top-0" : "top-[100px]"
-        }`}
+        } ${embedded ? "px-4 py-2" : "px-2 py-2"}`}
         aria-label="Worksheet tabs"
       >
-        <ul className="grid grid-cols-4 gap-1">
+        <div className={embedded ? "flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between" : ""}>
+        <ul className={embedded ? "flex gap-2 overflow-x-auto" : "grid grid-cols-4 gap-1"}>
           {visibleTabs.map(({ id, label, icon: Icon }) => {
             const active = activeTab === id;
             return (
-              <li key={id}>
+              <li key={id} className={embedded ? "shrink-0" : ""}>
                 <button
                   type="button"
                   onClick={() => setActiveTab(id)}
-                  className={`flex min-h-14 w-full flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-center transition active:scale-[0.98] ${
+                  className={`flex text-center transition active:scale-[0.98] ${
                     active
-                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-900/50"
-                      : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
+                      ? embedded
+                        ? "border-cyan-300 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
+                        : "bg-indigo-600 text-white shadow-md shadow-indigo-900/50"
+                      : embedded
+                        ? "border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:text-zinc-100"
+                        : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
+                  } ${
+                    embedded
+                      ? "min-h-11 items-center justify-center gap-2 rounded-lg border px-4"
+                      : "min-h-14 w-full flex-col items-center justify-center gap-0.5 rounded-xl px-1"
                   }`}
                 >
-                  <Icon className={`h-4 w-4 ${active ? "text-amber-200" : ""}`} />
-                  <span className="text-[10px] font-bold uppercase leading-tight tracking-wide">
+                  <Icon className={`h-4 w-4 ${active && !embedded ? "text-amber-200" : ""}`} />
+                  <span className={embedded ? "text-sm font-semibold" : "text-[10px] font-bold uppercase leading-tight tracking-wide"}>
                     {label}
                   </span>
                 </button>
@@ -3228,25 +3192,63 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             );
           })}
         </ul>
+
+        {embedded ? (
+          <div className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
+            {businessDateLabel ? (
+              <span className="rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 font-semibold text-zinc-200">
+                {businessDateLabel}
+              </span>
+            ) : null}
+            {worksheetStatus ? (
+              <span className="inline-flex items-center gap-1 rounded-md bg-zinc-900 px-2 py-1 font-semibold uppercase tracking-wide text-zinc-400">
+                {locked ? <Lock className="h-3 w-3 text-sky-400" /> : null}
+                {worksheetStatus}
+              </span>
+            ) : null}
+            <span className="hidden sm:inline">PIC: {staff.name}</span>
+          </div>
+        ) : null}
+        </div>
       </nav>
 
-      {visibleTabs.length === 0 ? (
+      {!embedded && visibleTabs.length === 0 ? (
         <section className="mx-4 mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
           Worksheet staff untuk departemen ini sedang dinonaktifkan dari Master Admin.
         </section>
       ) : null}
 
-      <section className="border-b border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-indigo-300">
+      <section
+        className={
+          embedded
+            ? "border-b border-zinc-800 bg-zinc-900/30 px-4 py-3"
+            : "border-b border-indigo-500/20 bg-indigo-500/5 px-4 py-3"
+        }
+      >
+        <div className={embedded ? "flex flex-col gap-3 lg:flex-row lg:items-center" : ""}>
+          <div className={embedded ? "hidden" : ""}>
+            <div className={`flex items-center gap-2 text-xs font-semibold uppercase tracking-wide ${embedded ? "text-cyan-300" : "text-indigo-300"}`}>
             <CalendarDays className="h-4 w-4" />
             Tanggal Worksheet
+            </div>
+            <p className={`mt-1 text-xs leading-relaxed ${embedded ? "text-zinc-500" : "text-indigo-100/75"}`}>
+              Pilih tanggal kerja. Data yang sudah submit tetap harus lewat approval untuk koreksi.
+            </p>
           </div>
-          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+          <div className={embedded ? "flex flex-col gap-2 sm:flex-row sm:items-center lg:w-auto" : "mt-2 flex flex-col gap-2 sm:flex-row"}>
+            {embedded ? (
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                <CalendarDays className="h-4 w-4" />
+                Tanggal
+              </div>
+            ) : null}
             <input
               type="date"
               value={testBusinessDate}
               onChange={(e) => setTestBusinessDate(e.target.value)}
-              className="min-h-11 flex-1 rounded-lg border border-indigo-500/30 bg-zinc-950 px-3 text-sm text-zinc-100"
+              className={`min-h-11 rounded-lg border bg-zinc-950 px-3 text-sm text-zinc-100 ${
+                embedded ? "w-full border-zinc-700 sm:w-44" : "flex-1 border-indigo-500/30"
+              }`}
               aria-label="Tanggal business date worksheet"
             />
             <div className="grid grid-cols-2 gap-2">
@@ -3254,7 +3256,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                 type="button"
                 disabled={isChangingBusinessDate}
                 onClick={() => void applyTestBusinessDate()}
-                className="min-h-11 rounded-lg bg-indigo-600 px-3 text-sm font-bold text-white disabled:opacity-50"
+                className={`min-h-11 rounded-lg px-3 text-sm font-bold disabled:opacity-50 ${
+                  embedded ? "bg-cyan-400 text-zinc-950" : "bg-indigo-600 text-white"
+                }`}
               >
                 Pakai
               </button>
@@ -3268,12 +3272,43 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
               </button>
             </div>
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-indigo-100/75">
-            Pilih tanggal kerja yang mau diisi. Jika tanggal sudah submit, edit harus diajukan dan di-approve admin/master dulu.
-          </p>
-        </section>
+          {embedded && !isLoading && (ingredients.length > 0 || menus.length > 0 || premixItems.length > 0) ? (
+            <div className="relative w-full lg:ml-auto lg:max-w-sm">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <input
+                type="search"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder={
+                  activeTab === "sold"
+                    ? "Cari menu terjual..."
+                    : activeTab === "issue"
+                      ? "Cari menu remake..."
+                    : activeTab === "premix"
+                      ? "Cari premix..."
+                      : "Cari bahan baku..."
+                }
+                autoCorrect="off"
+                spellCheck={false}
+                className={SEARCH_INPUT_CLASS}
+                aria-label="Pencarian cepat worksheet"
+              />
+              {searchTerm ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-200"
+                  aria-label="Hapus pencarian"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </section>
 
-      {!isLoading && (ingredients.length > 0 || menus.length > 0 || premixItems.length > 0) ? (
+      {!embedded && !isLoading && (ingredients.length > 0 || menus.length > 0 || premixItems.length > 0) ? (
         <div className="px-4 pt-3">
           <div className="relative mb-4 w-full">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -4068,7 +4103,8 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                   Kamar 6 — Menu Terjual
                 </h2>
                 <p className="mb-4 text-xs text-zinc-500">
-                  Kosong berarti tidak ada penjualan. Simpan sales menu saat pergantian shift; Submit Closing aktif otomatis setelah 00:00 WIB.
+                  Kosong berarti tidak ada penjualan. Simpan sales menu saat pergantian shift;
+                  Submit Closing langsung mengunci worksheet dan menyinkronkan stok admin.
                 </p>
                 {menus.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
@@ -4171,7 +4207,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       </div>
 
       {!locked && canEdit && !isLoading && ingredients.length > 0 ? (
-        <WorksheetStickyActionBar>
+        <WorksheetStickyActionBar variant={embedded ? "admin" : "staff"}>
           {activeTabEnabled && activeTab === "receive" ? (
             <button
               type="button"
@@ -4281,7 +4317,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
               </button>
               <button
                 type="button"
-                disabled={isSubmitting || !closingSubmitOpen}
+                disabled={isSubmitting}
                 onClick={stickySubmit}
                 className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
               >
@@ -4291,11 +4327,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                   <Lock className="h-5 w-5 shrink-0" />
                 )}
                 <span>
-                  {isSubmitting
-                    ? "Mengunci laporan…"
-                    : closingSubmitOpen
-                      ? "Submit Report Closing"
-                      : "Submit Aktif 00:00 WIB"}
+                  {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}
                 </span>
               </button>
             </div>
