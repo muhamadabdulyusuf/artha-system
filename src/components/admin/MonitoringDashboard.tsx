@@ -27,6 +27,7 @@ import type {
   MenuCategory,
   MenuItemRow,
   StockLedgerRow,
+  WorksheetEditRequestRow,
   SupplierIngredientPriceRow,
   SupplierRow,
 } from "@/lib/types/database";
@@ -271,6 +272,19 @@ type MenuIssueReportRow = {
   note: string;
   photoUrl: string;
   createdAt: string;
+};
+
+type WorksheetEditRequestJoined = WorksheetEditRequestRow & {
+  staff: { name: string } | { name: string }[] | null;
+  worksheet_session:
+    | { status: string; submitted_at: string | null }
+    | { status: string; submitted_at: string | null }[]
+    | null;
+};
+
+type WorksheetEditRequestReportRow = WorksheetEditRequestRow & {
+  staffName: string;
+  sessionStatus: string;
 };
 
 type DemandEventReportRow = DemandEventRow & {
@@ -1203,6 +1217,225 @@ function DepartmentLedgerTable({
           </tbody>
         </table>
       </div>
+    </section>
+  );
+}
+
+function WorksheetEditRequestPanel({
+  supabase,
+  canEdit,
+  onChanged,
+}: {
+  supabase: ReturnType<typeof getSupabaseClientOrNull>;
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const [requests, setRequests] = useState<WorksheetEditRequestReportRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ message: string; variant: "success" | "error" } | null>(null);
+
+  const loadRequests = useCallback(async () => {
+    if (!supabase) {
+      setRequests([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("worksheet_edit_request")
+      .select(
+        `
+        *,
+        staff:requested_by_staff_id ( name ),
+        worksheet_session:session_id ( status, submitted_at )
+      `
+      )
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setNotice({ message: error.message, variant: "error" });
+      setLoading(false);
+      return;
+    }
+
+    setRequests(
+      ((data ?? []) as unknown as WorksheetEditRequestJoined[]).map((row) => {
+        const staffRaw = row.staff;
+        const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+        const sessionRaw = row.worksheet_session;
+        const session = Array.isArray(sessionRaw) ? sessionRaw[0] : sessionRaw;
+        return {
+          ...row,
+          staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+          sessionStatus: session?.status ?? "-",
+        };
+      })
+    );
+    setLoading(false);
+  }, [supabase]);
+
+  useEffect(() => {
+    void loadRequests();
+  }, [loadRequests]);
+
+  const reviewRequest = async (
+    request: WorksheetEditRequestReportRow,
+    status: "APPROVED" | "REJECTED"
+  ) => {
+    if (!supabase || !canEdit || busyId) return;
+
+    const reviewer = getStaffSession();
+    if (!reviewer) {
+      setNotice({ message: "Session admin/master tidak ditemukan.", variant: "error" });
+      return;
+    }
+
+    const rejectNote =
+      status === "REJECTED" ? window.prompt("Catatan reject request koreksi:", "") : null;
+    if (status === "REJECTED" && rejectNote === null) return;
+    const reviewNote =
+      status === "APPROVED"
+        ? "Worksheet dibuka untuk koreksi staff."
+        : rejectNote?.trim() || "Request koreksi ditolak.";
+
+    setBusyId(request.id);
+    setNotice(null);
+
+    try {
+      if (status === "APPROVED") {
+        const { error: sessionErr } = await supabase
+          .from("worksheet_session")
+          .update({
+            status: "DRAFT",
+            submitted_at: null,
+            submitted_by_staff_id: null,
+          })
+          .eq("id", request.session_id);
+
+        if (sessionErr) throw sessionErr;
+
+        const { error: dayErr } = await supabase
+          .from("business_day")
+          .update({ status: "DRAFT" })
+          .eq("business_date", request.business_date);
+
+        if (dayErr) throw dayErr;
+      }
+
+      const { error: requestErr } = await supabase
+        .from("worksheet_edit_request")
+        .update({
+          status,
+          reviewed_by_staff_id: reviewer.id,
+          reviewed_at: new Date().toISOString(),
+          review_note: reviewNote,
+        })
+        .eq("id", request.id);
+
+      if (requestErr) throw requestErr;
+
+      setNotice({
+        message:
+          status === "APPROVED"
+            ? `Worksheet ${request.department} ${formatBusinessDateLabel(request.business_date)} dibuka.`
+            : "Request koreksi ditolak.",
+        variant: "success",
+      });
+      await loadRequests();
+      onChanged();
+    } catch (err) {
+      setNotice({
+        message: err instanceof Error ? err.message : "Gagal review request koreksi.",
+        variant: "error",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-100">Approval Koreksi Worksheet</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Staff yang mau edit tanggal submitted harus request dulu di sini.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void loadRequests()}
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
+          aria-label="Refresh request koreksi worksheet"
+        >
+          <RefreshCw className="h-4 w-4" />
+        </button>
+      </div>
+
+      {notice ? (
+        <p
+          className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
+            notice.variant === "success"
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+              : "border-red-500/40 bg-red-500/10 text-red-300"
+          }`}
+        >
+          {notice.message}
+        </p>
+      ) : null}
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-4 text-sm text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin text-indigo-300" />
+          Memuat request koreksi…
+        </div>
+      ) : requests.length === 0 ? (
+        <p className="rounded-lg border border-slate-800 bg-zinc-950/50 px-3 py-4 text-sm text-slate-500">
+          Belum ada request koreksi worksheet.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {requests.map((request) => (
+            <li key={request.id} className="rounded-lg border border-slate-800 bg-zinc-950/50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-100">
+                    {request.staffName} · {request.department}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {formatBusinessDateLabel(request.business_date)} · status {request.sessionStatus}
+                  </p>
+                </div>
+                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+                  PENDING
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-slate-300">{request.reason}</p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={!canEdit || busyId === request.id}
+                  onClick={() => void reviewRequest(request, "APPROVED")}
+                  className="min-h-10 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white disabled:opacity-50"
+                >
+                  Approve & Buka
+                </button>
+                <button
+                  type="button"
+                  disabled={!canEdit || busyId === request.id}
+                  onClick={() => void reviewRequest(request, "REJECTED")}
+                  className="min-h-10 rounded-lg border border-red-500/40 px-3 text-xs font-bold text-red-200 disabled:opacity-50"
+                >
+                  Reject
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -2774,6 +3007,11 @@ export function MonitoringDashboard() {
     <div className="space-y-6">
       {activeMonitoringTab === "control" ? (
       <section className="grid gap-6 lg:grid-cols-2">
+        <WorksheetEditRequestPanel
+          supabase={supabase}
+          canEdit={canEdit}
+          onChanged={() => setRefreshKey((key) => key + 1)}
+        />
         <OpnameApprovalPanel />
         <StockAdjustmentPanel />
       </section>

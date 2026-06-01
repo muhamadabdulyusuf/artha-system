@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Loader2, PenLine } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Loader2, PenLine, Search, X } from "lucide-react";
 import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
@@ -18,10 +18,14 @@ export function StockAdjustmentPanel() {
   const [newQty, setNewQty] = useState("");
   const [reason, setReason] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState<Department | "all">("all");
+  const [ingredientSearch, setIngredientSearch] = useState("");
+  const [ingredientPickerOpen, setIngredientPickerOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const ingredientPickerRef = useRef<HTMLDivElement | null>(null);
+  const ingredientSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -61,12 +65,50 @@ export function StockAdjustmentPanel() {
     void loadData();
   }, [loadData]);
 
-  const filteredIngredients =
-    departmentFilter === "all"
-      ? ingredients
-      : ingredients.filter((i) => i.department === departmentFilter);
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!ingredientPickerRef.current?.contains(event.target as Node)) {
+        setIngredientPickerOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    if (!ingredientPickerOpen) return;
+    window.requestAnimationFrame(() => ingredientSearchInputRef.current?.focus());
+  }, [ingredientPickerOpen]);
+
+  const filteredIngredients = useMemo(() => {
+    const query = ingredientSearch.trim().toLowerCase();
+    return ingredients.filter((ingredient) => {
+      const matchesDepartment =
+        departmentFilter === "all" || ingredient.department === departmentFilter;
+      const matchesSearch =
+        !query ||
+        [
+          ingredient.name,
+          ingredient.department,
+          ingredient.unit,
+          String(ingredient.current_stock),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      return matchesDepartment && matchesSearch;
+    });
+  }, [departmentFilter, ingredientSearch, ingredients]);
 
   const selected = ingredients.find((i) => i.id === selectedId);
+
+  const selectIngredient = (ingredient: IngredientRow) => {
+    setSelectedId(ingredient.id);
+    setNewQty(String(ingredient.current_stock));
+    setIngredientSearch("");
+    setIngredientPickerOpen(false);
+  };
 
   const handleAdjust = async () => {
     const session = getStaffSession();
@@ -157,26 +199,123 @@ export function StockAdjustmentPanel() {
           ))}
         </div>
 
-        <label className="block text-xs text-zinc-400">
-          Pilih bahan
-          <select
-            value={selectedId}
-            onChange={(e) => {
-              setSelectedId(e.target.value);
-              const ing = ingredients.find((i) => i.id === e.target.value);
-              setNewQty(ing ? String(ing.current_stock) : "");
-            }}
-            className="mt-1 min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-50"
+        <div className="text-xs text-zinc-400">
+          <p>Pilih bahan</p>
+          <div
+            ref={ingredientPickerRef}
+            className="relative mt-1"
+            role="combobox"
+            aria-expanded={ingredientPickerOpen}
+            aria-controls="stock-adjustment-ingredient-list"
           >
-            <option value="">— Pilih bahan —</option>
-            {filteredIngredients.map((ing) => (
-              <option key={ing.id} value={ing.id}>
-                {ing.name} ({ing.department}) — stok: {Number(ing.current_stock).toLocaleString("id-ID")}{" "}
-                {ing.unit}
-              </option>
-            ))}
-          </select>
-        </label>
+            <button
+              type="button"
+              onClick={() => setIngredientPickerOpen((open) => !open)}
+              className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 px-3 pr-12 text-left text-sm text-zinc-50 hover:border-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
+              aria-label="Buka pilihan bahan"
+            >
+              <span className="min-w-0">
+                {selected ? (
+                  <>
+                    <span className="block truncate font-medium">{selected.name}</span>
+                    <span className="mt-0.5 block truncate text-xs text-zinc-500">
+                      {selected.department} · stok {Number(selected.current_stock).toLocaleString("id-ID")} {selected.unit}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-zinc-500">Klik pilih bahan...</span>
+                )}
+              </span>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-zinc-500 transition ${ingredientPickerOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+            {selected ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedId("");
+                  setNewQty("");
+                  setIngredientSearch("");
+                  setIngredientPickerOpen(true);
+                }}
+                className="absolute right-9 top-2 flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                aria-label="Hapus pilihan bahan"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : null}
+            {ingredientPickerOpen ? (
+              <div
+                id="stock-adjustment-ingredient-list"
+                role="listbox"
+                className="absolute z-20 mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 shadow-xl shadow-black/40"
+              >
+                <div className="relative mb-2">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                  <input
+                    ref={ingredientSearchInputRef}
+                    type="search"
+                    value={ingredientSearch}
+                    onChange={(e) => setIngredientSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setIngredientPickerOpen(false);
+                      if (e.key === "Enter" && filteredIngredients[0]) {
+                        e.preventDefault();
+                        selectIngredient(filteredIngredients[0]);
+                      }
+                    }}
+                    placeholder="Search bahan..."
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="min-h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 pl-9 pr-9 text-sm text-zinc-50 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
+                    aria-label="Cari bahan untuk koreksi stok"
+                  />
+                  {ingredientSearch ? (
+                    <button
+                      type="button"
+                      onClick={() => setIngredientSearch("")}
+                      className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                      aria-label="Hapus pencarian bahan"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  {filteredIngredients.length === 0 ? (
+                    <p className="px-3 py-3 text-sm text-zinc-500">Bahan tidak ditemukan.</p>
+                  ) : (
+                    filteredIngredients.map((ing) => (
+                      <button
+                        key={ing.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selectedId === ing.id}
+                        onClick={() => selectIngredient(ing)}
+                        className={`flex w-full items-start justify-between gap-3 rounded-md px-3 py-2 text-left text-sm ${
+                          selectedId === ing.id
+                            ? "bg-indigo-600 text-white"
+                            : "text-zinc-200 hover:bg-zinc-900"
+                        }`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">{ing.name}</span>
+                          <span className="mt-0.5 block text-xs opacity-70">
+                            {ing.department} · {ing.unit}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-xs tabular-nums opacity-80">
+                          {Number(ing.current_stock).toLocaleString("id-ID")}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
 
         {selected && canEdit ? (
           <>

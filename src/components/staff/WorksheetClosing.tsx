@@ -32,6 +32,7 @@ import type {
   IngredientRow,
   MenuItemRow,
   RecipeLineForCalc,
+  WorksheetEditRequestRow,
 } from "@/lib/types/database";
 import { canAccessWorksheet } from "@/lib/worksheet/access";
 import {
@@ -190,6 +191,11 @@ type WorksheetClosingProps = {
   title: string;
 };
 
+type WorksheetEditRequestSummary = Pick<
+  WorksheetEditRequestRow,
+  "id" | "reason" | "status" | "created_at"
+>;
+
 const DEFAULT_LINE: IngredientLineState = {
   inQty: "",
   inUnitPrice: "",
@@ -346,6 +352,19 @@ function resolveLineOwner(row: StaffJoin): WorksheetLineOwner {
     staffId: row.staff_id,
     staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
   };
+}
+
+function normalizeOwnerText(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function buildOwnerDeleteFilter(staffIds: string[]): string {
+  const uniqueIds = Array.from(
+    new Set(staffIds.map((id) => id.trim()).filter((id) => id.length > 0))
+  );
+  return uniqueIds.length > 0
+    ? `staff_id.in.(${uniqueIds.join(",")}),staff_id.is.null`
+    : "staff_id.is.null";
 }
 
 function isIsoDate(value: string): boolean {
@@ -749,9 +768,12 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
   const [staff, setStaff] = useState<StaffSession | null>(null);
   const [activeTab, setActiveTab] = useState<WorksheetTab>("receive");
+  const [selectedBusinessDate, setSelectedBusinessDate] = useState(() => resolveWorksheetBusinessDate());
   const [businessDate, setBusinessDate] = useState<string>("");
   const [worksheetStatus, setWorksheetStatus] = useState<ClosingStatus | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [editRequest, setEditRequest] = useState<WorksheetEditRequestSummary | null>(null);
+  const [correctionReason, setCorrectionReason] = useState("");
   const [ingredients, setIngredients] = useState<IngredientRow[]>([]);
   const [menus, setMenus] = useState<MenuItemWithRecipe[]>([]);
   const [premixItems, setPremixItems] = useState<PremixItemWithRecipe[]>([]);
@@ -774,6 +796,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const [isSavingMenuProgress, setIsSavingMenuProgress] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRequestingResubmit, setIsRequestingResubmit] = useState(false);
+  const [isChangingBusinessDate, setIsChangingBusinessDate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{
     title?: string;
@@ -794,6 +817,8 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const pendingAdminApproval = worksheetStatus === "PENDING_APPROVAL_ADMIN";
   const showResubmitCta = canRequestResubmit(worksheetStatus ?? undefined);
   const canEdit = canEditStaffData(staff?.role);
+  const canApproveCorrection = staff?.role === "admin" || staff?.role === "op_manager";
+  const correctionReasonReady = correctionReason.trim().length >= 5;
   const closingSubmitOpen = useMemo(() => isClosingSubmitWindowOpen(new Date(clockTick)), [clockTick]);
 
   const businessDateLabel = useMemo(
@@ -841,10 +866,36 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     [ingredients, lines]
   );
 
+  const isCurrentStaffOwner = useCallback(
+    (owner?: WorksheetLineOwner | null) => {
+      if (!owner) return true;
+      if (!owner.staffId) return true;
+
+      const ownerStaffId = normalizeOwnerText(owner.staffId);
+      const currentStaffId = normalizeOwnerText(staff?.id);
+      if (ownerStaffId && currentStaffId && ownerStaffId === currentStaffId) return true;
+
+      const ownerName = normalizeOwnerText(owner.staffName);
+      const currentName = normalizeOwnerText(staff?.name);
+      return Boolean(ownerName && currentName && ownerName === currentName);
+    },
+    [staff?.id, staff?.name]
+  );
+
   const isOwnedByOther = useCallback(
-    (owner?: WorksheetLineOwner | null) =>
-      Boolean(owner?.staffId && staff?.id && owner.staffId !== staff.id),
-    [staff?.id]
+    (owner?: WorksheetLineOwner | null) => Boolean(owner && !isCurrentStaffOwner(owner)),
+    [isCurrentStaffOwner]
+  );
+
+  const formatOwnerLabel = useCallback(
+    (owner?: WorksheetLineOwner | null) => {
+      if (!owner) return null;
+      if (!owner.staffId) return "Data lama - bisa diedit";
+      return isCurrentStaffOwner(owner)
+        ? `Input kamu - bisa diedit`
+        : `Dikunci oleh ${owner.staffName}`;
+    },
+    [isCurrentStaffOwner]
   );
 
   const currentStaffOwner = useCallback(
@@ -853,6 +904,19 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       staffName: staff?.name ?? "Staff ini",
     }),
     [staff?.id, staff?.name]
+  );
+
+  const getEditableOwnerIds = useCallback(
+    (ownerMap: Record<string, WorksheetLineOwner>, lineIds: string[]) => {
+      const ids = new Set<string>();
+      if (staff?.id) ids.add(staff.id);
+      for (const lineId of lineIds) {
+        const owner = ownerMap[lineId];
+        if (owner?.staffId && isCurrentStaffOwner(owner)) ids.add(owner.staffId);
+      }
+      return Array.from(ids);
+    },
+    [isCurrentStaffOwner, staff?.id]
   );
 
   const refreshIngredientStockFromDb = useCallback(async () => {
@@ -992,20 +1056,21 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     [supabase]
   );
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (dateOverride?: string) => {
     if (!staff) return;
 
     setIsLoading(true);
     setError(null);
 
-    const date = resolveWorksheetBusinessDate();
+    const date = dateOverride ?? selectedBusinessDate;
     setBusinessDate(date);
     setTestBusinessDate(date);
+    setSelectedBusinessDate(date);
+    setEditRequest(null);
 
-    const { error: dayErr } = await supabase.from("business_day").upsert(
-      { business_date: date, status: "DRAFT" },
-      { onConflict: "business_date" }
-    );
+    const { error: dayErr } = await supabase
+      .from("business_day")
+      .upsert({ business_date: date }, { onConflict: "business_date", ignoreDuplicates: true });
     if (dayErr) {
       setError(dayErr.message);
       setIsLoading(false);
@@ -1061,6 +1126,18 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
 
     setWorksheetStatus(ws?.status ?? null);
     setSessionId(ws?.id ?? null);
+
+    if (ws?.id && staff.id) {
+      const { data: requestRow } = await supabase
+        .from("worksheet_edit_request")
+        .select("id, reason, status, created_at")
+        .eq("session_id", ws.id)
+        .eq("requested_by_staff_id", staff.id)
+        .eq("status", "PENDING")
+        .maybeSingle();
+
+      setEditRequest(requestRow ?? null);
+    }
 
     const ingredientPreset: Record<string, Partial<IngredientLineState>> = {};
     const soldPreset: Record<string, string> = {};
@@ -1242,6 +1319,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     initPremixQuantities,
     initSoldItems,
     refreshReceiveEntrySummaries,
+    selectedBusinessDate,
     staff,
     supabase,
   ]);
@@ -1315,20 +1393,32 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const applyTestBusinessDate = async () => {
     const next = testBusinessDate.trim();
     if (!isIsoDate(next)) {
-      showPlainErrorToast("Tanggal test harus format YYYY-MM-DD.");
+      showPlainErrorToast("Tanggal worksheet harus format YYYY-MM-DD.");
       return;
     }
-    window.localStorage.setItem(TEST_BUSINESS_DATE_STORAGE_KEY, next);
-    await loadData();
-    showSuccessToast(`Mode test pindah ke business date ${formatBusinessDateLabel(next)}.`);
+    setIsChangingBusinessDate(true);
+    try {
+      if (canUseTestBusinessDate()) {
+        window.localStorage.setItem(TEST_BUSINESS_DATE_STORAGE_KEY, next);
+      }
+      await loadData(next);
+      showSuccessToast(`Worksheet pindah ke business date ${formatBusinessDateLabel(next)}.`);
+    } finally {
+      setIsChangingBusinessDate(false);
+    }
   };
 
   const clearTestBusinessDate = async () => {
-    window.localStorage.removeItem(TEST_BUSINESS_DATE_STORAGE_KEY);
     const liveDate = resolveBusinessDate();
-    setTestBusinessDate(liveDate);
-    await loadData();
-    showSuccessToast(`Mode test dimatikan. Kembali ke live date ${formatBusinessDateLabel(liveDate)}.`);
+    setIsChangingBusinessDate(true);
+    try {
+      window.localStorage.removeItem(TEST_BUSINESS_DATE_STORAGE_KEY);
+      setTestBusinessDate(liveDate);
+      await loadData(liveDate);
+      showSuccessToast(`Kembali ke business date live ${formatBusinessDateLabel(liveDate)}.`);
+    } finally {
+      setIsChangingBusinessDate(false);
+    }
   };
 
   const ensureDraftSession = async (
@@ -1675,6 +1765,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const editableIngredientIds = freshIngredients
         .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
         .map((ing) => ing.id);
+      const editableOutOwnerIds = getEditableOwnerIds(outLineOwners, editableIngredientIds);
 
       const outLinePayload = freshIngredients
         .filter((ing) => editableIngredientIds.includes(ing.id))
@@ -1699,7 +1790,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               .delete()
               .eq("session_id", activeSessionId)
               .in("ingredient_id", editableIngredientIds)
-              .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+              .or(buildOwnerDeleteFilter(editableOutOwnerIds))
           : { error: null };
 
       if (clearErr) {
@@ -1744,6 +1835,10 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const editableIngredients = freshIngredients.filter(
         (ing) => !isOwnedByOther(opnameLineOwners[ing.id])
       );
+      const editableOpnameOwnerIds = getEditableOwnerIds(
+        opnameLineOwners,
+        editableIngredients.map((ing) => ing.id)
+      );
       const opnamePayload = editableIngredients.flatMap((ing) => {
         const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
         if (isBlankQty(raw)) {
@@ -1773,7 +1868,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               .delete()
               .eq("session_id", activeSessionId)
               .in("ingredient_id", blankIngredientIds)
-              .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+              .or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
           : { error: null };
 
       if (clearBlankErr) {
@@ -1816,6 +1911,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const editablePremixIds = premixItems
         .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
         .map((premix) => premix.id);
+      const editablePremixOwnerIds = getEditableOwnerIds(premixLineOwners, editablePremixIds);
       const payload = premixItems
         .filter((premix) => editablePremixIds.includes(premix.id))
         .map((premix) => {
@@ -1837,7 +1933,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               .delete()
               .eq("session_id", activeSessionId)
               .in("output_ingredient_id", editablePremixIds)
-              .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+              .or(buildOwnerDeleteFilter(editablePremixOwnerIds))
           : { error: null };
 
       if (clearErr) {
@@ -1869,15 +1965,51 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
   const handleRequestResubmit = async () => {
     if (!sessionId || !showResubmitCta || isRequestingResubmit) return;
 
-    const confirmed = window.confirm(
-      "Buka kembali worksheet untuk koreksi typo? Anda perlu submit ulang setelah selesai memperbaiki."
-    );
-    if (!confirmed) return;
+    const reason = correctionReason.trim();
+    if (!canApproveCorrection && reason.length < 5) {
+      showPlainErrorToast("Isi alasan koreksi minimal 5 karakter sebelum ajukan request.");
+      return;
+    }
+
+    if (canApproveCorrection) {
+      const confirmed = window.confirm(
+        "Buka kembali worksheet untuk koreksi? Worksheet perlu submit ulang setelah selesai diperbaiki."
+      );
+      if (!confirmed) return;
+    }
 
     setIsRequestingResubmit(true);
     setError(null);
 
     try {
+      if (!canApproveCorrection) {
+        if (!staff?.id) {
+          throw new Error("Sesi staff tidak ditemukan. Silakan logout dan login ulang.");
+        }
+
+        const { data: requestRow, error: requestErr } = await supabase
+          .from("worksheet_edit_request")
+          .insert({
+            session_id: sessionId,
+            business_date: businessDate || selectedBusinessDate,
+            department,
+            requested_by_staff_id: staff.id,
+            reason,
+            status: "PENDING",
+          })
+          .select("id, reason, status, created_at")
+          .single();
+
+        if (requestErr || !requestRow) {
+          throw new Error(requestErr?.message ?? "Gagal mengajukan koreksi worksheet.");
+        }
+
+        setEditRequest(requestRow);
+        setCorrectionReason("");
+        showSuccessToast("Request koreksi dikirim ke admin/master untuk approval.");
+        return;
+      }
+
       const { error: unlockErr } = await supabase
         .from("worksheet_session")
         .update({
@@ -1892,7 +2024,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       }
 
       setWorksheetStatus("DRAFT");
-      showSuccessToast("Worksheet dibuka kembali. Semua kamar bisa diedit.");
+      showSuccessToast("Worksheet dibuka kembali. Semua kamar bisa diedit dan perlu submit ulang.");
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -1996,6 +2128,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     const editableIssueMenuIds = menuList
       .filter((menu) => !isOwnedByOther(issueLineOwners[menu.id]))
       .map((menu) => menu.id);
+    const editableIssueOwnerIds = getEditableOwnerIds(issueLineOwners, editableIssueMenuIds);
     const issuePayload = menuList
       .filter((menu) => editableIssueMenuIds.includes(menu.id))
       .map((menu) => {
@@ -2020,7 +2153,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
             .delete()
             .eq("session_id", activeSessionId)
             .in("menu_item_id", editableIssueMenuIds)
-            .or(`staff_id.eq.${staff.id},staff_id.is.null`)
+            .or(buildOwnerDeleteFilter(editableIssueOwnerIds))
         : { error: null };
 
     if (clearIssueErr) {
@@ -2129,6 +2262,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const editableOutIngredientIds = freshIngredients
         .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
         .map((ing) => ing.id);
+      const editableOutOwnerIds = getEditableOwnerIds(outLineOwners, editableOutIngredientIds);
       const outLinePayload = freshIngredients
         .filter((ing) => editableOutIngredientIds.includes(ing.id))
         .map((ing) => {
@@ -2152,7 +2286,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               .delete()
               .eq("session_id", ensuredSessionId)
               .in("ingredient_id", editableOutIngredientIds)
-              .or(`staff_id.eq.${submittingStaffId},staff_id.is.null`)
+              .or(buildOwnerDeleteFilter(editableOutOwnerIds))
           : { error: null };
 
       if (clearOutErr) {
@@ -2173,6 +2307,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
       const editablePremixIds = premixItems
         .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
         .map((premix) => premix.id);
+      const editablePremixOwnerIds = getEditableOwnerIds(premixLineOwners, editablePremixIds);
       const premixPayload = premixItems
         .filter((premix) => editablePremixIds.includes(premix.id))
         .map((premix) => {
@@ -2194,7 +2329,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               .delete()
               .eq("session_id", ensuredSessionId)
               .in("output_ingredient_id", editablePremixIds)
-              .or(`staff_id.eq.${submittingStaffId},staff_id.is.null`)
+              .or(buildOwnerDeleteFilter(editablePremixOwnerIds))
           : { error: null };
 
       if (clearPremixErr) {
@@ -2446,12 +2581,17 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
     isSavingOpname ||
     isSavingPremix ||
     isSavingMenuProgress ||
-    isRequestingResubmit;
+    isRequestingResubmit ||
+    isChangingBusinessDate;
 
   const overlayMessage = isSubmitting
     ? "Mengirim laporan closing…"
-    : isRequestingResubmit
-      ? "Membuka kembali worksheet…"
+    : isChangingBusinessDate
+      ? "Memuat tanggal worksheet…"
+      : isRequestingResubmit
+        ? canApproveCorrection
+          ? "Membuka kembali worksheet…"
+          : "Mengirim request koreksi…"
       : isSavingReceive
         ? "Menyimpan pasokan…"
           : isSavingOutStock
@@ -2569,43 +2709,42 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
         </ul>
       </nav>
 
-      {showTestDateControls ? (
-        <section className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-3">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-amber-300">
+      <section className="border-b border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-indigo-300">
             <CalendarDays className="h-4 w-4" />
-            Mode Test Business Date
+            Tanggal Worksheet
           </div>
           <div className="mt-2 flex flex-col gap-2 sm:flex-row">
             <input
               type="date"
               value={testBusinessDate}
               onChange={(e) => setTestBusinessDate(e.target.value)}
-              className="min-h-11 flex-1 rounded-lg border border-amber-500/30 bg-zinc-950 px-3 text-sm text-zinc-100"
-              aria-label="Tanggal business date untuk testing"
+              className="min-h-11 flex-1 rounded-lg border border-indigo-500/30 bg-zinc-950 px-3 text-sm text-zinc-100"
+              aria-label="Tanggal business date worksheet"
             />
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
+                disabled={isChangingBusinessDate}
                 onClick={() => void applyTestBusinessDate()}
-                className="min-h-11 rounded-lg bg-amber-500 px-3 text-sm font-bold text-zinc-950"
+                className="min-h-11 rounded-lg bg-indigo-600 px-3 text-sm font-bold text-white disabled:opacity-50"
               >
                 Pakai
               </button>
               <button
                 type="button"
+                disabled={isChangingBusinessDate}
                 onClick={() => void clearTestBusinessDate()}
                 className="min-h-11 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-300"
               >
-                Live
+                Hari Ini
               </button>
             </div>
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-amber-100/70">
-            Untuk simulasi: submit tanggal ini, lalu pilih tanggal besoknya untuk test carry-over.
-            Kalau mau edit tanggal yang sudah submit, gunakan Request Resubmit.
+          <p className="mt-2 text-xs leading-relaxed text-indigo-100/75">
+            Pilih tanggal kerja yang mau diisi. Jika tanggal sudah submit, edit harus diajukan dan di-approve admin/master dulu.
           </p>
         </section>
-      ) : null}
 
       {!isLoading && (ingredients.length > 0 || menus.length > 0 || premixItems.length > 0) ? (
         <div className="px-4 pt-3">
@@ -2665,26 +2804,53 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
               <Lock className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-sky-100">
-                  Worksheet hari ini sudah terkunci
+                  Worksheet tanggal ini sudah terkunci
                 </p>
                 <p className="mt-1 text-xs text-sky-200/90">
                   Status: <span className="font-medium">{worksheetStatus}</span>. Input dinonaktifkan
-                  hingga worksheet dibuka kembali.
+                  sampai request koreksi disetujui admin/master.
                 </p>
-                {showResubmitCta && canEdit ? (
-                  <button
-                    type="button"
-                    disabled={isRequestingResubmit || isSubmitting}
-                    onClick={() => void handleRequestResubmit()}
-                    className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-amber-400/50 bg-amber-500/20 px-4 text-sm font-bold text-amber-100 active:bg-amber-500/30 disabled:opacity-50"
-                  >
-                    {isRequestingResubmit ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Unlock className="h-4 w-4" />
-                    )}
-                    🔓 Request Resubmit / Koreksi Typo
-                  </button>
+                {editRequest ? (
+                  <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
+                    <p className="text-xs font-semibold text-amber-100">
+                      Request koreksi menunggu approval admin/master.
+                    </p>
+                    <p className="mt-1 text-xs text-amber-100/75">{editRequest.reason}</p>
+                  </div>
+                ) : showResubmitCta && canEdit ? (
+                  <>
+                    {!canApproveCorrection ? (
+                      <label className="mt-3 block">
+                        <span className="mb-1 block text-xs font-medium text-sky-100">
+                          Alasan koreksi
+                        </span>
+                        <textarea
+                          rows={3}
+                          value={correctionReason}
+                          onChange={(e) => setCorrectionReason(e.target.value)}
+                          placeholder="Contoh: Receive shift 2 ketinggalan input"
+                          className="w-full rounded-lg border border-sky-500/30 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 placeholder:text-zinc-600 focus:border-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-400/30"
+                        />
+                      </label>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={
+                        isRequestingResubmit ||
+                        isSubmitting ||
+                        (!canApproveCorrection && !correctionReasonReady)
+                      }
+                      onClick={() => void handleRequestResubmit()}
+                      className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-amber-400/50 bg-amber-500/20 px-4 text-sm font-bold text-amber-100 active:bg-amber-500/30 disabled:opacity-50"
+                    >
+                      {isRequestingResubmit ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Unlock className="h-4 w-4" />
+                      )}
+                      {canApproveCorrection ? "Buka Worksheet" : "Ajukan Koreksi"}
+                    </button>
+                  </>
                 ) : (
                   <p className="mt-2 text-xs text-sky-300/80">
                     Hubungi Admin untuk koreksi status {worksheetStatus}.
@@ -2840,7 +3006,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                           <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
                           {owner ? (
                             <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
-                              Diisi oleh {owner.staffName}
+                              {formatOwnerLabel(owner)}
                             </p>
                           ) : null}
                         </div>
@@ -2988,7 +3154,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                           <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
                           {owner ? (
                             <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
-                              Diisi oleh {owner.staffName}
+                              {formatOwnerLabel(owner)}
                             </p>
                           ) : null}
                         </div>
@@ -3060,7 +3226,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                               </p>
                               {owner ? (
                                 <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
-                                  Diisi oleh {owner.staffName}
+                                  {formatOwnerLabel(owner)}
                                 </p>
                               ) : null}
                             </div>
@@ -3189,7 +3355,7 @@ export function WorksheetClosing({ department, title }: WorksheetClosingProps) {
                             </p>
                             {owner ? (
                               <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
-                                Diisi oleh {owner.staffName}
+                                {formatOwnerLabel(owner)}
                               </p>
                             ) : null}
                           </div>

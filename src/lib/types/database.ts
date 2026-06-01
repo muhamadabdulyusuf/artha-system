@@ -23,6 +23,7 @@ export type StockLogEventType =
   | "PRODUCTION";
 
 export type OpnamePendingStatus = "PENDING_APPROVAL_ADMIN" | "APPROVED" | "REJECTED";
+export type WorksheetEditRequestStatus = "PENDING" | "APPROVED" | "REJECTED";
 
 export type StaffRow = {
   id: string;
@@ -144,6 +145,21 @@ export type WorksheetSessionRow = {
   submitted_by_staff_id: string | null;
   locked_at: string | null;
   locked_by_staff_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorksheetEditRequestRow = {
+  id: string;
+  session_id: string;
+  business_date: string;
+  department: Department;
+  requested_by_staff_id: string | null;
+  reason: string;
+  status: WorksheetEditRequestStatus;
+  reviewed_by_staff_id: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -471,6 +487,28 @@ export type Database = {
           submitted_by_staff_id?: string | null;
           locked_at?: string | null;
           locked_by_staff_id?: string | null;
+        };
+        Relationships: [];
+      };
+      worksheet_edit_request: {
+        Row: WorksheetEditRequestRow;
+        Insert: {
+          id?: string;
+          session_id: string;
+          business_date: string;
+          department: Department;
+          requested_by_staff_id?: string | null;
+          reason: string;
+          status?: WorksheetEditRequestStatus;
+          reviewed_by_staff_id?: string | null;
+          reviewed_at?: string | null;
+          review_note?: string | null;
+        };
+        Update: {
+          status?: WorksheetEditRequestStatus;
+          reviewed_by_staff_id?: string | null;
+          reviewed_at?: string | null;
+          review_note?: string | null;
         };
         Relationships: [];
       };
