@@ -55,7 +55,6 @@ import { formatSystemStockGuide } from "@/lib/worksheet/opnameVariance";
 import { ledgerRowToSnapshot } from "@/lib/worksheet/stockLedgerSnapshot";
 import {
   findTypoGuardWarnings,
-  findTypoGuardPreviewEntries,
   type TypoGuardPreviewEntry,
   type TypoGuardWarning,
 } from "@/lib/worksheet/typoGuard";
@@ -332,6 +331,11 @@ function normalizeIssueReason(value: string | null | undefined): MenuIssueReason
   return MENU_ISSUE_REASONS.some((reason) => reason.id === value)
     ? (value as MenuIssueReason)
     : "other";
+}
+
+function formatIssueReasonLabel(value: string | null | undefined): string {
+  const normalized = normalizeIssueReason(value);
+  return MENU_ISSUE_REASONS.find((reason) => reason.id === normalized)?.label ?? "Lainnya";
 }
 
 function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
@@ -788,6 +792,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   const [isSavingOpname, setIsSavingOpname] = useState(false);
   const [isSavingPremix, setIsSavingPremix] = useState(false);
   const [isSavingMenuProgress, setIsSavingMenuProgress] = useState(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRequestingResubmit, setIsRequestingResubmit] = useState(false);
   const [isChangingBusinessDate, setIsChangingBusinessDate] = useState(false);
@@ -813,6 +818,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   const canEdit = canEditStaffData(staff?.role);
   const canApproveCorrection = staff?.role === "admin" || staff?.role === "op_manager";
   const canFinalizeWorksheet = canApproveCorrection;
+  const canOverrideWorksheetOwnership = canApproveCorrection;
   const correctionReasonReady = correctionReason.trim().length >= 5;
 
   const businessDateLabel = useMemo(
@@ -876,9 +882,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     [staff?.id, staff?.name]
   );
 
+  const canEditLineOwner = useCallback(
+    (owner?: WorksheetLineOwner | null) =>
+      canOverrideWorksheetOwnership || isCurrentStaffOwner(owner),
+    [canOverrideWorksheetOwnership, isCurrentStaffOwner]
+  );
+
   const isOwnedByOther = useCallback(
-    (owner?: WorksheetLineOwner | null) => Boolean(owner && !isCurrentStaffOwner(owner)),
-    [isCurrentStaffOwner]
+    (owner?: WorksheetLineOwner | null) => Boolean(owner && !canEditLineOwner(owner)),
+    [canEditLineOwner]
   );
 
   const formatOwnerLabel = useCallback(
@@ -913,15 +925,30 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     [lines, receiveEntryInputs]
   );
 
-  const getOpnameBaseStockQtyForIngredient = useCallback(
-    (ingredient: Pick<IngredientRow, "id" | "current_stock">) => {
-      const otherSavedOpnameQty = (opnameEntrySummaries[ingredient.id] ?? [])
-        .filter((entry) => !isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName }))
-        .reduce((sum, entry) => sum + entry.quantity, 0);
-      const ownDraft = lines[ingredient.id]?.closingStock ?? "";
-      const ownSavedOpnameQty = (opnameEntrySummaries[ingredient.id] ?? [])
-        .filter((entry) => isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName }))
-        .reduce((sum, entry) => sum + entry.quantity, 0);
+	  const getOpnameBaseStockQtyForIngredient = useCallback(
+	    (ingredient: Pick<IngredientRow, "id" | "current_stock">) => {
+	      const opnameSummaries = opnameEntrySummaries[ingredient.id] ?? [];
+	      const ownDraft = lines[ingredient.id]?.closingStock ?? "";
+	      if (canOverrideWorksheetOwnership) {
+	        const aggregateOpnameQty = opnameSummaries.reduce(
+	          (sum, entry) => sum + entry.quantity,
+	          0
+	        );
+	        const hasOwnDraft = !isBlankQty(ownDraft);
+	        if (hasOwnDraft || aggregateOpnameQty > 0) {
+	          return {
+	            quantity: hasOwnDraft ? parseQty(ownDraft) : aggregateOpnameQty,
+	            source: "opname" as const,
+	          };
+	        }
+	      }
+
+	      const otherSavedOpnameQty = opnameSummaries
+	        .filter((entry) => !isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName }))
+	        .reduce((sum, entry) => sum + entry.quantity, 0);
+	      const ownSavedOpnameQty = opnameSummaries
+	        .filter((entry) => isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName }))
+	        .reduce((sum, entry) => sum + entry.quantity, 0);
       const hasOwnDraft = !isBlankQty(ownDraft);
       const hasSavedOpname = otherSavedOpnameQty > 0 || ownSavedOpnameQty > 0;
 
@@ -936,9 +963,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         quantity: Number(ingredient.current_stock ?? 0),
         source: "master" as const,
       };
-    },
-    [isCurrentStaffOwner, lines, opnameEntrySummaries]
-  );
+	    },
+	    [canOverrideWorksheetOwnership, isCurrentStaffOwner, lines, opnameEntrySummaries]
+	  );
 
   const summarizeStaffEntry = useCallback(
     (summary: SoldEntrySummary) =>
@@ -952,11 +979,13 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       if (staff?.id) ids.add(staff.id);
       for (const lineId of lineIds) {
         const owner = ownerMap[lineId];
-        if (owner?.staffId && isCurrentStaffOwner(owner)) ids.add(owner.staffId);
+        if (owner?.staffId && (canOverrideWorksheetOwnership || isCurrentStaffOwner(owner))) {
+          ids.add(owner.staffId);
+        }
       }
       return Array.from(ids);
     },
-    [isCurrentStaffOwner, staff?.id]
+    [canOverrideWorksheetOwnership, isCurrentStaffOwner, staff?.id]
   );
 
   const replaceCurrentStaffSummaries = useCallback(
@@ -967,9 +996,11 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     ) => {
       const next = { ...previous };
       for (const lineId of lineIds) {
-        const retained = (next[lineId] ?? []).filter(
-          (entry) => !isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
-        );
+        const retained = canOverrideWorksheetOwnership
+          ? []
+          : (next[lineId] ?? []).filter(
+              (entry) => !isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
+            );
         const quantity = quantitiesByLineId.get(lineId) ?? 0;
         next[lineId] =
           quantity > 0
@@ -979,11 +1010,11 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       }
       return next;
     },
-    [currentStaffOwner, isCurrentStaffOwner]
+    [canOverrideWorksheetOwnership, currentStaffOwner, isCurrentStaffOwner]
   );
 
-  const renderEntrySummaries = useCallback(
-    (entries: SoldEntrySummary[], unit: string, totalLabel = "Akumulasi") => {
+	  const renderEntrySummaries = useCallback(
+	    (entries: SoldEntrySummary[], unit: string, totalLabel = "Akumulasi") => {
       if (entries.length === 0) return null;
       const total = entries.reduce((sum, entry) => sum + entry.quantity, 0);
 
@@ -1018,10 +1049,165 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         </div>
       );
     },
-    [isCurrentStaffOwner, summarizeStaffEntry]
-  );
+	    [isCurrentStaffOwner, summarizeStaffEntry]
+	  );
 
-  const refreshIngredientStockFromDb = useCallback(async () => {
+	  const editableSummaryQuantity = useCallback(
+	    (entries: SoldEntrySummary[]) =>
+	      entries
+	        .filter((entry) =>
+	          canOverrideWorksheetOwnership ||
+	          isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
+	        )
+	        .reduce((sum, entry) => sum + entry.quantity, 0),
+	    [canOverrideWorksheetOwnership, isCurrentStaffOwner]
+	  );
+
+	  const shouldShowPreviewEntry = useCallback(
+	    (rawValue: string | undefined, savedQty: number) =>
+	      Boolean(rawValue?.trim()) || savedQty > 0,
+	    []
+	  );
+
+	  const buildReceivePreviewEntries = useCallback((): TypoGuardPreviewEntry[] => {
+	    return ingredients
+	      .filter((ing) => ing.kind === "raw")
+	      .flatMap((ing) => {
+	        const raw = receiveEntryInputs[ing.id] ?? "";
+	        const savedQty = editableSummaryQuantity(receiveEntrySummaries[ing.id] ?? []);
+	        if (!shouldShowPreviewEntry(raw, savedQty)) return [];
+
+	        const purchaseUnit = getPurchaseUnit(ing);
+	        const value = parseQty(raw);
+	        const totalReceiveQty = parseQty(lines[ing.id]?.inQty ?? "");
+	        const afterSaveReceiveQty = Math.max(0, totalReceiveQty - savedQty + value);
+	        const stockQty = receiveInputToStockQty(ing, raw);
+	        const noteParts = [`Total: ${formatQty(afterSaveReceiveQty)} ${purchaseUnit}`];
+	        if (purchaseUnit !== ing.unit) {
+	          noteParts.push(`Stok: ${formatQty(stockQty)} ${ing.unit}`);
+	        }
+
+	        return [
+	          {
+	            ingredientId: ing.id,
+	            ingredientName: ing.name,
+	            field: "inQty" as const,
+	            value,
+	            unit: purchaseUnit,
+	            note: noteParts.join(" · "),
+	          },
+	        ];
+	      });
+	  }, [
+	    editableSummaryQuantity,
+	    ingredients,
+	    lines,
+	    receiveEntryInputs,
+	    receiveEntrySummaries,
+	    shouldShowPreviewEntry,
+	  ]);
+
+	  const buildLinePreviewEntries = useCallback(
+	    (
+	      field: "outQty" | "closingStock",
+	      summaries: Record<string, SoldEntrySummary[]>
+	    ): TypoGuardPreviewEntry[] =>
+	      ingredients.flatMap((ing) => {
+	        const raw = lines[ing.id]?.[field] ?? "";
+	        const savedQty = editableSummaryQuantity(summaries[ing.id] ?? []);
+	        if (!shouldShowPreviewEntry(raw, savedQty)) return [];
+
+	        const line = lines[ing.id] ?? DEFAULT_LINE;
+	        const note =
+	          field === "outQty" && line.outNote.trim()
+	            ? `Catatan: ${line.outNote.trim()}`
+	            : undefined;
+
+	        return [
+	          {
+	            ingredientId: ing.id,
+	            ingredientName: ing.name,
+	            field,
+	            value: parseQty(raw),
+	            unit: ing.unit,
+	            note,
+	          },
+	        ];
+	      }),
+	    [editableSummaryQuantity, ingredients, lines, shouldShowPreviewEntry]
+	  );
+
+	  const buildPremixPreviewEntries = useCallback((): TypoGuardPreviewEntry[] => {
+	    return premixItems.flatMap((premix) => {
+	      const raw = premixQuantities[premix.id] ?? "";
+	      const savedQty = editableSummaryQuantity(premixEntrySummaries[premix.id] ?? []);
+	      if (!shouldShowPreviewEntry(raw, savedQty)) return [];
+
+	      const qty = parseQty(raw);
+	      const recipe = getActivePremixRecipe(premix);
+	      const outputQty = qty * Number(recipe?.yield_quantity ?? 1);
+	      return [
+	        {
+	          ingredientId: premix.id,
+	          ingredientName: premix.name,
+	          field: "premix" as const,
+	          value: qty,
+	          unit: "batch",
+	          note: recipe ? `Output: ${formatQty(outputQty)} ${premix.unit}` : "Belum ada resep",
+	        },
+	      ];
+	    });
+	  }, [
+	    editableSummaryQuantity,
+	    premixEntrySummaries,
+	    premixItems,
+	    premixQuantities,
+	    shouldShowPreviewEntry,
+	  ]);
+
+	  const buildIssuePreviewEntries = useCallback((): TypoGuardPreviewEntry[] => {
+	    return menus.flatMap((menu) => {
+	      const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
+	      const raw = issue.quantity;
+	      const savedQty = editableSummaryQuantity(issueEntrySummaries[menu.id] ?? []);
+	      if (!shouldShowPreviewEntry(raw, savedQty)) return [];
+
+	      const noteParts = [formatIssueReasonLabel(issue.reason)];
+	      if (issue.note.trim()) noteParts.push(issue.note.trim());
+	      if (issue.photoUrl) noteParts.push("Ada foto");
+
+	      return [
+	        {
+	          ingredientId: menu.id,
+	          ingredientName: menu.menu_name,
+	          field: "issue" as const,
+	          value: parseQty(raw),
+	          unit: "porsi",
+	          note: noteParts.join(" · "),
+	        },
+	      ];
+	    });
+	  }, [editableSummaryQuantity, issueEntrySummaries, menuIssues, menus, shouldShowPreviewEntry]);
+
+	  const buildSoldPreviewEntries = useCallback((): TypoGuardPreviewEntry[] => {
+	    return menus.flatMap((menu) => {
+	      const raw = soldItems[menu.id] ?? "";
+	      const savedQty = editableSummaryQuantity(soldEntrySummaries[menu.id] ?? []);
+	      if (!shouldShowPreviewEntry(raw, savedQty)) return [];
+
+	      return [
+	        {
+	          ingredientId: menu.id,
+	          ingredientName: menu.menu_name,
+	          field: "sold" as const,
+	          value: parseQty(raw),
+	          unit: "porsi",
+	        },
+	      ];
+	    });
+	  }, [editableSummaryQuantity, menus, shouldShowPreviewEntry, soldEntrySummaries, soldItems]);
+
+	  const refreshIngredientStockFromDb = useCallback(async () => {
     const { data, error: stockErr } = await supabase
       .from("ingredient")
       .select("*")
@@ -1159,19 +1345,22 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         });
       }
 
-      for (const [key, summary] of quantityByIngredientAndStaff.entries()) {
-        const ingredientId = key.split(":")[0];
-        nextSummaries[ingredientId] = [...(nextSummaries[ingredientId] ?? []), summary];
-        if (isCurrentStaffOwner({ staffId: summary.staffId, staffName: summary.staffName })) {
-          currentStaffInputs[ingredientId] = formatQty(summary.quantity);
-        }
-      }
+	      for (const [key, summary] of quantityByIngredientAndStaff.entries()) {
+	        const ingredientId = key.split(":")[0];
+	        nextSummaries[ingredientId] = [...(nextSummaries[ingredientId] ?? []), summary];
+	        if (canOverrideWorksheetOwnership) {
+	          const previous = parseQty(currentStaffInputs[ingredientId] ?? "");
+	          currentStaffInputs[ingredientId] = formatQty(previous + summary.quantity);
+	        } else if (isCurrentStaffOwner({ staffId: summary.staffId, staffName: summary.staffName })) {
+	          currentStaffInputs[ingredientId] = formatQty(summary.quantity);
+	        }
+	      }
 
       setReceiveEntrySummaries(nextSummaries);
       return currentStaffInputs;
     },
-    [isCurrentStaffOwner, supabase]
-  );
+	    [canOverrideWorksheetOwnership, isCurrentStaffOwner, supabase]
+	  );
 
   const loadData = useCallback(async (dateOverride?: string) => {
     if (!staff) return;
@@ -1332,13 +1521,16 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
           ...(nextOutSummaries[row.ingredient_id] ?? []),
           { staffId: owner.staffId, staffName: owner.staffName, quantity },
         ];
-        if (isCurrentStaffOwner(owner)) {
-          ingredientPreset[row.ingredient_id] = {
-            ...ingredientPreset[row.ingredient_id],
-            outQty: String(row.quantity),
-            outNote: row.note ?? "",
-            outPhotoUrl: row.photo_url ?? "",
-            outPhotoPublicId: row.photo_public_id ?? "",
+	        if (canEditLineOwner(owner)) {
+	          const existingOutQty = ingredientPreset[row.ingredient_id]?.outQty ?? "";
+	          ingredientPreset[row.ingredient_id] = {
+	            ...ingredientPreset[row.ingredient_id],
+	            outQty: canOverrideWorksheetOwnership
+	              ? String(parseQty(existingOutQty) + quantity)
+	              : String(row.quantity),
+	            outNote: row.note ?? "",
+	            outPhotoUrl: row.photo_url ?? "",
+	            outPhotoPublicId: row.photo_public_id ?? "",
           };
           nextOutOwners[row.ingredient_id] = owner;
         }
@@ -1369,9 +1561,13 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             },
           ];
 
-          if (row.staff_id === staff.id) {
-            soldPreset[row.menu_item_id] = String(quantity);
-          }
+	          if (canOverrideWorksheetOwnership) {
+	            soldPreset[row.menu_item_id] = String(
+	              parseQty(soldPreset[row.menu_item_id] ?? "") + quantity
+	            );
+	          } else if (row.staff_id === staff.id) {
+	            soldPreset[row.menu_item_id] = String(quantity);
+	          }
         }
       } else {
         const { data: soldLines } = await supabase
@@ -1410,11 +1606,14 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
           ...(nextIssueSummaries[row.menu_item_id] ?? []),
           { staffId: owner.staffId, staffName: owner.staffName, quantity },
         ];
-        if (isCurrentStaffOwner(owner)) {
-          issuePreset[row.menu_item_id] = {
-            quantity: String(row.quantity),
-            reason: normalizeIssueReason(row.reason),
-            note: row.note ?? "",
+	        if (canEditLineOwner(owner)) {
+	          const existingIssue = issuePreset[row.menu_item_id] ?? createDefaultMenuIssue();
+	          issuePreset[row.menu_item_id] = {
+	            quantity: canOverrideWorksheetOwnership
+	              ? String(parseQty(existingIssue.quantity) + quantity)
+	              : String(row.quantity),
+	            reason: normalizeIssueReason(row.reason),
+	            note: row.note ?? "",
             photoUrl: row.photo_url ?? "",
             photoPublicId: row.photo_public_id ?? "",
           };
@@ -1439,10 +1638,12 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
           ...(nextPremixSummaries[row.output_ingredient_id] ?? []),
           { staffId: owner.staffId, staffName: owner.staffName, quantity },
         ];
-        if (isCurrentStaffOwner(owner)) {
-          premixPreset[row.output_ingredient_id] = String(row.batch_quantity);
-          nextPremixOwners[row.output_ingredient_id] = owner;
-        }
+	        if (canEditLineOwner(owner)) {
+	          premixPreset[row.output_ingredient_id] = canOverrideWorksheetOwnership
+	            ? String(parseQty(premixPreset[row.output_ingredient_id] ?? "") + quantity)
+	            : String(row.batch_quantity);
+	          nextPremixOwners[row.output_ingredient_id] = owner;
+	        }
       }
       setPremixLineOwners(nextPremixOwners);
       setPremixEntrySummaries(nextPremixSummaries);
@@ -1461,10 +1662,10 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
           ...(nextOpnameSummaries[row.ingredient_id] ?? []),
           { staffId: owner.staffId, staffName: owner.staffName, quantity },
         ];
-        if (isCurrentStaffOwner(owner)) {
-          ingredientPreset[row.ingredient_id] = {
-            ...ingredientPreset[row.ingredient_id],
-            closingStock: String(row.closing_stock),
+	        if (canEditLineOwner(owner)) {
+	          ingredientPreset[row.ingredient_id] = {
+	            ...ingredientPreset[row.ingredient_id],
+	            closingStock: String(row.closing_stock),
           };
           nextOpnameOwners[row.ingredient_id] = owner;
         }
@@ -1503,9 +1704,11 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     setMenuIssues(issuePreset);
     initPremixQuantities(premixList, premixPreset);
     setIsLoading(false);
-  }, [
-    department,
-    embedded,
+	  }, [
+	    canEditLineOwner,
+	    canOverrideWorksheetOwnership,
+	    department,
+	    embedded,
     initIngredientLines,
     initPremixQuantities,
     initSoldItems,
@@ -1559,21 +1762,29 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     },
   });
 
-  const runWithTypoGuard = (
-    fields: Array<keyof Pick<IngredientLineState, "inQty" | "closingStock" | "outQty">>,
-    action: () => void | Promise<void>
-  ) => {
-    const warnings = findTypoGuardWarnings(ingredients, lines, fields);
-    const previewEntries = findTypoGuardPreviewEntries(ingredients, lines, fields);
-    if (warnings.length === 0 && previewEntries.length === 0) {
-      void action();
-      return;
+	  const runWithPreviewConfirm = (
+	    warnings: TypoGuardWarning[],
+	    previewEntries: TypoGuardPreviewEntry[],
+	    action: () => void | Promise<void>
+	  ) => {
+	    if (warnings.length === 0 && previewEntries.length === 0) {
+	      void action();
+	      return;
     }
     setTypoWarnings(warnings);
     setTypoPreviewEntries(previewEntries);
-    pendingTypoActionRef.current = () => void action();
-    setTypoModalOpen(true);
-  };
+	    pendingTypoActionRef.current = () => void action();
+	    setTypoModalOpen(true);
+	  };
+
+	  const runWithTypoGuard = (
+	    fields: Array<keyof Pick<IngredientLineState, "inQty" | "closingStock" | "outQty">>,
+	    previewEntries: TypoGuardPreviewEntry[],
+	    action: () => void | Promise<void>
+	  ) => {
+	    const warnings = findTypoGuardWarnings(ingredients, lines, fields);
+	    runWithPreviewConfirm(warnings, previewEntries, action);
+	  };
 
   const clearDraftAfterSuccess = () => {
     if (businessDate) clearWorksheetDraft(department, businessDate);
@@ -1775,13 +1986,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     const rawIngredientIds = rawIngredients.map((ing) => ing.id);
     const previousOwnReceive = new Map<string, number>();
 
-    if (rawIngredientIds.length > 0) {
-      const { data: previousRows, error: previousErr } = await supabase
-        .from("worksheet_receive_entry")
-        .select("ingredient_id, quantity")
-        .eq("session_id", activeSessionId)
-        .eq("staff_id", staff.id)
-        .in("ingredient_id", rawIngredientIds);
+	    if (rawIngredientIds.length > 0) {
+	      const previousQuery = supabase
+	        .from("worksheet_receive_entry")
+	        .select("ingredient_id, quantity")
+	        .eq("session_id", activeSessionId)
+	        .in("ingredient_id", rawIngredientIds);
+	      const { data: previousRows, error: previousErr } = canOverrideWorksheetOwnership
+	        ? await previousQuery
+	        : await previousQuery.eq("staff_id", staff.id);
 
       if (previousErr) {
         throw new Error(`Gagal membaca receive sebelumnya: ${previousErr.message}`);
@@ -1808,13 +2021,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     );
     const deltaByIngredient = new Map<string, number>();
 
-    if (rawIngredientIds.length > 0) {
-      const { error: clearOwnErr } = await supabase
-        .from("worksheet_receive_entry")
-        .delete()
-        .eq("session_id", activeSessionId)
-        .eq("staff_id", staff.id)
-        .in("ingredient_id", rawIngredientIds);
+	    if (rawIngredientIds.length > 0) {
+	      const clearQuery = supabase
+	        .from("worksheet_receive_entry")
+	        .delete()
+	        .eq("session_id", activeSessionId)
+	        .in("ingredient_id", rawIngredientIds);
+	      const { error: clearOwnErr } = canOverrideWorksheetOwnership
+	        ? await clearQuery
+	        : await clearQuery.eq("staff_id", staff.id);
 
       if (clearOwnErr) {
         throw new Error(`Gagal membersihkan receive milik staff ini: ${clearOwnErr.message}`);
@@ -2285,14 +2500,20 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
     try {
       const { sessionId: activeSessionId } = await ensureDraftSession(date);
-      const hasPendingReceive = ingredients.some(
-        (ing) => ing.kind === "raw" && !isBlankQty(receiveEntryInputs[ing.id] ?? "")
-      );
+	      const hasPendingReceive = ingredients.some(
+	        (ing) => ing.kind === "raw" && !isBlankQty(receiveEntryInputs[ing.id] ?? "")
+	      );
+	      const hasEditableExistingReceive = Object.values(receiveEntrySummaries).some((entries) =>
+	        entries.some((entry) =>
+	          canOverrideWorksheetOwnership ||
+	          isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
+	        )
+	      );
 
-      if (!hasPendingReceive) {
-        showPlainErrorToast("Isi atau koreksi jumlah receive kamu terlebih dahulu.");
-        return;
-      }
+	      if (!hasPendingReceive && !hasEditableExistingReceive) {
+	        showPlainErrorToast("Isi atau koreksi jumlah receive kamu terlebih dahulu.");
+	        return;
+	      }
 
       if (!staff?.id) {
         throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
@@ -2342,15 +2563,19 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         })
         .filter((row) => row.quantity > 0);
 
-      const { error: clearErr } =
-        editableIngredientIds.length > 0
-          ? await supabase
-              .from("worksheet_out_line")
-              .delete()
-              .eq("session_id", activeSessionId)
-              .in("ingredient_id", editableIngredientIds)
-              .or(buildOwnerDeleteFilter(editableOutOwnerIds))
-          : { error: null };
+	      const clearOutQuery =
+	        editableIngredientIds.length > 0
+	          ? supabase
+	              .from("worksheet_out_line")
+	              .delete()
+	              .eq("session_id", activeSessionId)
+	              .in("ingredient_id", editableIngredientIds)
+	          : null;
+	      const { error: clearErr } = clearOutQuery
+	        ? canOverrideWorksheetOwnership
+	          ? await clearOutQuery
+	          : await clearOutQuery.or(buildOwnerDeleteFilter(editableOutOwnerIds))
+	        : { error: null };
 
       if (clearErr) {
         throw new Error(`Gagal membersihkan draft out stock: ${clearErr.message}`);
@@ -2428,15 +2653,19 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       });
 
       const editableOpnameIngredientIds = editableIngredients.map((ing) => ing.id);
-      const { error: clearOpnameErr } =
-        editableOpnameIngredientIds.length > 0
-          ? await supabase
-              .from("worksheet_opname_line")
-              .delete()
-              .eq("session_id", activeSessionId)
-              .in("ingredient_id", editableOpnameIngredientIds)
-              .or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
-          : { error: null };
+	      const clearOpnameQuery =
+	        editableOpnameIngredientIds.length > 0
+	          ? supabase
+	              .from("worksheet_opname_line")
+	              .delete()
+	              .eq("session_id", activeSessionId)
+	              .in("ingredient_id", editableOpnameIngredientIds)
+	          : null;
+	      const { error: clearOpnameErr } = clearOpnameQuery
+	        ? canOverrideWorksheetOwnership
+	          ? await clearOpnameQuery
+	          : await clearOpnameQuery.or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
+	        : { error: null };
 
       if (clearOpnameErr) {
         throw new Error(`Gagal membersihkan draft opname: ${clearOpnameErr.message}`);
@@ -2507,15 +2736,19 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         })
         .filter((row) => row.batch_quantity > 0 && row.recipe_id);
 
-      const { error: clearErr } =
-        editablePremixIds.length > 0
-          ? await supabase
-              .from("worksheet_premix_line")
-              .delete()
-              .eq("session_id", activeSessionId)
-              .in("output_ingredient_id", editablePremixIds)
-              .or(buildOwnerDeleteFilter(editablePremixOwnerIds))
-          : { error: null };
+	      const clearPremixQuery =
+	        editablePremixIds.length > 0
+	          ? supabase
+	              .from("worksheet_premix_line")
+	              .delete()
+	              .eq("session_id", activeSessionId)
+	              .in("output_ingredient_id", editablePremixIds)
+	          : null;
+	      const { error: clearErr } = clearPremixQuery
+	        ? canOverrideWorksheetOwnership
+	          ? await clearPremixQuery
+	          : await clearPremixQuery.or(buildOwnerDeleteFilter(editablePremixOwnerIds))
+	        : { error: null };
 
       if (clearErr) {
         throw new Error(`Gagal membersihkan draft premix: ${clearErr.message}`);
@@ -2658,11 +2891,13 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       }))
       .filter((row) => row.quantity_sold > 0);
 
-    const { error: clearOwnSoldErr } = await supabase
-      .from("worksheet_sold_entry")
-      .delete()
-      .eq("session_id", activeSessionId)
-      .eq("staff_id", staff.id);
+	    const clearSoldEntryQuery = supabase
+	      .from("worksheet_sold_entry")
+	      .delete()
+	      .eq("session_id", activeSessionId);
+	    const { error: clearOwnSoldErr } = canOverrideWorksheetOwnership
+	      ? await clearSoldEntryQuery
+	      : await clearSoldEntryQuery.eq("staff_id", staff.id);
 
     if (clearOwnSoldErr) {
       throw new Error(`Gagal membersihkan sales menu milik staff ini: ${clearOwnSoldErr.message}`);
@@ -2755,15 +2990,19 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       })
       .filter((row) => row.quantity > 0);
 
-    const { error: clearIssueErr } =
-      editableIssueMenuIds.length > 0
-        ? await supabase
-            .from("worksheet_menu_issue_line")
-            .delete()
-            .eq("session_id", activeSessionId)
-            .in("menu_item_id", editableIssueMenuIds)
-            .or(buildOwnerDeleteFilter(editableIssueOwnerIds))
-        : { error: null };
+	    const clearIssueQuery =
+	      editableIssueMenuIds.length > 0
+	        ? supabase
+	            .from("worksheet_menu_issue_line")
+	            .delete()
+	            .eq("session_id", activeSessionId)
+	            .in("menu_item_id", editableIssueMenuIds)
+	        : null;
+	    const { error: clearIssueErr } = clearIssueQuery
+	      ? canOverrideWorksheetOwnership
+	        ? await clearIssueQuery
+	        : await clearIssueQuery.or(buildOwnerDeleteFilter(editableIssueOwnerIds))
+	      : { error: null };
 
     if (clearIssueErr) {
       throw new Error(`Gagal membersihkan worksheet_menu_issue_line: ${clearIssueErr.message}`);
@@ -2810,6 +3049,212 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       showTranslatedSubmitError(err);
     } finally {
       setIsSavingMenuProgress(false);
+    }
+  };
+
+  const handleSaveAllProgress = async () => {
+    if (locked || isSavingAll || isSubmitting || !staff?.id) return;
+
+    const date = businessDate || resolveWorksheetBusinessDate();
+    setIsSavingAll(true);
+    setError(null);
+
+    try {
+      const freshIngredients = await refreshIngredientStockFromDb();
+      await assertOutstockPayloadValid(freshIngredients);
+
+      const { sessionId: activeSessionId } = await ensureDraftSession(date);
+      await savePendingReceiveEntries(activeSessionId);
+
+      const ledgerFreshIngredients = await refreshIngredientStockFromDb();
+      const editableOutIngredientIds = ledgerFreshIngredients
+        .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
+        .map((ing) => ing.id);
+      const editableOutOwnerIds = getEditableOwnerIds(outLineOwners, editableOutIngredientIds);
+      const outLinePayload = ledgerFreshIngredients
+        .filter((ing) => editableOutIngredientIds.includes(ing.id))
+        .map((ing) => {
+          const line = lines[ing.id] ?? DEFAULT_LINE;
+          return {
+            session_id: activeSessionId,
+            ingredient_id: ing.id,
+            staff_id: staff.id,
+            quantity: parseQty(line.outQty),
+            note: line.outNote.trim(),
+            photo_url: line.outPhotoUrl || null,
+            photo_public_id: line.outPhotoPublicId || null,
+          };
+        })
+        .filter((row) => row.quantity > 0);
+
+      const clearOutQuery =
+        editableOutIngredientIds.length > 0
+          ? supabase
+              .from("worksheet_out_line")
+              .delete()
+              .eq("session_id", activeSessionId)
+              .in("ingredient_id", editableOutIngredientIds)
+          : null;
+      const { error: clearOutErr } = clearOutQuery
+        ? canOverrideWorksheetOwnership
+          ? await clearOutQuery
+          : await clearOutQuery.or(buildOwnerDeleteFilter(editableOutOwnerIds))
+        : { error: null };
+
+      if (clearOutErr) {
+        throw new Error(`Gagal membersihkan out stock: ${clearOutErr.message}`);
+      }
+
+      const { error: outLineErr } =
+        outLinePayload.length > 0
+          ? await supabase.from("worksheet_out_line").insert(outLinePayload)
+          : { error: null };
+
+      if (outLineErr) {
+        throw new Error(`Gagal menyimpan out stock: ${outLineErr.message}`);
+      }
+
+      const nextOutOwners = { ...outLineOwners };
+      for (const ingredientId of editableOutIngredientIds) delete nextOutOwners[ingredientId];
+      for (const row of outLinePayload) nextOutOwners[row.ingredient_id] = currentStaffOwner();
+      setOutLineOwners(nextOutOwners);
+      setOutEntrySummaries((prev) =>
+        replaceCurrentStaffSummaries(
+          prev,
+          editableOutIngredientIds,
+          new Map(outLinePayload.map((row) => [row.ingredient_id, row.quantity]))
+        )
+      );
+
+      await saveMenuProgress(activeSessionId, menus);
+
+      const editablePremixIds = premixItems
+        .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
+        .map((premix) => premix.id);
+      const editablePremixOwnerIds = getEditableOwnerIds(premixLineOwners, editablePremixIds);
+      const premixPayload = premixItems
+        .filter((premix) => editablePremixIds.includes(premix.id))
+        .map((premix) => {
+          const recipe = getActivePremixRecipe(premix);
+          return {
+            session_id: activeSessionId,
+            output_ingredient_id: premix.id,
+            recipe_id: recipe?.id ?? "",
+            staff_id: staff.id,
+            batch_quantity: parseQty(premixQuantities[premix.id] ?? ""),
+          };
+        })
+        .filter((row) => row.batch_quantity > 0 && row.recipe_id);
+
+      const clearPremixQuery =
+        editablePremixIds.length > 0
+          ? supabase
+              .from("worksheet_premix_line")
+              .delete()
+              .eq("session_id", activeSessionId)
+              .in("output_ingredient_id", editablePremixIds)
+          : null;
+      const { error: clearPremixErr } = clearPremixQuery
+        ? canOverrideWorksheetOwnership
+          ? await clearPremixQuery
+          : await clearPremixQuery.or(buildOwnerDeleteFilter(editablePremixOwnerIds))
+        : { error: null };
+
+      if (clearPremixErr) {
+        throw new Error(`Gagal membersihkan premix: ${clearPremixErr.message}`);
+      }
+
+      const { error: premixErr } =
+        premixPayload.length > 0
+          ? await supabase.from("worksheet_premix_line").insert(premixPayload)
+          : { error: null };
+
+      if (premixErr) {
+        throw new Error(`Gagal menyimpan premix: ${premixErr.message}`);
+      }
+
+      const nextPremixOwners = { ...premixLineOwners };
+      for (const premixId of editablePremixIds) delete nextPremixOwners[premixId];
+      for (const row of premixPayload) nextPremixOwners[row.output_ingredient_id] = currentStaffOwner();
+      setPremixLineOwners(nextPremixOwners);
+      setPremixEntrySummaries((prev) =>
+        replaceCurrentStaffSummaries(
+          prev,
+          editablePremixIds,
+          new Map(premixPayload.map((row) => [row.output_ingredient_id, row.batch_quantity]))
+        )
+      );
+
+      const editableOpnameIngredients = ledgerFreshIngredients.filter(
+        (ing) => !isOwnedByOther(opnameLineOwners[ing.id])
+      );
+      const editableOpnameIngredientIds = editableOpnameIngredients.map((ing) => ing.id);
+      const editableOpnameOwnerIds = getEditableOwnerIds(
+        opnameLineOwners,
+        editableOpnameIngredientIds
+      );
+      const opnamePayload = editableOpnameIngredients.flatMap((ing) => {
+        const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
+        if (isBlankQty(raw)) return [];
+        const closing_stock = parseQty(raw);
+        if (closing_stock < 0) {
+          throw new Error(`Stok fisik ${ing.name} tidak boleh negatif.`);
+        }
+        return [
+          {
+            session_id: activeSessionId,
+            ingredient_id: ing.id,
+            staff_id: staff.id,
+            closing_stock,
+          },
+        ];
+      });
+
+      const clearOpnameQuery =
+        editableOpnameIngredientIds.length > 0
+          ? supabase
+              .from("worksheet_opname_line")
+              .delete()
+              .eq("session_id", activeSessionId)
+              .in("ingredient_id", editableOpnameIngredientIds)
+          : null;
+      const { error: clearOpnameErr } = clearOpnameQuery
+        ? canOverrideWorksheetOwnership
+          ? await clearOpnameQuery
+          : await clearOpnameQuery.or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
+        : { error: null };
+
+      if (clearOpnameErr) {
+        throw new Error(`Gagal membersihkan opname: ${clearOpnameErr.message}`);
+      }
+
+      const { error: opnameErr } =
+        opnamePayload.length > 0
+          ? await supabase.from("worksheet_opname_line").insert(opnamePayload)
+          : { error: null };
+
+      if (opnameErr) {
+        throw new Error(`Gagal menyimpan opname: ${opnameErr.message}`);
+      }
+
+      const nextOpnameOwners = { ...opnameLineOwners };
+      for (const ingredientId of editableOpnameIngredientIds) delete nextOpnameOwners[ingredientId];
+      for (const row of opnamePayload) nextOpnameOwners[row.ingredient_id] = currentStaffOwner();
+      setOpnameLineOwners(nextOpnameOwners);
+      setOpnameEntrySummaries((prev) =>
+        replaceCurrentStaffSummaries(
+          prev,
+          editableOpnameIngredientIds,
+          new Map(opnamePayload.map((row) => [row.ingredient_id, row.closing_stock]))
+        )
+      );
+
+      await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
+      showSuccessToast("Worksheet tersimpan.");
+    } catch (err) {
+      showTranslatedSubmitError(err);
+    } finally {
+      setIsSavingAll(false);
     }
   };
 
@@ -2895,15 +3340,19 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         })
         .filter((row) => row.quantity > 0);
 
-      const { error: clearOutErr } =
-        editableOutIngredientIds.length > 0
-          ? await supabase
-              .from("worksheet_out_line")
-              .delete()
-              .eq("session_id", ensuredSessionId)
-              .in("ingredient_id", editableOutIngredientIds)
-              .or(buildOwnerDeleteFilter(editableOutOwnerIds))
-          : { error: null };
+	      const clearOutSubmitQuery =
+	        editableOutIngredientIds.length > 0
+	          ? supabase
+	              .from("worksheet_out_line")
+	              .delete()
+	              .eq("session_id", ensuredSessionId)
+	              .in("ingredient_id", editableOutIngredientIds)
+	          : null;
+	      const { error: clearOutErr } = clearOutSubmitQuery
+	        ? canOverrideWorksheetOwnership
+	          ? await clearOutSubmitQuery
+	          : await clearOutSubmitQuery.or(buildOwnerDeleteFilter(editableOutOwnerIds))
+	        : { error: null };
 
       if (clearOutErr) {
         throw new Error(`Gagal membersihkan worksheet_out_line: ${clearOutErr.message}`);
@@ -2938,15 +3387,19 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         })
         .filter((row) => row.batch_quantity > 0 && row.recipe_id);
 
-      const { error: clearPremixErr } =
-        editablePremixIds.length > 0
-          ? await supabase
-              .from("worksheet_premix_line")
-              .delete()
-              .eq("session_id", ensuredSessionId)
-              .in("output_ingredient_id", editablePremixIds)
-              .or(buildOwnerDeleteFilter(editablePremixOwnerIds))
-          : { error: null };
+	      const clearPremixSubmitQuery =
+	        editablePremixIds.length > 0
+	          ? supabase
+	              .from("worksheet_premix_line")
+	              .delete()
+	              .eq("session_id", ensuredSessionId)
+	              .in("output_ingredient_id", editablePremixIds)
+	          : null;
+	      const { error: clearPremixErr } = clearPremixSubmitQuery
+	        ? canOverrideWorksheetOwnership
+	          ? await clearPremixSubmitQuery
+	          : await clearPremixSubmitQuery.or(buildOwnerDeleteFilter(editablePremixOwnerIds))
+	        : { error: null };
 
       if (clearPremixErr) {
         throw new Error(`Gagal membersihkan worksheet_premix_line: ${clearPremixErr.message}`);
@@ -2986,15 +3439,19 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         ];
       });
 
-      const { error: clearOpnameErr } =
-        editableOpnameIngredientIds.length > 0
-          ? await supabase
-              .from("worksheet_opname_line")
-              .delete()
-              .eq("session_id", ensuredSessionId)
-              .in("ingredient_id", editableOpnameIngredientIds)
-              .or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
-          : { error: null };
+	      const clearOpnameSubmitQuery =
+	        editableOpnameIngredientIds.length > 0
+	          ? supabase
+	              .from("worksheet_opname_line")
+	              .delete()
+	              .eq("session_id", ensuredSessionId)
+	              .in("ingredient_id", editableOpnameIngredientIds)
+	          : null;
+	      const { error: clearOpnameErr } = clearOpnameSubmitQuery
+	        ? canOverrideWorksheetOwnership
+	          ? await clearOpnameSubmitQuery
+	          : await clearOpnameSubmitQuery.or(buildOwnerDeleteFilter(editableOpnameOwnerIds))
+	        : { error: null };
 
       if (clearOpnameErr) {
         throw new Error(`Gagal membersihkan worksheet_opname_line: ${clearOpnameErr.message}`);
@@ -3321,6 +3778,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
   const showBlockingOverlay =
     isSubmitting ||
+    isSavingAll ||
     isSavingReceive ||
     isSavingOutStock ||
     isSavingOpname ||
@@ -3331,6 +3789,8 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
   const overlayMessage = isSubmitting
     ? "Mengirim laporan closing…"
+    : isSavingAll
+      ? "Menyimpan worksheet…"
     : isChangingBusinessDate
       ? "Memuat tanggal worksheet…"
       : isRequestingResubmit
@@ -3349,17 +3809,29 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
   const activeTabEnabled = worksheetFeatures[activeTab];
 
-  const stickySaveReceive = () =>
-    runWithTypoGuard(["inQty"], () => void handleSaveReceive());
-  const stickySaveOutStock = () =>
-    runWithTypoGuard(["outQty"], () => void handleSaveOutStock());
-  const stickySaveOpname = () =>
-    runWithTypoGuard(["closingStock"], () => void handleSaveOpname());
-  const stickySavePremix = () => void handleSavePremix();
-  const stickySaveMenuProgress = () => void handleSaveMenuProgress();
+  const buildAllWorksheetPreviewEntries = () => [
+    ...buildReceivePreviewEntries(),
+    ...buildLinePreviewEntries("outQty", outEntrySummaries),
+    ...buildLinePreviewEntries("closingStock", opnameEntrySummaries),
+    ...buildPremixPreviewEntries(),
+    ...buildIssuePreviewEntries(),
+    ...buildSoldPreviewEntries(),
+  ];
+
+  const stickySaveAll = () =>
+    runWithTypoGuard(
+      ["inQty", "closingStock", "outQty"],
+      buildAllWorksheetPreviewEntries(),
+      () => void handleSaveAllProgress()
+    );
+
   const stickySubmit = () => {
     if (!canFinalizeWorksheet) return;
-    runWithTypoGuard(["inQty", "closingStock", "outQty"], () => void handleSubmit());
+    runWithTypoGuard(
+      ["inQty", "closingStock", "outQty"],
+      buildAllWorksheetPreviewEntries(),
+      () => void handleSubmit()
+    );
   };
 
   return (
@@ -4406,130 +4878,37 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       {!locked && canEdit && !isLoading && ingredients.length > 0 ? (
         <WorksheetStickyActionBar variant={embedded ? "admin" : "staff"}>
-          {activeTabEnabled && activeTab === "receive" ? (
+          <div className={`grid w-full gap-2 ${canFinalizeWorksheet ? "sm:grid-cols-2" : ""}`}>
             <button
               type="button"
-              disabled={isSavingReceive || isSubmitting}
-              onClick={stickySaveReceive}
-              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:opacity-50"
+              disabled={isSavingAll || isSubmitting || outstockHasBlockingErrors}
+              onClick={stickySaveAll}
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-600/20 px-3 text-center text-sm font-bold leading-tight text-emerald-100 active:bg-emerald-600/30 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isSavingReceive ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
+              {isSavingAll ? (
+                <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
               ) : (
-                <Package className="h-5 w-5" />
+                <ClipboardList className="h-5 w-5 shrink-0" />
               )}
-              Simpan Pasokan
+              <span>{isSavingAll ? "Menyimpan…" : "Simpan Semua"}</span>
             </button>
-          ) : null}
 
-          {activeTabEnabled && activeTab === "outstock" ? (
-            <button
-              type="button"
-              disabled={isSavingOutStock || isSubmitting || outstockHasBlockingErrors}
-              onClick={stickySaveOutStock}
-              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-600/20 font-bold text-amber-100 active:bg-amber-600/30 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isSavingOutStock ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <PackageMinus className="h-5 w-5" />
-              )}
-              Simpan Out Stock
-            </button>
-          ) : null}
-
-          {activeTabEnabled && activeTab === "opname" ? (
-            <button
-              type="button"
-              disabled={isSavingOpname || isSubmitting}
-              onClick={stickySaveOpname}
-              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-indigo-500/50 bg-indigo-600/20 font-bold text-indigo-100 active:bg-indigo-600/35 disabled:opacity-50"
-            >
-              {isSavingOpname ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <ClipboardList className="h-5 w-5" />
-              )}
-              Simpan Opname
-            </button>
-          ) : null}
-
-          {activeTabEnabled && activeTab === "premix" ? (
-            <button
-              type="button"
-              disabled={isSavingPremix || isSubmitting}
-              onClick={stickySavePremix}
-              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-600/20 font-bold text-emerald-100 active:bg-emerald-600/30 disabled:opacity-50"
-            >
-              {isSavingPremix ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <Beaker className="h-5 w-5" />
-              )}
-              Simpan Premix
-            </button>
-          ) : null}
-
-          {activeTabEnabled && activeTab === "issue" ? (
-            <div className="grid w-full gap-2 sm:grid-cols-2">
+            {canFinalizeWorksheet ? (
               <button
                 type="button"
-                disabled={isSavingMenuProgress || isSubmitting}
-                onClick={stickySaveMenuProgress}
-                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-red-500/50 bg-red-600/20 font-bold text-red-100 active:bg-red-600/30 disabled:opacity-50"
+                disabled={isSubmitting || isSavingAll}
+                onClick={stickySubmit}
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
               >
-                {isSavingMenuProgress ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <AlertTriangle className="h-5 w-5" />
-                )}
-                Simpan Remake
-              </button>
-              {worksheetFeatures.sold ? (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("sold")}
-                  className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 font-bold text-zinc-100 active:bg-zinc-800"
-                >
-                  <UtensilsCrossed className="h-5 w-5" />
-                  Lanjut ke Menu
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-
-          {activeTabEnabled && activeTab === "sold" ? (
-            <div className="grid w-full gap-2">
-              <button
-                type="button"
-                disabled={isSavingMenuProgress || isSubmitting}
-                onClick={stickySaveMenuProgress}
-                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-600/20 px-3 text-center text-sm font-bold leading-tight text-emerald-100 active:bg-emerald-600/30 disabled:opacity-50"
-              >
-                {isSavingMenuProgress ? (
+                {isSubmitting ? (
                   <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
                 ) : (
-                  <UtensilsCrossed className="h-5 w-5 shrink-0" />
+                  <Lock className="h-5 w-5 shrink-0" />
                 )}
-                <span>{isSavingMenuProgress ? "Menyimpan sales…" : "Simpan Sales Menu"}</span>
+                <span>{isSubmitting ? "Submit…" : "Submit"}</span>
               </button>
-              {canFinalizeWorksheet ? (
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={stickySubmit}
-                  className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
-                >
-                  {isSubmitting ? (
-                    <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
-                  ) : (
-                    <Lock className="h-5 w-5 shrink-0" />
-                  )}
-                  <span>{isSubmitting ? "Mengunci…" : "Lock"}</span>
-                </button>
-              ) : null}
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </WorksheetStickyActionBar>
       ) : null}
     </main>

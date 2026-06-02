@@ -13,7 +13,7 @@ interface Ingredient {
   id: string;
   name: string;
   unit: IngredientUnit;
-  purchase_unit: IngredientUnit | null;
+  purchase_unit: string | null;
   purchase_to_stock_factor: number;
   default_unit_price: number;
   department: IngredientDepartment;
@@ -47,7 +47,7 @@ function mapRow(row: Record<string, unknown>): Ingredient {
     id: String(row.id),
     name: String(row.name),
     unit: (row.unit ? String(row.unit) : "gr") as Ingredient["unit"],
-    purchase_unit: row.purchase_unit ? (String(row.purchase_unit) as Ingredient["unit"]) : null,
+    purchase_unit: row.purchase_unit ? String(row.purchase_unit) : null,
     purchase_to_stock_factor: Number(row.purchase_to_stock_factor ?? 1),
     default_unit_price: Number(row.default_unit_price ?? 0),
     department: (row.department as FormDepartment) || "bar",

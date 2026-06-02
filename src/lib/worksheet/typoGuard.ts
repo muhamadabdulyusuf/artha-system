@@ -15,12 +15,21 @@ export type TypoGuardWarning = {
   reason: "absolute" | "spike";
 };
 
+export type TypoGuardPreviewField =
+  | "inQty"
+  | "closingStock"
+  | "outQty"
+  | "premix"
+  | "issue"
+  | "sold";
+
 export type TypoGuardPreviewEntry = {
   ingredientId: string;
   ingredientName: string;
-  field: "inQty" | "closingStock" | "outQty";
+  field: TypoGuardPreviewField;
   value: number;
   unit: string;
+  note?: string;
 };
 
 type LineFields = {

@@ -34,7 +34,7 @@ export type IngredientRecord = {
   id: string;
   name: string;
   unit: IngredientUnit;
-  purchase_unit: IngredientUnit | null;
+  purchase_unit: string | null;
   purchase_to_stock_factor: number;
   default_unit_price: number;
   department: IngredientDepartment;
@@ -57,7 +57,8 @@ type IngredientModalProps = {
 type FormData = {
   name: string;
   unit: IngredientUnit;
-  purchase_unit: "" | IngredientUnit;
+  purchase_unit: "" | IngredientUnit | "custom";
+  custom_purchase_unit: string;
   purchase_to_stock_factor: string;
   default_unit_price: string;
   department: IngredientDepartment;
@@ -90,6 +91,8 @@ const FORM_UNITS: IngredientUnit[] = [
   "ikat",
 ];
 
+const CUSTOM_PURCHASE_UNIT_VALUE = "custom";
+
 const DEPARTMENTS: { value: IngredientDepartment; label: string }[] = [
   { value: "bar", label: "Bar" },
   { value: "kitchen", label: "Kitchen" },
@@ -105,6 +108,7 @@ const EMPTY_FORM: FormData = {
   name: "",
   unit: "gr",
   purchase_unit: "",
+  custom_purchase_unit: "",
   purchase_to_stock_factor: "1",
   default_unit_price: "",
   department: "bar",
@@ -138,6 +142,24 @@ function parseUnitPrice(raw: string): number | null {
   return value;
 }
 
+function isPresetUnit(value: string): value is IngredientUnit {
+  return FORM_UNITS.includes(value as IngredientUnit);
+}
+
+function resolvePurchaseUnitFormValue(raw: string | null): Pick<
+  FormData,
+  "purchase_unit" | "custom_purchase_unit"
+> {
+  const value = raw?.trim() ?? "";
+  if (!value) {
+    return { purchase_unit: "", custom_purchase_unit: "" };
+  }
+  if (isPresetUnit(value)) {
+    return { purchase_unit: value, custom_purchase_unit: "" };
+  }
+  return { purchase_unit: CUSTOM_PURCHASE_UNIT_VALUE, custom_purchase_unit: value };
+}
+
 export function IngredientModal({
   open,
   ingredient,
@@ -166,10 +188,12 @@ export function IngredientModal({
       });
 
     if (ingredient) {
+      const purchaseUnit = resolvePurchaseUnitFormValue(ingredient.purchase_unit);
       setFormData({
         name: ingredient.name,
         unit: ingredient.unit,
-        purchase_unit: ingredient.purchase_unit ?? "",
+        purchase_unit: purchaseUnit.purchase_unit,
+        custom_purchase_unit: purchaseUnit.custom_purchase_unit,
         purchase_to_stock_factor: String(ingredient.purchase_to_stock_factor ?? 1),
         default_unit_price:
           Number(ingredient.default_unit_price ?? 0) === 0
@@ -207,7 +231,16 @@ export function IngredientModal({
       return;
     }
 
-    const purchase_unit = formData.purchase_unit || null;
+    const customPurchaseUnit = formData.custom_purchase_unit.trim();
+    if (formData.purchase_unit === CUSTOM_PURCHASE_UNIT_VALUE && !customPurchaseUnit) {
+      onError("Isi satuan receive custom.");
+      return;
+    }
+
+    const purchase_unit =
+      formData.purchase_unit === CUSTOM_PURCHASE_UNIT_VALUE
+        ? customPurchaseUnit
+        : formData.purchase_unit || null;
     const default_unit_price = parseUnitPrice(formData.default_unit_price);
     if (default_unit_price === null) {
       onError("Harga default harus angka ≥ 0.");
@@ -308,29 +341,50 @@ export function IngredientModal({
           </p>
         </label>
 
-        <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-zinc-400">
-              Satuan Beli / Receive
-            </span>
-            <select
-              value={formData.purchase_unit}
-              onChange={(e) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  purchase_unit: e.target.value as "" | IngredientUnit,
-                }))
-              }
-              className={SELECT_CLASS}
-            >
-              <option value="">Sama dengan stok</option>
-              {FORM_UNITS.map((u) => (
-                <option key={u} value={u}>
-                  {u}
-                </option>
-              ))}
-            </select>
-          </label>
+	        <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
+	          <div className="space-y-2">
+	            <label className="block">
+	              <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+	                Satuan Beli / Receive
+	              </span>
+	              <select
+	                value={formData.purchase_unit}
+	                onChange={(e) =>
+	                  setFormData((prev) => ({
+	                    ...prev,
+	                    purchase_unit: e.target.value as FormData["purchase_unit"],
+	                    custom_purchase_unit:
+	                      e.target.value === CUSTOM_PURCHASE_UNIT_VALUE
+	                        ? prev.custom_purchase_unit
+	                        : "",
+	                  }))
+	                }
+	                className={SELECT_CLASS}
+	              >
+	                <option value="">Sama dengan stok</option>
+	                {FORM_UNITS.map((u) => (
+	                  <option key={u} value={u}>
+	                    {u}
+	                  </option>
+	                ))}
+	                <option value={CUSTOM_PURCHASE_UNIT_VALUE}>Custom</option>
+	              </select>
+	            </label>
+	            {formData.purchase_unit === CUSTOM_PURCHASE_UNIT_VALUE ? (
+	              <input
+	                type="text"
+	                value={formData.custom_purchase_unit}
+	                onChange={(e) =>
+	                  setFormData((prev) => ({
+	                    ...prev,
+	                    custom_purchase_unit: e.target.value,
+	                  }))
+	                }
+	                placeholder="Contoh: tray, roll, bal"
+	                className={INPUT_CLASS}
+	              />
+	            ) : null}
+	          </div>
 
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-zinc-400">

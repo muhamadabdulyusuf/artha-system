@@ -1,7 +1,11 @@
 "use client";
 
 import { Modal } from "@/components/ui/Modal";
-import type { TypoGuardPreviewEntry, TypoGuardWarning } from "@/lib/worksheet/typoGuard";
+import type {
+  TypoGuardPreviewEntry,
+  TypoGuardPreviewField,
+  TypoGuardWarning,
+} from "@/lib/worksheet/typoGuard";
 import { formatTypoGuardMessage } from "@/lib/worksheet/typoGuard";
 
 type TypoConfirmModalProps = {
@@ -12,10 +16,13 @@ type TypoConfirmModalProps = {
   onCancel: () => void;
 };
 
-const FIELD_LABEL: Record<TypoGuardWarning["field"], string> = {
-  inQty: "Pasokan masuk",
+const FIELD_LABEL: Record<TypoGuardPreviewField, string> = {
+  inQty: "Receive",
   closingStock: "Sisa fisik (opname)",
   outQty: "Qty keluar",
+  premix: "Premix",
+  issue: "Remake",
+  sold: "Menu",
 };
 
 export function TypoConfirmModal({
@@ -68,6 +75,9 @@ export function TypoConfirmModal({
                   <span className={warning ? "tabular-nums text-amber-200" : "tabular-nums text-zinc-100"}>
                     {entry.value.toLocaleString("id-ID", { maximumFractionDigits: 4 })} {entry.unit}
                   </span>
+                  {entry.note ? (
+                    <span className="block pt-1 text-[11px] text-zinc-500">{entry.note}</span>
+                  ) : null}
                   {warning ? (
                     <span className="ml-1 text-amber-300">Periksa angka besar</span>
                   ) : null}
