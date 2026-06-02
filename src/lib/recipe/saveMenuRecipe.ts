@@ -16,13 +16,38 @@ export async function saveMenuRecipe(
   let activeVersionId = existingVersionId;
 
   if (!activeVersionId) {
+    const { data: activeVersion, error: activeVersionErr } = await supabase
+      .from("menu_recipe_version")
+      .select("id")
+      .eq("menu_item_id", menuItemId)
+      .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (activeVersionErr) throw new Error(activeVersionErr.message);
+    activeVersionId = activeVersion?.id ?? null;
+  }
+
+  if (!activeVersionId) {
     const today = new Date().toISOString().slice(0, 10);
+    const { data: latestVersion, error: latestVersionErr } = await supabase
+      .from("menu_recipe_version")
+      .select("version")
+      .eq("menu_item_id", menuItemId)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestVersionErr) throw new Error(latestVersionErr.message);
+    const nextVersion = Number(latestVersion?.version ?? 0) + 1;
+
     const { data: version, error: versionErr } = await supabase
       .from("menu_recipe_version")
       .insert([
         {
           menu_item_id: menuItemId,
-          version: 1,
+          version: nextVersion,
           valid_from: today,
           is_active: true,
         },
@@ -35,43 +60,23 @@ export async function saveMenuRecipe(
     activeVersionId = version.id;
   }
 
-  const keepIds = new Set(lines.map((l) => l.ingredient_id));
-
-  const { data: existingLines, error: fetchErr } = await supabase
+  const { error: deleteErr } = await supabase
     .from("recipe_line")
-    .select("id, ingredient_id")
+    .delete()
     .eq("recipe_version_id", activeVersionId);
 
-  if (fetchErr) throw new Error(fetchErr.message);
+  if (deleteErr) throw new Error(deleteErr.message);
 
-  for (const line of existingLines ?? []) {
-    if (!keepIds.has(line.ingredient_id)) {
-      const { error: delErr } = await supabase.from("recipe_line").delete().eq("id", line.id);
-      if (delErr) throw new Error(delErr.message);
-    }
-  }
+  if (lines.length > 0) {
+    const { error: insertErr } = await supabase.from("recipe_line").insert(
+      lines.map((line) => ({
+        recipe_version_id: activeVersionId,
+        ingredient_id: line.ingredient_id,
+        quantity_per_serving: line.quantity_per_serving,
+      }))
+    );
 
-  for (const line of lines) {
-    const payload = {
-      recipe_version_id: activeVersionId,
-      ingredient_id: line.ingredient_id,
-      quantity_per_serving: line.quantity_per_serving,
-    };
-
-    if (line.id) {
-      const { error: updateErr } = await supabase
-        .from("recipe_line")
-        .update({
-          ingredient_id: line.ingredient_id,
-          quantity_per_serving: line.quantity_per_serving,
-        })
-        .eq("id", line.id);
-
-      if (updateErr) throw new Error(updateErr.message);
-    } else {
-      const { error: insertErr } = await supabase.from("recipe_line").insert(payload);
-      if (insertErr) throw new Error(insertErr.message);
-    }
+    if (insertErr) throw new Error(insertErr.message);
   }
 
   return activeVersionId;

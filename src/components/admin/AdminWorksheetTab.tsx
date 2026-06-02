@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Building2 } from "lucide-react";
+import { PurchaseRequestTracker } from "@/components/admin/PurchaseRequestTracker";
 import { WorksheetClosing } from "@/components/staff/WorksheetClosing";
 import type { Department } from "@/lib/types/database";
 
@@ -47,6 +48,8 @@ export function AdminWorksheetTab() {
           })}
         </div>
       </div>
+
+      <PurchaseRequestTracker />
 
       <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/20">
         <WorksheetClosing key={department} department={department} title={selected.title} embedded />

@@ -176,6 +176,9 @@ type LedgerTableRow = StockLedgerExportRow & {
 
 type RunwayEntry = {
   ingredientName: string;
+  unit: string;
+  currentStock: number;
+  averageDailyUsage: number;
   daysRemaining: number;
   urgency: "safe" | "warning" | "critical";
 };
@@ -253,6 +256,12 @@ type LowStockOrderGroup = {
   supplierName: string;
   phoneNumber: string | null;
   lines: LowStockOrderLine[];
+};
+
+type SupplierPoCard = {
+  supplier: SupplierRow;
+  orderGroup: LowStockOrderGroup | null;
+  lineCount: number;
 };
 
 type LowStockInventoryRow = {
@@ -1461,7 +1470,7 @@ function WorksheetEditRequestPanel({
     if (status === "REJECTED" && rejectNote === null) return;
     const reviewNote =
       status === "APPROVED"
-        ? "Worksheet dibuka untuk koreksi staff."
+        ? "Worksheet tanggal dan department ini dibuka untuk koreksi staff."
         : rejectNote?.trim() || "Request koreksi ditolak.";
 
     setBusyId(request.id);
@@ -1475,8 +1484,12 @@ function WorksheetEditRequestPanel({
             status: "DRAFT",
             submitted_at: null,
             submitted_by_staff_id: null,
+            locked_at: null,
+            locked_by_staff_id: null,
           })
-          .eq("id", request.session_id);
+          .eq("id", request.session_id)
+          .eq("business_date", request.business_date)
+          .eq("department", request.department);
 
         if (sessionErr) throw sessionErr;
 
@@ -1525,7 +1538,7 @@ function WorksheetEditRequestPanel({
         <div>
           <h3 className="text-sm font-semibold text-slate-100">Approval Koreksi Worksheet</h3>
           <p className="mt-1 text-xs text-slate-500">
-            Staff yang mau edit tanggal submitted harus request dulu di sini.
+            Approval hanya membuka session tanggal dan department yang diminta.
           </p>
         </div>
         <button
@@ -1640,6 +1653,7 @@ export function MonitoringDashboard() {
   const [topBeverages, setTopBeverages] = useState<TopSellingEntry[]>([]);
   const [topFoods, setTopFoods] = useState<TopSellingEntry[]>([]);
   const [runwayEntries, setRunwayEntries] = useState<RunwayEntry[]>([]);
+  const [runwaySource, setRunwaySource] = useState("");
   const [cogsAlerts, setCogsAlerts] = useState<CogsAlert[]>([]);
   const [hasSpillageAlert, setHasSpillageAlert] = useState(false);
 
@@ -1954,6 +1968,28 @@ export function MonitoringDashboard() {
   const selectedSupplierLowStockGroups = useMemo(
     () => lowStockOrderGroups.filter((group) => group.supplierId === selectedSupplierId),
     [lowStockOrderGroups, selectedSupplierId]
+  );
+
+  const supplierPoCards = useMemo<SupplierPoCard[]>(() => {
+    const groupBySupplierId = new Map(lowStockOrderGroups.map((group) => [group.supplierId, group]));
+    return suppliers
+      .map((supplier) => {
+        const orderGroup = groupBySupplierId.get(supplier.id) ?? null;
+        return {
+          supplier,
+          orderGroup,
+          lineCount: orderGroup?.lines.length ?? 0,
+        };
+      })
+      .sort((a, b) => {
+        if (a.lineCount !== b.lineCount) return b.lineCount - a.lineCount;
+        return a.supplier.name.localeCompare(b.supplier.name);
+      });
+  }, [lowStockOrderGroups, suppliers]);
+
+  const unassignedLowStockGroup = useMemo(
+    () => lowStockOrderGroups.find((group) => group.supplierId === "unassigned") ?? null,
+    [lowStockOrderGroups]
   );
 
   const totalSelectedLowStockLines = useMemo(
@@ -2629,15 +2665,32 @@ export function MonitoringDashboard() {
       addIsoDays(rangeEnd, index - (RUNWAY_HISTORY_DAYS - 1))
     );
     const demandRows: SalesDemandRow[] = [];
+    const liveBusinessDate = resolveBusinessDate();
+    const runwayStockSource =
+      rangeEnd === liveBusinessDate
+        ? "stok live admin (ingredient.current_stock)"
+        : `closing_stock stock_ledger ${formatBusinessDateLabel(rangeEnd)}`;
+    setRunwaySource(
+      `Pemakaian: stock_ledger.theoretical_usage ${formatBusinessDateLabel(historyStart)} s/d ${formatBusinessDateLabel(rangeEnd)}. Stok: ${runwayStockSource}.`
+    );
+
+    const resolveRunwayStock = (
+      ingredientId: string,
+      ingredient: IngredientWithPrimarySupplier
+    ) => {
+      const ledgerClosing = closingByIngredient.get(ingredientId);
+      if (rangeEnd !== liveBusinessDate && ledgerClosing !== undefined) {
+        return Number(ledgerClosing);
+      }
+      return Number(ingredient.current_stock ?? ledgerClosing ?? 0);
+    };
 
     for (const ingredient of ingredientMap.values()) {
       const dailyUsage = dailyUsageByIngredient.get(ingredient.id) ?? {};
       const totalUsage = demandDateKeys.reduce((sum, date) => sum + (dailyUsage[date] ?? 0), 0);
       if (totalUsage <= 0) continue;
 
-      const currentStock = Number(
-        ingredient.current_stock ?? closingByIngredient.get(ingredient.id) ?? 0
-      );
+      const currentStock = resolveRunwayStock(ingredient.id, ingredient);
       const minimumStock = Number(ingredient.minimum_stock ?? 0);
       const averageDailyUsage = totalUsage / RUNWAY_HISTORY_DAYS;
       const peakDailyUsage = Math.max(...demandDateKeys.map((date) => dailyUsage[date] ?? 0));
@@ -2662,20 +2715,26 @@ export function MonitoringDashboard() {
     setSalesDemandRows(demandRows);
 
     const runway: RunwayEntry[] = [];
-    for (const [ingredientId, usageBucket] of usageByIngredient) {
-      const ingredient = ingredientMap.get(ingredientId);
-      if (!ingredient) continue;
-      if (!usageBucket || usageBucket.days.size === 0) continue;
-      const avgDailyUsage = usageBucket.totalUsage / usageBucket.days.size;
+    for (const ingredient of ingredientMap.values()) {
+      const ingredientId = ingredient.id;
+      const dailyUsage = dailyUsageByIngredient.get(ingredientId) ?? {};
+      const totalUsage = demandDateKeys.reduce((sum, date) => sum + (dailyUsage[date] ?? 0), 0);
+      if (totalUsage <= 0) continue;
+      const avgDailyUsage = totalUsage / RUNWAY_HISTORY_DAYS;
       if (avgDailyUsage <= 0) continue;
-      const currentStock = Number(
-        ingredient.current_stock ?? closingByIngredient.get(ingredientId) ?? 0
-      );
+      const currentStock = resolveRunwayStock(ingredientId, ingredient);
       const daysRemaining = Math.max(0, Math.floor(currentStock / avgDailyUsage));
       let urgency: RunwayEntry["urgency"] = "safe";
       if (daysRemaining <= 1) urgency = "critical";
       else if (daysRemaining <= 3) urgency = "warning";
-      runway.push({ ingredientName: ingredient.name, daysRemaining, urgency });
+      runway.push({
+        ingredientName: ingredient.name,
+        unit: ingredient.unit,
+        currentStock,
+        averageDailyUsage: avgDailyUsage,
+        daysRemaining,
+        urgency,
+      });
     }
 
     runway.sort((a, b) => a.daysRemaining - b.daysRemaining);
@@ -2689,13 +2748,13 @@ export function MonitoringDashboard() {
       if (!ingredient) continue;
 
       if (usageBucket && usageBucket.days.size > 0) {
-        dailyUsageById[ingredientId] = usageBucket.totalUsage / usageBucket.days.size;
+        const dailyUsage = dailyUsageByIngredient.get(ingredientId) ?? {};
+        const totalUsage = demandDateKeys.reduce((sum, date) => sum + (dailyUsage[date] ?? 0), 0);
+        dailyUsageById[ingredientId] = totalUsage / RUNWAY_HISTORY_DAYS;
       }
 
       stockById[ingredientId] = {
-        currentStock: Number(
-          ingredient.current_stock ?? closingByIngredient.get(ingredientId) ?? 0
-        ),
+        currentStock: resolveRunwayStock(ingredientId, ingredient),
         minimumStock: Number(ingredient.minimum_stock ?? 0),
       };
     }
@@ -2956,7 +3015,9 @@ export function MonitoringDashboard() {
 
     const { data: supplierRows, error: supErr } = await supabase
       .from("supplier")
-      .select("id, name, min_order_amount, phone_number, is_active, created_at, updated_at")
+      .select(
+        "id, name, category, pic_name, min_order_amount, phone_number, link_url, is_active, created_at, updated_at"
+      )
       .eq("is_active", true)
       .order("name");
 
@@ -3445,6 +3506,43 @@ export function MonitoringDashboard() {
     }
   };
 
+  const handleSendSupplierLowStockPO = async (
+    supplier: SupplierRow,
+    orderGroup: LowStockOrderGroup | null
+  ) => {
+    if (!orderGroup || orderGroup.lines.length === 0 || thursdayOrderClosed || poSubmitting) return;
+
+    setPoError(null);
+    setPoSuccess(null);
+
+    if (!isSupplierWhatsAppPhoneConfigured(supplier.phone_number)) {
+      window.alert(SUPPLIER_WHATSAPP_NOT_CONFIGURED_MSG);
+      return;
+    }
+
+    const formattedDate = formatPoDateLocal();
+    const waTextArray = [
+      "*PURCHASE ORDER - AUTO REPLENISHMENT*",
+      "---------------------------------------------",
+      `*Tanggal:* ${formattedDate}`,
+      `*Kepada:* ${supplier.name}`,
+      "",
+      "*DAFTAR PESANAN (LOW STOCK):*",
+      ...orderGroup.lines.map(
+        (line, index) =>
+          `${index + 1}. ${line.ingredientName} - ${formatPoWaQuantity(line.quantity)} ${line.unit}`
+      ),
+      "",
+      "*Catatan:* Pesanan ini otomatis dibuat dari bahan yang menyentuh batas minimum stock di Artha System.",
+      "---------------------------------------------",
+    ];
+
+    openSupplierWhatsAppChat(supplier.phone_number, waTextArray.join("\n"));
+    setPoSuccess(
+      `${orderGroup.lines.length} bahan low stock dikirim ke WhatsApp ${supplier.name}.`
+    );
+  };
+
   return (
     <div className="space-y-6">
       <nav
@@ -3667,10 +3765,15 @@ export function MonitoringDashboard() {
 
           {runwayEntries.length > 0 && (
             <section className="rounded-xl border border-slate-800 bg-zinc-900/50 p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <Package className="h-4 w-4 text-slate-400" />
-                <h3 className="text-sm font-semibold text-slate-200">Stock Runway Calculator</h3>
-                <span className="text-xs text-slate-500">(per {formatBusinessDateLabel(endDate)})</span>
+              <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2">
+                  <Package className="h-4 w-4 text-slate-400" />
+                  <h3 className="text-sm font-semibold text-slate-200">Stock Runway Calculator</h3>
+                  <span className="text-xs text-slate-500">(per {formatBusinessDateLabel(endDate)})</span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  {runwaySource || "Sumber belum tersedia."}
+                </p>
               </div>
               <div className="flex flex-wrap gap-2">
                 {runwayEntries.map((entry) => (
@@ -3684,12 +3787,16 @@ export function MonitoringDashboard() {
                           : "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
                     }`}
                   >
-                    {entry.ingredientName}{" "}
+                    <span className="font-semibold">{entry.ingredientName}</span>{" "}
                     {entry.urgency === "safe"
                       ? `aman ${entry.daysRemaining} hari`
                       : entry.urgency === "warning"
                         ? `waspada sisa ${entry.daysRemaining} hari`
                         : `kritis sisa ${entry.daysRemaining} hari`}
+                    <span className="ml-1 opacity-80">
+                      · stok {formatQtyWithUnit(entry.currentStock, entry.unit)} · avg{" "}
+                      {formatQtyWithUnit(entry.averageDailyUsage, entry.unit)}/hari
+                    </span>
                   </span>
                 ))}
               </div>
@@ -4390,174 +4497,104 @@ export function MonitoringDashboard() {
               </div>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-3">
-                <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Pilih Supplier
-                </label>
-                <select
-                  value={selectedSupplierId}
-                  onChange={(e) => setSelectedSupplierId(e.target.value)}
-                  disabled={thursdayOrderClosed}
-                  className="min-h-11 w-full rounded-lg border border-slate-800 bg-zinc-950 px-3 text-sm text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <option value="">— Pilih supplier —</option>
-                  {suppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>
-                      {supplier.name} (Min. {formatRupiah(Number(supplier.min_order_amount))})
-                    </option>
-                  ))}
-                </select>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {supplierPoCards.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-sm text-slate-500 lg:col-span-2">
+                  Belum ada supplier aktif. Tambahkan supplier di Master Data Supplier.
+                </p>
+              ) : (
+                supplierPoCards.map(({ supplier, orderGroup, lineCount }) => {
+                  const canSendSupplierPo =
+                    canEdit && !thursdayOrderClosed && !poSubmitting && lineCount > 0;
+                  const phoneReady = isSupplierWhatsAppPhoneConfigured(supplier.phone_number);
 
-                {selectedSupplier && (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs text-slate-400">
-                      Minimum order:{" "}
-                      <span className="font-semibold text-slate-200">
-                        {formatRupiah(Number(selectedSupplier.min_order_amount))}
-                      </span>
-                    </p>
-                    {canEdit ? (
-                      <button
-                        type="button"
-                        disabled={thursdayOrderClosed || demandPlanningRows.length === 0}
-                        onClick={handleGenerateDemandPo}
-                        className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-600/15 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        <ShoppingCart className="h-3.5 w-3.5" />
-                        Generate PO dari Demand
-                      </button>
-                    ) : null}
-                  </div>
-                )}
-
-                {selectedSupplierId && supplierCatalog.length > 0 && (
-                  <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-800">
-                    <ul className="divide-y divide-slate-800/80 text-sm">
-                      {supplierCatalog.map((item) => (
-                        <li
-                          key={item.id}
-                          className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-zinc-950/60"
+                  return (
+                    <div
+                      key={supplier.id}
+                      className={`rounded-xl border p-4 ${
+                        lineCount > 0
+                          ? "border-emerald-500/30 bg-emerald-500/5"
+                          : "border-slate-800 bg-zinc-950/60"
+                      }`}
+                    >
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-100">{supplier.name}</h4>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Min. order {formatRupiah(Number(supplier.min_order_amount))}
+                            {!phoneReady ? " · WhatsApp belum lengkap" : ""}
+                          </p>
+                        </div>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            lineCount > 0
+                              ? "bg-emerald-500/15 text-emerald-300"
+                              : "bg-slate-500/10 text-slate-500"
+                          }`}
                         >
-                          <span className="text-slate-200">
-                            {item.ingredient.name}{" "}
-                            <span className="text-xs text-slate-500">({item.ingredient.unit})</span>
-                          </span>
-                          {canEdit ? (
-                            <button
-                              type="button"
-                              disabled={thursdayOrderClosed}
-                              onClick={() => handleAddPoLine(item)}
-                              className="shrink-0 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-40"
+                          {lineCount} bahan
+                        </span>
+                      </div>
+
+                      {orderGroup && orderGroup.lines.length > 0 ? (
+                        <ul className="mb-3 max-h-44 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-zinc-950/70 p-2 text-sm">
+                          {orderGroup.lines.map((line) => (
+                            <li
+                              key={line.ingredientId}
+                              className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5"
                             >
-                              + Tambah
-                            </button>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                              <span className="min-w-0">
+                                <span className="block truncate text-slate-200">{line.ingredientName}</span>
+                                <span className="text-[11px] text-slate-500">
+                                  Stok {formatQtyWithUnit(line.currentStock, line.unit)} · limit{" "}
+                                  {formatQtyWithUnit(line.minimumStock, line.unit)}
+                                </span>
+                              </span>
+                              <span className="shrink-0 tabular-nums text-emerald-200">
+                                {formatPoWaQuantity(line.quantity)} {line.unit}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mb-3 rounded-lg border border-dashed border-slate-800 px-3 py-5 text-center text-sm text-slate-500">
+                          Tidak ada bahan supplier ini yang menyentuh batas order.
+                        </p>
+                      )}
 
-                {selectedSupplierId && supplierCatalog.length === 0 && (
-                  <p className="text-sm text-slate-500">Katalog harga supplier belum tersedia.</p>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-slate-200">Draft Purchase Order</h4>
-                {poLines.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-sm text-slate-500">
-                    Tambahkan bahan dari katalog supplier.
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {poLines.map((line) => {
-                      const qty = parsePoQuantity(line.quantity);
-                      const subtotal = qty * line.unitPrice;
-                      return (
-                        <li
-                          key={line.ingredientId}
-                          className="rounded-lg border border-slate-800 bg-zinc-950/80 p-3"
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          disabled={!canSendSupplierPo}
+                          onClick={() => void handleSendSupplierLowStockPO(supplier, orderGroup)}
+                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
                         >
-                          <div className="mb-2 flex items-start justify-between gap-2">
-                            <div>
-                              <p className="font-medium text-slate-100">{line.ingredientName}</p>
-                              <p className="text-xs text-slate-500">
-                                @ {formatRupiah(line.unitPrice)} / {line.unit}
-                              </p>
-                            </div>
-                            {canEdit ? (
-                              <button
-                                type="button"
-                                onClick={() => handleRemovePoLine(line.ingredientId)}
-                                className="text-slate-500 hover:text-red-400"
-                                aria-label={`Hapus ${line.ingredientName}`}
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                            ) : null}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              min="0"
-                              step="any"
-                              value={line.quantity}
-                              disabled={thursdayOrderClosed}
-                              onChange={(e) => handleUpdatePoLineQty(line.ingredientId, e.target.value)}
-                              className="min-h-10 w-24 rounded-lg border border-slate-800 bg-zinc-900 px-2 text-sm tabular-nums text-slate-100"
-                            />
-                            <span className="text-sm tabular-nums text-slate-400">= {formatRupiah(subtotal)}</span>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-
-                <div className="flex items-center justify-between border-t border-slate-800 pt-3">
-                  <span className="text-sm text-slate-400">Total PO</span>
-                  <span className="text-lg font-bold tabular-nums text-slate-100">{formatRupiah(poTotalAmount)}</span>
-                </div>
-
-                {minOrderShortfall > 0 && selectedSupplier && (
-                  <p className="text-sm font-medium text-red-400">
-                    Peringatan: Total belanja belum memenuhi batas minimum order supplier.
-                  </p>
-                )}
-
-                {canEdit ? (
-                  <button
-                    type="button"
-                    disabled={poSubmitDisabled}
-                    onClick={() => void handleSendPO()}
-                    className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {thursdayOrderClosed ? (
-                      <>
-                        <Lock className="h-4 w-4" />
-                        PO Dikunci (Thursday Last Order)
-                      </>
-                    ) : poSubmitting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Mengirim…
-                      </>
-                    ) : (
-                      <>
-                        <Send className="h-4 w-4" />
-                        Kirim PO ke Supplier
-                      </>
-                    )}
-                  </button>
-                ) : (
-                  <p className="text-center text-xs text-slate-500">
-                    Mode penonton: pembuatan PO tidak tersedia.
-                  </p>
-                )}
-              </div>
+                          {poSubmitting ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : thursdayOrderClosed ? (
+                            <Lock className="h-4 w-4" />
+                          ) : (
+                            <Send className="h-4 w-4" />
+                          )}
+                          Kirim WhatsApp
+                        </button>
+                      ) : (
+                        <p className="text-center text-xs text-slate-500">
+                          Mode penonton: kirim PO tidak tersedia.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
+
+            {unassignedLowStockGroup ? (
+              <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                {unassignedLowStockGroup.lines.length} bahan low-stock belum punya supplier.
+                Lengkapi Primary Supplier di Master Ingredients supaya bisa masuk kartu supplier.
+              </div>
+            ) : null}
           </section>
           ) : null}
 

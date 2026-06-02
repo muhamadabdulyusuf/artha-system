@@ -339,7 +339,7 @@ function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
 }
 
 function canRequestResubmit(status: ClosingStatus | null | undefined): boolean {
-  return status === "SUBMITTED" || status === "PENDING_APPROVAL_ADMIN";
+  return status === "SUBMITTED" || status === "LOCKED" || status === "PENDING_APPROVAL_ADMIN";
 }
 
 function resolveLineOwner(row: StaffJoin): WorksheetLineOwner {
@@ -1908,6 +1908,265 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     return totals;
   };
 
+  const syncWorksheetFinalMonitoringData = async (
+    activeSessionId: string,
+    date: string,
+    submittingStaffId: string,
+    options: { writeClosingLog?: boolean; strictOutstockOpname?: boolean } = {}
+  ): Promise<ReturnType<typeof evaluateOpnameSubmission>> => {
+    const receiveTotals = await syncReceiveAggregate(activeSessionId);
+    const ledgerFreshIngredients = await refreshIngredientStockFromDb();
+
+    const [outAggregateResult, opnameAggregateResult, premixAggregateResult] = await Promise.all([
+      supabase
+        .from("worksheet_out_line")
+        .select("ingredient_id, quantity")
+        .eq("session_id", activeSessionId),
+      supabase
+        .from("worksheet_opname_line")
+        .select("ingredient_id, closing_stock")
+        .eq("session_id", activeSessionId),
+      supabase
+        .from("worksheet_premix_line")
+        .select("output_ingredient_id, batch_quantity")
+        .eq("session_id", activeSessionId),
+    ]);
+
+    if (outAggregateResult.error) {
+      throw new Error(`Gagal memuat akumulasi out stock: ${outAggregateResult.error.message}`);
+    }
+    if (opnameAggregateResult.error) {
+      throw new Error(`Gagal memuat akumulasi opname: ${opnameAggregateResult.error.message}`);
+    }
+    if (premixAggregateResult.error) {
+      throw new Error(`Gagal memuat akumulasi premix: ${premixAggregateResult.error.message}`);
+    }
+
+    const outTotalMap = new Map<string, number>();
+    for (const row of outAggregateResult.data ?? []) {
+      const quantity = Number(row.quantity ?? 0);
+      if (quantity <= 0) continue;
+      outTotalMap.set(row.ingredient_id, (outTotalMap.get(row.ingredient_id) ?? 0) + quantity);
+    }
+
+    const opnameTotalMap = new Map<string, number>();
+    for (const row of opnameAggregateResult.data ?? []) {
+      const quantity = Number(row.closing_stock ?? 0);
+      opnameTotalMap.set(
+        row.ingredient_id,
+        (opnameTotalMap.get(row.ingredient_id) ?? 0) + quantity
+      );
+    }
+
+    const premixQuantityTotals = new Map<string, number>();
+    for (const row of premixAggregateResult.data ?? []) {
+      const quantity = Number(row.batch_quantity ?? 0);
+      if (quantity <= 0) continue;
+      premixQuantityTotals.set(
+        row.output_ingredient_id,
+        (premixQuantityTotals.get(row.output_ingredient_id) ?? 0) + quantity
+      );
+    }
+
+    const aggregatePremixEffects = computePremixEffectsFromTotals(
+      premixItems,
+      premixQuantityTotals
+    );
+    const menuTheoreticalMap = await fetchSoldMenuTheoreticalUsage(supabase, date, activeSessionId);
+    const issueTheoreticalMap = await fetchMenuIssueTheoreticalUsage(supabase, date, activeSessionId);
+    const premixUsageMap = aggregatePremixEffects.usageMap;
+    const premixOutputMap = aggregatePremixEffects.outputMap;
+    const freshById = new Map(ledgerFreshIngredients.map((ing) => [ing.id, ing]));
+    const affectedIngredientIds = new Set([
+      ...menuTheoreticalMap.keys(),
+      ...issueTheoreticalMap.keys(),
+      ...premixUsageMap.keys(),
+      ...premixOutputMap.keys(),
+    ]);
+    const externalIngredientIds = [...affectedIngredientIds].filter(
+      (ingredientId) => !freshById.has(ingredientId)
+    );
+    const externalIngredients = (
+      await fetchIngredientsByIds(supabase, externalIngredientIds)
+    ).filter((ing) => ing.is_active && ing.is_stock_tracked);
+    const ledgerIngredients = [...ledgerFreshIngredients, ...externalIngredients];
+    const ledgerIngredientById = new Map(
+      ledgerIngredients.map((ingredient) => [ingredient.id, ingredient])
+    );
+    const previousClosingMap = await fetchLedgerClosingMap(
+      supabase,
+      ledgerIngredients.map((ing) => ing.id),
+      date,
+      "before"
+    );
+    const existingLedgerMap = await fetchLedgerSnapshotForDate(
+      supabase,
+      ledgerIngredients.map((ing) => ing.id),
+      date
+    );
+
+    const localLedgerPayload: StockLedgerInsert[] = ledgerFreshIngredients.map((ing) => {
+      const existing = existingLedgerMap.get(ing.id);
+      const masterStock = Number(ing.current_stock);
+      const receive_qty = receiveInputToStockQty(ing, String(receiveTotals.get(ing.id) ?? 0));
+      const opening_stock = existing
+        ? existing.opening_stock
+        : Math.max(
+            0,
+            Number.isFinite(masterStock)
+              ? masterStock - receive_qty
+              : previousClosingMap.get(ing.id) ?? 0
+          );
+      const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
+      const in_qty = receive_qty + premix_output_qty;
+      const out_qty = outTotalMap.get(ing.id) ?? 0;
+      const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
+      const issue_theoretical = issueTheoreticalMap.get(ing.id) ?? 0;
+      const premix_theoretical = premixUsageMap.get(ing.id) ?? 0;
+      const theoretical_usage = menu_theoretical + issue_theoretical + premix_theoretical;
+      const expected_closing = opening_stock + in_qty - theoretical_usage;
+      const hasPhysicalOpname = opnameTotalMap.has(ing.id);
+      const closing_stock = hasPhysicalOpname
+        ? opnameTotalMap.get(ing.id) ?? 0
+        : Math.max(0, expected_closing - out_qty);
+      const adjustment_qty = closing_stock - expected_closing;
+
+      if (closing_stock < 0) {
+        throw new Error(`Stok fisik ${ing.name} tidak boleh negatif.`);
+      }
+
+      if (options.strictOutstockOpname && out_qty > 0 && adjustment_qty > -out_qty) {
+        throw new Error(
+          `Out Stock ${ing.name} tidak selaras dengan opname. Jika ada ${out_qty} keluar/rusak, stok fisik harus mencerminkan pengurangan itu.`
+        );
+      }
+
+      return {
+        business_date: date,
+        ingredient_id: ing.id,
+        opening_stock,
+        in_qty,
+        theoretical_usage,
+        adjustment_qty,
+        closing_stock,
+      };
+    });
+
+    const externalLedgerPayload: StockLedgerInsert[] = externalIngredients.map((ing) => {
+      const existing = existingLedgerMap.get(ing.id);
+      const masterStock = Number(ing.current_stock);
+      const opening_stock = existing
+        ? existing.opening_stock
+        : Math.max(
+            0,
+            Number.isFinite(masterStock) ? masterStock : previousClosingMap.get(ing.id) ?? 0
+          );
+      const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
+      const existing_other_in = existing
+        ? Math.max(0, Number(existing.in_qty) - premix_output_qty)
+        : 0;
+      const in_qty = existing_other_in + premix_output_qty;
+      const menu_theoretical = menuTheoreticalMap.get(ing.id) ?? 0;
+      const issue_theoretical = issueTheoreticalMap.get(ing.id) ?? 0;
+      const premix_theoretical = premixUsageMap.get(ing.id) ?? 0;
+      const current_known_theoretical =
+        menu_theoretical + issue_theoretical + premix_theoretical;
+      const existing_other_theoretical = existing
+        ? Math.max(0, Number(existing.theoretical_usage) - current_known_theoretical)
+        : 0;
+      const theoretical_usage = current_known_theoretical + existing_other_theoretical;
+      const expected_closing = opening_stock + in_qty - theoretical_usage;
+      const closing_stock = existing ? existing.closing_stock : Math.max(0, expected_closing);
+      const adjustment_qty = closing_stock - expected_closing;
+
+      return {
+        business_date: date,
+        ingredient_id: ing.id,
+        opening_stock,
+        in_qty,
+        theoretical_usage,
+        adjustment_qty,
+        closing_stock,
+      };
+    });
+
+    const ledgerPayload = [...localLedgerPayload, ...externalLedgerPayload];
+
+    if (ledgerPayload.length > 0) {
+      const { error: ledgerErr } = await supabase
+        .from("stock_ledger")
+        .upsert(ledgerPayload, { onConflict: "business_date,ingredient_id" });
+
+      if (ledgerErr) {
+        throw new Error(`Gagal upsert stock_ledger: ${ledgerErr.message}`);
+      }
+
+      const stockUpdateResults = await Promise.all(
+        ledgerPayload.map((row) =>
+          supabase
+            .from("ingredient")
+            .update({ current_stock: row.closing_stock })
+            .eq("id", row.ingredient_id)
+        )
+      );
+      const stockUpdateErr = stockUpdateResults.find((result) => result.error)?.error;
+      if (stockUpdateErr) {
+        throw new Error(
+          `Ledger tersimpan tetapi cache stok gagal diperbarui: ${stockUpdateErr.message}`
+        );
+      }
+
+      if (options.writeClosingLog) {
+        const logPayload = ledgerPayload.map((row) => {
+          const ing = ledgerIngredientById.get(row.ingredient_id);
+          const before = Number(ing?.current_stock ?? 0);
+          return {
+            ingredient_id: row.ingredient_id,
+            business_date: date,
+            event_type: "CLOSING" as const,
+            qty_before: before,
+            qty_after: row.closing_stock,
+            reason: row.adjustment_qty === 0 ? null : "closing adjustment from physical opname",
+            message: `Closing ${ing?.name ?? row.ingredient_id}: ${before} -> ${row.closing_stock}`,
+            worksheet_session_id: activeSessionId,
+            created_by_staff_id: submittingStaffId,
+          };
+        });
+
+        const { error: logErr } = await supabase.from("stock_log").insert(logPayload);
+        if (logErr) {
+          throw new Error(`Ledger tersimpan tetapi audit log gagal dibuat: ${logErr.message}`);
+        }
+      }
+    }
+
+    const aggregatedLinesForEvaluation = ledgerFreshIngredients.reduce<Record<string, IngredientLineState>>(
+      (acc, ing) => {
+        const existing = lines[ing.id] ?? DEFAULT_LINE;
+        acc[ing.id] = {
+          ...existing,
+          outQty: outTotalMap.has(ing.id) ? String(outTotalMap.get(ing.id)) : "",
+          closingStock: opnameTotalMap.has(ing.id) ? String(opnameTotalMap.get(ing.id)) : "",
+        };
+        return acc;
+      },
+      {}
+    );
+
+    return evaluateOpnameSubmission({
+      ingredients: ledgerFreshIngredients,
+      lines: aggregatedLinesForEvaluation,
+      ledgerRows: localLedgerPayload.map((row) => ({
+        ingredient_id: row.ingredient_id,
+        opening_stock: row.opening_stock,
+        in_qty: row.in_qty,
+        theoretical_usage: row.theoretical_usage,
+        adjustment_qty: row.adjustment_qty,
+        closing_stock: row.closing_stock,
+      })),
+    });
+  };
+
   const uploadOutStockPhoto = async (ingredientId: string, file: File | null) => {
     if (!file || locked || isOwnedByOther(outLineOwners[ingredientId])) return;
 
@@ -2038,9 +2297,14 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         return;
       }
 
+      if (!staff?.id) {
+        throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
+      }
+
       await savePendingReceiveEntries(activeSessionId);
+      await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
       showSuccessToast(
-        "Receive tersimpan. Persediaan admin langsung ikut terupdate."
+        "Receive tersimpan. Monitoring dan persediaan admin langsung ikut terupdate."
       );
     } catch (err) {
       showTranslatedSubmitError(err);
@@ -2118,7 +2382,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         )
       );
 
-      showSuccessToast("Out stock tersimpan. Form tetap bisa diedit untuk koreksi typo.");
+      await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
+
+      showSuccessToast("Out stock tersimpan. Monitoring dan persediaan admin langsung ikut terupdate.");
     } catch (err) {
       showTranslatedSubmitError(err);
       setActiveTab("outstock");
@@ -2202,7 +2468,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         )
       );
 
-      showSuccessToast("Draft opname tersimpan. Ledger final dibuat saat Submit Report Closing.");
+      await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
+
+      showSuccessToast("Opname tersimpan. Monitoring dan persediaan admin langsung ikut terupdate.");
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -2279,10 +2547,12 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         )
       );
 
+      await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
+
       showSuccessToast(
         hasPendingReceive
-          ? "Receive pending dan produksi premix tersimpan. Stok final dihitung saat Submit Report Closing."
-          : "Produksi premix tersimpan. Stok final dihitung saat Submit Report Closing."
+          ? "Receive pending dan produksi premix tersimpan. Monitoring langsung ikut terupdate."
+          : "Produksi premix tersimpan. Monitoring langsung ikut terupdate."
       );
     } catch (err) {
       showTranslatedSubmitError(err);
@@ -2345,15 +2615,30 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
           status: "DRAFT",
           submitted_at: null,
           submitted_by_staff_id: null,
+          locked_at: null,
+          locked_by_staff_id: null,
         })
-        .eq("id", sessionId);
+        .eq("id", sessionId)
+        .eq("business_date", businessDate || selectedBusinessDate)
+        .eq("department", department);
 
       if (unlockErr) {
         throw new Error(unlockErr.message);
       }
 
+      const { error: dayUnlockErr } = await supabase
+        .from("business_day")
+        .update({ status: "DRAFT" })
+        .eq("business_date", businessDate || selectedBusinessDate);
+
+      if (dayUnlockErr) {
+        throw new Error(dayUnlockErr.message);
+      }
+
       setWorksheetStatus("DRAFT");
-      showSuccessToast("Worksheet dibuka kembali. Semua kamar bisa diedit dan perlu submit ulang.");
+      showSuccessToast(
+        `Worksheet ${formatBusinessDateLabel(businessDate || selectedBusinessDate)} department ${department} dibuka kembali dan perlu submit ulang.`
+      );
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -2521,7 +2806,11 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       const date = businessDate || resolveWorksheetBusinessDate();
       const { sessionId: ensuredSessionId } = await ensureDraftSession(date);
       await saveMenuProgress(ensuredSessionId, menus);
-      showSuccessToast("Sales menu tersimpan sebagai draft. Shift berikutnya bisa lanjut dari angka ini.");
+      if (!staff?.id) {
+        throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
+      }
+      await syncWorksheetFinalMonitoringData(ensuredSessionId, date, staff.id);
+      showSuccessToast("Sales menu tersimpan. Monitoring dan persediaan admin langsung ikut terupdate.");
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -2569,7 +2858,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     }
 
     const confirmed = window.confirm(
-      "Kunci laporan closing hari ini? Setelah submit, worksheet terkunci sampai Request Resubmit."
+      `Kunci worksheet ${formatBusinessDateLabel(businessDate || selectedBusinessDate)} department ${department}? Yang terkunci hanya tanggal dan department ini.`
     );
     if (!confirmed) return;
 
@@ -2818,22 +3107,25 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       );
       const existingLedgerMap = await fetchLedgerSnapshotForDate(
         supabase,
-        externalIngredients.map((ing) => ing.id),
+        ledgerIngredients.map((ing) => ing.id),
         date
       );
 
       const localLedgerPayload: StockLedgerInsert[] = ledgerFreshIngredients.map((ing) => {
+        const existing = existingLedgerMap.get(ing.id);
         const masterStock = Number(ing.current_stock);
         const receive_qty = receiveInputToStockQty(
           ing,
           String(receiveTotals.get(ing.id) ?? 0)
         );
-        const opening_stock = Math.max(
-          0,
-          Number.isFinite(masterStock)
-            ? masterStock - receive_qty
-            : previousClosingMap.get(ing.id) ?? 0
-        );
+        const opening_stock = existing
+          ? existing.opening_stock
+          : Math.max(
+              0,
+              Number.isFinite(masterStock)
+                ? masterStock - receive_qty
+                : previousClosingMap.get(ing.id) ?? 0
+            );
         const premix_output_qty = premixOutputMap.get(ing.id) ?? 0;
         const in_qty = receive_qty + premix_output_qty;
         const out_qty = outTotalMap.get(ing.id) ?? 0;
@@ -2982,11 +3274,13 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       const finalStatus: ClosingStatus = opnameEvalForAsync.hasPendingApproval
         ? "PENDING_APPROVAL_ADMIN"
-        : "SUBMITTED";
+        : "LOCKED";
 
       await finalizeWorksheetSession({
         supabase,
         sessionId: ensuredSessionId,
+        businessDate: date,
+        department,
         staffId: submittingStaffId,
         submittedAt,
         status: finalStatus,
@@ -2996,13 +3290,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       const { error: dayErr } = await supabase
         .from("business_day")
-        .update({ status: "SUBMITTED" })
+        .update({ status: finalStatus })
         .eq("business_date", date);
 
       if (dayErr) throw new Error(dayErr.message);
 
       clearDraftAfterSuccess();
-      showSuccessToast("Laporan Closing Berhasil Dikirim!");
+      showSuccessToast(
+        `Worksheet ${formatBusinessDateLabel(date)} department ${department} berhasil dikunci.`
+      );
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {

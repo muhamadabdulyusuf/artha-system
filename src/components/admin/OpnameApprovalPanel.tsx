@@ -95,10 +95,20 @@ export function OpnameApprovalPanel() {
           .eq("status", "PENDING_APPROVAL_ADMIN");
 
         if ((remaining ?? []).length === 0) {
+          const lockedAt = new Date().toISOString();
           await supabase
             .from("worksheet_session")
-            .update({ status: "SUBMITTED" })
+            .update({
+              status: "LOCKED",
+              locked_at: lockedAt,
+              locked_by_staff_id: session.id,
+            })
             .eq("id", row.session_id);
+
+          await supabase
+            .from("business_day")
+            .update({ status: "LOCKED" })
+            .eq("business_date", row.business_date);
         }
       }
 

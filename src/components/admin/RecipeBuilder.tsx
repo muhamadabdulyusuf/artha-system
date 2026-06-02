@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Beaker, ChefHat, Loader2, Plus, Trash2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
@@ -79,6 +79,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [ingredientKinds, setIngredientKinds] = useState<Map<string, "raw" | "premix">>(new Map());
+  const loadSeqRef = useRef(0);
 
   const selectedMenu = useMemo(
     () => menuItems.find((m) => m.id === targetMenuId) ?? null,
@@ -98,7 +99,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
 
   const componentsSectionTitle = targetType === "premix" ? "Bahan Baku" : "Komposisi";
   const quantityLabel = targetType === "premix" ? "Qty / batch" : "Qty / porsi";
-  const allowZeroQty = targetType === "menu";
+  const allowZeroQty = false;
   const componentPickerDepartment = targetType === "premix" ? (department ?? undefined) : undefined;
 
   const resetEditor = useCallback(() => {
@@ -106,6 +107,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
     setVersionId(null);
     setRecipeId(null);
     setPremixYieldQty("1");
+    setIngredientKinds(new Map());
     setError(null);
   }, []);
 
@@ -135,6 +137,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
 
   const loadMenuRecipe = useCallback(
     async (menuId: string) => {
+      const requestId = ++loadSeqRef.current;
       resetEditor();
       setLoading(true);
 
@@ -148,10 +151,10 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
 
         if (verErr) throw new Error(verErr.message);
         if (!activeVersion?.id) {
-          setLoading(false);
           return;
         }
 
+        if (loadSeqRef.current !== requestId) return;
         setVersionId(activeVersion.id);
 
         const { data: lines, error: lineErr } = await supabase
@@ -180,6 +183,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
             kinds.set(row.id, row.kind);
           }
 
+          if (loadSeqRef.current !== requestId) return;
           setRows(
             lineRows.map((l) => {
               const kind = kinds.get(l.ingredient_id) ?? "raw";
@@ -195,16 +199,21 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
           setIngredientKinds(kinds);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Gagal memuat resep menu.");
+        if (loadSeqRef.current === requestId) {
+          setError(e instanceof Error ? e.message : "Gagal memuat resep menu.");
+        }
+      } finally {
+        if (loadSeqRef.current === requestId) {
+          setLoading(false);
+        }
       }
-
-      setLoading(false);
     },
     [resetEditor, supabase]
   );
 
   const loadPremixRecipe = useCallback(
     async (outputId: string) => {
+      const requestId = ++loadSeqRef.current;
       resetEditor();
       setLoading(true);
 
@@ -218,10 +227,10 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
 
         if (recipeErr) throw new Error(recipeErr.message);
         if (!recipe?.id) {
-          setLoading(false);
           return;
         }
 
+        if (loadSeqRef.current !== requestId) return;
         setRecipeId(recipe.id);
         setPremixYieldQty(String(Number(recipe.yield_quantity ?? 1)));
 
@@ -251,6 +260,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
             kinds.set(row.id, row.kind);
           }
 
+          if (loadSeqRef.current !== requestId) return;
           setRows(
             componentRows.map((c) => {
               const kind = kinds.get(c.ingredient_id) ?? "raw";
@@ -266,10 +276,14 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
           setIngredientKinds(kinds);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Gagal memuat resep premix.");
+        if (loadSeqRef.current === requestId) {
+          setError(e instanceof Error ? e.message : "Gagal memuat resep premix.");
+        }
+      } finally {
+        if (loadSeqRef.current === requestId) {
+          setLoading(false);
+        }
       }
-
-      setLoading(false);
     },
     [resetEditor, supabase]
   );
@@ -305,7 +319,9 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
     } else if (targetType === "premix" && targetPremixId) {
       void loadPremixRecipe(targetPremixId);
     } else {
+      loadSeqRef.current += 1;
       resetEditor();
+      setLoading(false);
     }
   }, [
     open,
@@ -364,6 +380,11 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
   };
 
   const handleSave = async () => {
+    if (loading || loadingTargets) {
+      setError("Tunggu resep selesai dimuat dulu sebelum disimpan.");
+      return;
+    }
+
     if (!department) {
       setError("Pilih target resep terlebih dahulu.");
       return;
@@ -702,7 +723,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
 
                 <button
                   type="button"
-                  disabled={saving || deletingKey !== null || !department}
+                  disabled={saving || loading || loadingTargets || deletingKey !== null || !department}
                   onClick={() => void handleSave()}
                   className="mt-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >

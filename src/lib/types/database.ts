@@ -298,8 +298,11 @@ export type WorksheetOpnamePendingRow = {
 export type SupplierRow = {
   id: string;
   name: string;
+  category: string;
+  pic_name: string;
   min_order_amount: number;
   phone_number: string;
+  link_url: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -333,6 +336,49 @@ export type PurchaseOrderLineRow = {
   quantity: number;
   unit_price: number;
   line_total: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PurchaseRequestDepartment = Department | "general";
+export type PurchaseRequestMethod = "Online" | "Offline";
+export type PurchaseRequestPoStatus = "Pending" | "Approved" | "Rejected";
+export type PurchaseRequestStatus =
+  | "Belum Dibeli"
+  | "On Progress"
+  | "Purchased"
+  | "Shipped"
+  | "Arrived"
+  | "Cancelled";
+
+export type PurchaseRequestTrackerRow = {
+  id: string;
+  request_date: string;
+  ingredient_id: string | null;
+  item_name: string;
+  department: PurchaseRequestDepartment;
+  qty: number;
+  unit: string;
+  supplier_id: string | null;
+  supplier_name: string;
+  supplier_contact: string;
+  unit_price: number;
+  total_price: number;
+  purchase_method: PurchaseRequestMethod;
+  purchase_link: string;
+  pic_request_staff_id: string | null;
+  pic_request_name: string;
+  approved_by_staff_id: string | null;
+  approved_by_name: string;
+  po_status: PurchaseRequestPoStatus;
+  purchase_status: PurchaseRequestStatus;
+  estimated_arrival_date: string | null;
+  arrival_date: string | null;
+  arrival_day_diff: number | null;
+  note: string;
+  stock_applied_at: string | null;
+  stock_applied_qty: number;
+  stock_log_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -725,14 +771,20 @@ export type Database = {
         Insert: {
           id?: string;
           name: string;
+          category?: string;
+          pic_name?: string;
           min_order_amount?: number;
           phone_number?: string;
+          link_url?: string;
           is_active?: boolean;
         };
         Update: {
           name?: string;
+          category?: string;
+          pic_name?: string;
           min_order_amount?: number;
           phone_number?: string;
+          link_url?: string;
           is_active?: boolean;
         };
         Relationships: [];
@@ -783,6 +835,63 @@ export type Database = {
           quantity?: number;
           unit_price?: number;
           line_total?: number;
+        };
+        Relationships: [];
+      };
+      purchase_request_tracker: {
+        Row: PurchaseRequestTrackerRow;
+        Insert: {
+          id?: string;
+          request_date?: string;
+          ingredient_id?: string | null;
+          item_name: string;
+          department?: PurchaseRequestDepartment;
+          qty: number;
+          unit: string;
+          supplier_id?: string | null;
+          supplier_name?: string;
+          supplier_contact?: string;
+          unit_price?: number;
+          total_price?: number;
+          purchase_method?: PurchaseRequestMethod;
+          purchase_link?: string;
+          pic_request_staff_id?: string | null;
+          pic_request_name?: string;
+          approved_by_staff_id?: string | null;
+          approved_by_name?: string;
+          po_status?: PurchaseRequestPoStatus;
+          purchase_status?: PurchaseRequestStatus;
+          estimated_arrival_date?: string | null;
+          arrival_date?: string | null;
+          arrival_day_diff?: number | null;
+          note?: string;
+          stock_applied_at?: string | null;
+          stock_applied_qty?: number;
+          stock_log_id?: string | null;
+        };
+        Update: {
+          request_date?: string;
+          ingredient_id?: string | null;
+          item_name?: string;
+          department?: PurchaseRequestDepartment;
+          qty?: number;
+          unit?: string;
+          supplier_id?: string | null;
+          supplier_name?: string;
+          supplier_contact?: string;
+          unit_price?: number;
+          total_price?: number;
+          purchase_method?: PurchaseRequestMethod;
+          purchase_link?: string;
+          pic_request_staff_id?: string | null;
+          pic_request_name?: string;
+          approved_by_staff_id?: string | null;
+          approved_by_name?: string;
+          po_status?: PurchaseRequestPoStatus;
+          purchase_status?: PurchaseRequestStatus;
+          estimated_arrival_date?: string | null;
+          arrival_date?: string | null;
+          note?: string;
         };
         Relationships: [];
       };
