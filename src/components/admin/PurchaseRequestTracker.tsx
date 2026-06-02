@@ -3,13 +3,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
+  CalendarDays,
+  CircleDollarSign,
   ExternalLink,
   Loader2,
   PackageCheck,
+  Pencil,
   RefreshCw,
   Save,
   Search,
   ShoppingCart,
+  Trash2,
+  Truck,
+  UserRound,
+  X,
 } from "lucide-react";
 import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
@@ -64,6 +71,11 @@ const STATUS_STYLE: Record<PurchaseRequestStatus, string> = {
   Cancelled: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300",
 };
 
+const FIELD_CLASS =
+  "mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60";
+const LABEL_CLASS = "text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500";
+const PANEL_CLASS = "rounded-lg border border-zinc-800 bg-zinc-900/35 p-3";
+
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 function formatRupiah(amount: number): string {
@@ -99,8 +111,42 @@ function newForm(): TrackerForm {
   };
 }
 
+function numericInput(value: number | null | undefined): string {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? String(parsed) : "";
+}
+
 function statusCount(rows: PurchaseRequestTrackerRow[], status: PurchaseRequestStatus): number {
   return rows.filter((row) => row.purchase_status === status).length;
+}
+
+function departmentLabel(department: PurchaseRequestDepartment): string {
+  if (department === "bar") return "Bar";
+  if (department === "kitchen") return "Kitchen";
+  return "General";
+}
+
+function isLockedPurchaseRow(row: PurchaseRequestTrackerRow): boolean {
+  return row.purchase_status === "Arrived" || Boolean(row.stock_applied_at);
+}
+
+function trackerRowToForm(row: PurchaseRequestTrackerRow): TrackerForm {
+  return {
+    request_date: row.request_date || todayIso(),
+    ingredient_id: row.ingredient_id ?? "",
+    item_name: row.item_name,
+    department: row.department,
+    qty: numericInput(row.qty),
+    unit: row.unit,
+    supplier_id: row.supplier_id ?? "",
+    supplier_name: row.supplier_name,
+    supplier_contact: row.supplier_contact,
+    unit_price: numericInput(row.unit_price),
+    purchase_method: row.purchase_method,
+    purchase_link: row.purchase_link,
+    estimated_arrival_date: row.estimated_arrival_date ?? "",
+    note: row.note,
+  };
 }
 
 export function PurchaseRequestTracker() {
@@ -114,6 +160,8 @@ export function PurchaseRequestTracker() {
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [deletingRowId, setDeletingRowId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -183,9 +231,16 @@ export function PurchaseRequestTracker() {
     );
   }, [rows, search]);
 
-  const selectedIngredient = ingredients.find((item) => item.id === form.ingredient_id) ?? null;
   const selectedSupplier = suppliers.find((item) => item.id === form.supplier_id) ?? null;
   const estimatedTotal = parseNumber(form.qty) * parseNumber(form.unit_price);
+  const isEditing = editingRowId !== null;
+
+  const resetForm = () => {
+    setForm(newForm());
+    setEditingRowId(null);
+    setError(null);
+    setSuccess(null);
+  };
 
   const handleIngredientChange = (ingredientId: string) => {
     const ingredient = ingredients.find((item) => item.id === ingredientId);
@@ -212,13 +267,18 @@ export function PurchaseRequestTracker() {
     }));
   };
 
-  const handleCreate = async () => {
+  const handleSaveForm = async () => {
     const staff = getStaffSession();
     const qty = parseNumber(form.qty);
     const unitPrice = parseNumber(form.unit_price);
+    const editingRow = editingRowId ? rows.find((row) => row.id === editingRowId) : null;
 
     if (!canEdit) {
       setError("Akun ini tidak punya akses membuat PO tracker.");
+      return;
+    }
+    if (editingRow && isLockedPurchaseRow(editingRow)) {
+      setError("PO sudah masuk stok.");
       return;
     }
     if (!form.item_name.trim()) {
@@ -238,7 +298,7 @@ export function PurchaseRequestTracker() {
     setError(null);
     setSuccess(null);
 
-    const { error: insertError } = await supabase.from("purchase_request_tracker").insert({
+    const payload = {
       request_date: form.request_date || todayIso(),
       ingredient_id: form.ingredient_id || null,
       item_name: form.item_name.trim(),
@@ -251,22 +311,86 @@ export function PurchaseRequestTracker() {
       unit_price: unitPrice,
       purchase_method: form.purchase_method,
       purchase_link: form.purchase_link.trim(),
-      pic_request_staff_id: staff?.id ?? null,
-      pic_request_name: staff?.name ?? "",
       estimated_arrival_date: form.estimated_arrival_date || null,
       note: form.note.trim(),
-    });
+    };
 
-    if (insertError) {
-      setError(insertError.message);
+    const result = editingRowId
+      ? await supabase.from("purchase_request_tracker").update(payload).eq("id", editingRowId)
+      : await supabase.from("purchase_request_tracker").insert({
+          ...payload,
+          pic_request_staff_id: staff?.id ?? null,
+          pic_request_name: staff?.name ?? "",
+        });
+
+    if (result.error) {
+      setError(result.error.message);
       setIsSaving(false);
       return;
     }
 
     setForm(newForm());
-    setSuccess("Request PO berhasil dicatat.");
+    setEditingRowId(null);
+    setSuccess(editingRowId ? "PO diperbarui." : "Request PO dicatat.");
     await loadData();
     setIsSaving(false);
+  };
+
+  const handleStartEdit = (row: PurchaseRequestTrackerRow) => {
+    if (!canEdit) {
+      setError("Akun ini tidak punya akses mengubah PO tracker.");
+      return;
+    }
+    if (isLockedPurchaseRow(row)) {
+      setError("PO sudah masuk stok.");
+      return;
+    }
+
+    setForm(trackerRowToForm(row));
+    setEditingRowId(row.id);
+    setError(null);
+    setSuccess(null);
+    requestAnimationFrame(() => {
+      document.getElementById("po-request-form")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
+
+  const handleDeleteRow = async (row: PurchaseRequestTrackerRow) => {
+    if (!canEdit) {
+      setError("Akun ini tidak punya akses menghapus PO tracker.");
+      return;
+    }
+    if (isLockedPurchaseRow(row)) {
+      setError("PO sudah masuk stok.");
+      return;
+    }
+    if (!window.confirm(`Hapus PO ${row.item_name}?`)) return;
+
+    setDeletingRowId(row.id);
+    setError(null);
+    setSuccess(null);
+
+    const { error: deleteError } = await supabase
+      .from("purchase_request_tracker")
+      .delete()
+      .eq("id", row.id);
+
+    if (deleteError) {
+      setError(deleteError.message);
+      setDeletingRowId(null);
+      return;
+    }
+
+    if (editingRowId === row.id) {
+      setForm(newForm());
+      setEditingRowId(null);
+    }
+    setSuccess("PO dihapus.");
+    await loadData();
+    setDeletingRowId(null);
   };
 
   const updateRow = async (
@@ -275,6 +399,10 @@ export function PurchaseRequestTracker() {
   ) => {
     if (!canEdit) {
       setError("Akun ini tidak punya akses mengubah PO tracker.");
+      return;
+    }
+    if (isLockedPurchaseRow(row)) {
+      setError("PO sudah masuk stok.");
       return;
     }
 
@@ -309,270 +437,304 @@ export function PurchaseRequestTracker() {
 
     setSuccess(
       patch.purchase_status === "Arrived"
-        ? `${row.item_name} diterima dan stok master otomatis ditambah.`
-        : "PO tracker berhasil diperbarui.",
+        ? `${row.item_name} diterima.`
+        : "PO tracker diperbarui.",
     );
     await loadData();
   };
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 shadow-xl shadow-black/20">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 border-b border-zinc-800 pb-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10">
             <ShoppingCart className="h-5 w-5 text-emerald-300" />
-            <h3 className="text-base font-semibold text-zinc-100">PO Tracker</h3>
           </div>
-          <p className="mt-1 text-sm text-zinc-500">
-            Barang yang statusnya Arrived langsung menambah stok master jika terhubung ke bahan persediaan.
-          </p>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-zinc-100">PO Tracker</h3>
+            <p className="mt-0.5 truncate text-sm text-zinc-500">{rows.length} request</p>
+          </div>
         </div>
         <button
           type="button"
           onClick={() => void loadData()}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 hover:bg-zinc-900"
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-900"
         >
           <RefreshCw className="h-4 w-4" />
           Refresh
         </button>
       </div>
 
-      <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-        {PURCHASE_STATUSES.map((status) => (
-          <div key={status} className={`rounded-lg border px-3 py-2 ${STATUS_STYLE[status]}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] opacity-80">{status}</p>
-            <p className="mt-1 text-xl font-bold">{statusCount(rows, status)}</p>
+      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div id="po-request-form" className={PANEL_CLASS}>
+          <div className="mb-3 flex flex-col gap-2 border-b border-zinc-800 pb-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-zinc-100">
+                {isEditing ? "Edit Request" : "Request Baru"}
+              </p>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                Total estimasi {formatRupiah(estimatedTotal)}
+              </p>
+            </div>
+            <div className="grid gap-2 sm:flex sm:items-center">
+              {isEditing ? (
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={resetForm}
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-900 disabled:opacity-50"
+                >
+                  <X className="h-4 w-4" />
+                  Batal
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={isSaving || !canEdit}
+                onClick={() => void handleSaveForm()}
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                {isEditing ? "Update" : "Simpan"}
+              </button>
+            </div>
           </div>
-        ))}
-      </div>
 
-      <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
-        <div className="grid gap-3 lg:grid-cols-12">
-          <label className="lg:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Tanggal
-            </span>
-            <input
-              type="date"
-              value={form.request_date}
-              onChange={(event) => setForm((prev) => ({ ...prev, request_date: event.target.value }))}
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400"
-            />
-          </label>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-[150px_1fr]">
+                <label>
+                  <span className={LABEL_CLASS}>Tanggal</span>
+                  <input
+                    type="date"
+                    value={form.request_date}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, request_date: event.target.value }))
+                    }
+                    className={FIELD_CLASS}
+                  />
+                </label>
+                <label>
+                  <span className={LABEL_CLASS}>Bahan Persediaan</span>
+                  <select
+                    value={form.ingredient_id}
+                    onChange={(event) => handleIngredientChange(event.target.value)}
+                    className={FIELD_CLASS}
+                  >
+                    <option value="">Manual</option>
+                    {ingredients.map((ingredient) => (
+                      <option key={ingredient.id} value={ingredient.id}>
+                        {ingredient.name} - {departmentLabel(ingredient.department)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
-          <label className="lg:col-span-4">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Bahan Persediaan
-            </span>
-            <select
-              value={form.ingredient_id}
-              onChange={(event) => handleIngredientChange(event.target.value)}
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400"
-            >
-              <option value="">Manual / belum terhubung</option>
-              {ingredients.map((ingredient) => (
-                <option key={ingredient.id} value={ingredient.id}>
-                  {ingredient.name} - {ingredient.department}
-                </option>
-              ))}
-            </select>
-          </label>
+              <label className="block">
+                <span className={LABEL_CLASS}>Nama Barang</span>
+                <input
+                  value={form.item_name}
+                  onChange={(event) => setForm((prev) => ({ ...prev, item_name: event.target.value }))}
+                  placeholder="Iceland Vodka"
+                  className={FIELD_CLASS}
+                />
+              </label>
 
-          <label className="lg:col-span-4">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Nama Barang
-            </span>
-            <input
-              value={form.item_name}
-              onChange={(event) => setForm((prev) => ({ ...prev, item_name: event.target.value }))}
-              placeholder="Iceland Vodka"
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label>
+                  <span className={LABEL_CLASS}>Department</span>
+                  <select
+                    value={form.department}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        department: event.target.value as PurchaseRequestDepartment,
+                      }))
+                    }
+                    className={FIELD_CLASS}
+                  >
+                    <option value="bar">Bar</option>
+                    <option value="kitchen">Kitchen</option>
+                    <option value="general">General</option>
+                  </select>
+                </label>
+                <label>
+                  <span className={LABEL_CLASS}>Qty</span>
+                  <input
+                    inputMode="decimal"
+                    value={form.qty}
+                    onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
+                    placeholder="2"
+                    className={FIELD_CLASS}
+                  />
+                </label>
+                <label>
+                  <span className={LABEL_CLASS}>Satuan</span>
+                  <input
+                    value={form.unit}
+                    onChange={(event) => setForm((prev) => ({ ...prev, unit: event.target.value }))}
+                    placeholder="Bottle / Kg"
+                    className={FIELD_CLASS}
+                  />
+                </label>
+              </div>
+            </div>
 
-          <label className="lg:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Department
-            </span>
-            <select
-              value={form.department}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  department: event.target.value as PurchaseRequestDepartment,
-                }))
-              }
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400"
-            >
-              <option value="bar">Bar</option>
-              <option value="kitchen">Kitchen</option>
-              <option value="general">General</option>
-            </select>
-          </label>
+            <div className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-[1fr_150px]">
+                <label>
+                  <span className={LABEL_CLASS}>Supplier</span>
+                  <select
+                    value={form.supplier_id}
+                    onChange={(event) => handleSupplierChange(event.target.value)}
+                    className={FIELD_CLASS}
+                  >
+                    <option value="">Manual</option>
+                    {suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span className={LABEL_CLASS}>Metode</span>
+                  <select
+                    value={form.purchase_method}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        purchase_method: event.target.value as PurchaseRequestMethod,
+                      }))
+                    }
+                    className={FIELD_CLASS}
+                  >
+                    <option value="Online">Online</option>
+                    <option value="Offline">Offline</option>
+                  </select>
+                </label>
+              </div>
 
-          <label className="lg:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Qty
-            </span>
-            <input
-              inputMode="decimal"
-              value={form.qty}
-              onChange={(event) => setForm((prev) => ({ ...prev, qty: event.target.value }))}
-              placeholder="2"
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label>
+                  <span className={LABEL_CLASS}>Contact Supplier</span>
+                  <input
+                    value={form.supplier_contact}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, supplier_contact: event.target.value }))
+                    }
+                    placeholder="0812..."
+                    className={FIELD_CLASS}
+                  />
+                </label>
+                <label>
+                  <span className={LABEL_CLASS}>Supplier Manual</span>
+                  <input
+                    value={form.supplier_name}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, supplier_name: event.target.value }))
+                    }
+                    placeholder="Pasar Modern BSD"
+                    className={FIELD_CLASS}
+                  />
+                </label>
+              </div>
 
-          <label className="lg:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Satuan
-            </span>
-            <input
-              value={form.unit}
-              onChange={(event) => setForm((prev) => ({ ...prev, unit: event.target.value }))}
-              placeholder="Bottle / Kg"
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
+              <div className="grid gap-3 sm:grid-cols-[150px_1fr_150px]">
+                <label>
+                  <span className={LABEL_CLASS}>Harga Satuan</span>
+                  <input
+                    inputMode="decimal"
+                    value={form.unit_price}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, unit_price: event.target.value }))
+                    }
+                    placeholder="250000"
+                    className={FIELD_CLASS}
+                  />
+                </label>
+                <label>
+                  <span className={LABEL_CLASS}>Link / Toko</span>
+                  <input
+                    value={form.purchase_link}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, purchase_link: event.target.value }))
+                    }
+                    placeholder="Tokopedia / Indoguna / alamat toko"
+                    className={FIELD_CLASS}
+                  />
+                </label>
+                <label>
+                  <span className={LABEL_CLASS}>Estimasi Datang</span>
+                  <input
+                    type="date"
+                    value={form.estimated_arrival_date}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, estimated_arrival_date: event.target.value }))
+                    }
+                    className={FIELD_CLASS}
+                  />
+                </label>
+              </div>
 
-          <label className="lg:col-span-4">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Supplier
-            </span>
-            <select
-              value={form.supplier_id}
-              onChange={(event) => handleSupplierChange(event.target.value)}
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400"
-            >
-              <option value="">Isi manual / belum ada supplier</option>
-              {suppliers.map((supplier) => (
-                <option key={supplier.id} value={supplier.id}>
-                  {supplier.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              <label className="block">
+                <span className={LABEL_CLASS}>Keterangan</span>
+                <input
+                  value={form.note}
+                  onChange={(event) => setForm((prev) => ({ ...prev, note: event.target.value }))}
+                  placeholder="Catatan"
+                  className={FIELD_CLASS}
+                />
+              </label>
+            </div>
+          </div>
 
-          <label className="lg:col-span-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Contact Supplier
-            </span>
-            <input
-              value={form.supplier_contact}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, supplier_contact: event.target.value }))
-              }
-              placeholder="0812..."
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
-
-          <label className="lg:col-span-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Supplier Manual
-            </span>
-            <input
-              value={form.supplier_name}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, supplier_name: event.target.value }))
-              }
-              placeholder="Pasar Modern BSD"
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
-
-          <label className="lg:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Harga Satuan
-            </span>
-            <input
-              inputMode="decimal"
-              value={form.unit_price}
-              onChange={(event) => setForm((prev) => ({ ...prev, unit_price: event.target.value }))}
-              placeholder="250000"
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
-
-          <label className="lg:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Metode
-            </span>
-            <select
-              value={form.purchase_method}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  purchase_method: event.target.value as PurchaseRequestMethod,
-                }))
-              }
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400"
-            >
-              <option value="Online">Online</option>
-              <option value="Offline">Offline</option>
-            </select>
-          </label>
-
-          <label className="lg:col-span-4">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Link / Toko
-            </span>
-            <input
-              value={form.purchase_link}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, purchase_link: event.target.value }))
-              }
-              placeholder="Tokopedia / Indoguna / alamat toko"
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
-
-          <label className="lg:col-span-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Estimasi Datang
-            </span>
-            <input
-              type="date"
-              value={form.estimated_arrival_date}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, estimated_arrival_date: event.target.value }))
-              }
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400"
-            />
-          </label>
-
-          <label className="lg:col-span-6">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
-              Keterangan
-            </span>
-            <input
-              value={form.note}
-              onChange={(event) => setForm((prev) => ({ ...prev, note: event.target.value }))}
-              placeholder="Menunggu pengiriman / barang kosong / sudah diterima lengkap"
-              className="mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-            />
-          </label>
         </div>
 
-        <div className="mt-3 flex flex-col gap-2 border-t border-zinc-800 pt-3 md:flex-row md:items-center md:justify-between">
-          <div className="text-sm text-zinc-400">
-            Total: <span className="font-semibold text-zinc-100">{formatRupiah(estimatedTotal)}</span>
-            {selectedIngredient ? (
-              <span className="ml-2 text-zinc-500">
-                Masuk stok dengan konversi {Number(selectedIngredient.purchase_to_stock_factor) || 1}x.
-              </span>
-            ) : null}
+        <aside className="space-y-3">
+          <div className={PANEL_CLASS}>
+            <div className="grid grid-cols-2 gap-2">
+              {PURCHASE_STATUSES.map((status) => (
+                <div key={status} className={`rounded-lg border px-3 py-2 ${STATUS_STYLE[status]}`}>
+                  <p className="truncate text-[10px] font-semibold uppercase tracking-[0.1em] opacity-80">
+                    {status}
+                  </p>
+                  <p className="mt-1 text-lg font-bold">{statusCount(rows, status)}</p>
+                </div>
+              ))}
+            </div>
           </div>
-          <button
-            type="button"
-            disabled={isSaving || !canEdit}
-            onClick={() => void handleCreate()}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Simpan Request
-          </button>
-        </div>
+
+          <div className={PANEL_CLASS}>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-zinc-100">Supplier</p>
+              <p className="text-xs text-zinc-500">{suppliers.length} aktif</p>
+            </div>
+            <div className="space-y-2">
+              {suppliers.slice(0, 5).map((supplier) => (
+                <div key={supplier.id} className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-zinc-100">{supplier.name}</p>
+                      <p className="mt-0.5 truncate text-xs text-zinc-500">
+                        {supplier.category || "General"} · PIC {supplier.pic_name || "-"}
+                      </p>
+                    </div>
+                    <p className="shrink-0 text-xs text-zinc-500">
+                      {supplier.phone_number && supplier.phone_number !== "62"
+                        ? supplier.phone_number
+                        : "-"}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {suppliers.length === 0 ? (
+                <p className="text-sm text-zinc-500">Belum ada supplier aktif.</p>
+              ) : null}
+            </div>
+          </div>
+        </aside>
       </div>
 
       {error ? (
@@ -586,108 +748,120 @@ export function PurchaseRequestTracker() {
         </div>
       ) : null}
 
-      <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div className="relative md:w-96">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Cari barang, supplier, status, PIC..."
-            className="min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400"
-          />
+      <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/30">
+        <div className="flex flex-col gap-3 border-b border-zinc-800 p-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-zinc-100">Request Queue</p>
+            <p className="mt-0.5 text-xs text-zinc-500">{filteredRows.length} request</p>
+          </div>
+          <div className="relative w-full lg:w-96">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Cari barang, supplier, status, PIC..."
+              className="min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30"
+            />
+          </div>
         </div>
-        <p className="text-sm text-zinc-500">{filteredRows.length} request tampil</p>
-      </div>
 
-      <div className="mt-3 overflow-x-auto rounded-lg border border-zinc-800">
-        <table className="min-w-[1320px] w-full text-left text-sm">
-          <thead className="bg-zinc-950 text-xs uppercase tracking-[0.12em] text-zinc-500">
-            <tr>
-              <th className="px-3 py-3">No</th>
-              <th className="px-3 py-3">Request</th>
-              <th className="px-3 py-3">Barang</th>
-              <th className="px-3 py-3">Qty</th>
-              <th className="px-3 py-3">Supplier</th>
-              <th className="px-3 py-3">Harga</th>
-              <th className="px-3 py-3">PO</th>
-              <th className="px-3 py-3">Pembelian</th>
-              <th className="px-3 py-3">Datang</th>
-              <th className="px-3 py-3">PIC</th>
-              <th className="px-3 py-3">Ket.</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-800">
-            {isLoading ? (
-              <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-zinc-500">
-                  <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
-                  Memuat PO tracker...
-                </td>
-              </tr>
-            ) : filteredRows.length === 0 ? (
-              <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-zinc-500">
-                  Belum ada request pembelian.
-                </td>
-              </tr>
-            ) : (
-              filteredRows.map((row, index) => (
-                <tr key={row.id} className="bg-zinc-950/30 align-top text-zinc-300">
-                  <td className="px-3 py-3 text-zinc-500">{index + 1}</td>
-                  <td className="px-3 py-3">
-                    <div className="font-medium text-zinc-100">{row.request_date}</div>
-                    <div className="mt-1 text-xs capitalize text-zinc-500">{row.department}</div>
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="font-semibold text-zinc-100">{row.item_name}</div>
-                    <div className="mt-1 text-xs text-zinc-500">
-                      {row.ingredient_id ? "Terhubung ke stok master" : "Manual, belum auto stok"}
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 px-3 py-10 text-sm text-zinc-500">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Memuat PO tracker...
+          </div>
+        ) : filteredRows.length === 0 ? (
+              <p className="px-3 py-10 text-center text-sm text-zinc-500">Belum ada request.</p>
+        ) : (
+          <div className="divide-y divide-zinc-800">
+            {filteredRows.map((row, index) => {
+              const rowLocked = isLockedPurchaseRow(row);
+              const isDeleting = deletingRowId === row.id;
+
+              return (
+                <article
+                  key={row.id}
+                  className="grid gap-3 px-3 py-3 text-sm text-zinc-300 lg:grid-cols-[minmax(240px,1.25fr)_minmax(180px,.85fr)_minmax(220px,1fr)_minmax(190px,.8fr)] lg:items-start"
+                >
+                <div className="min-w-0">
+                  <div className="flex items-start gap-3">
+                    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950 text-xs font-semibold text-zinc-500">
+                      {index + 1}
+                    </span>
+	                    <div className="min-w-0">
+	                      <h4 className="truncate text-sm font-semibold text-zinc-100">{row.item_name}</h4>
+	                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+	                        <span className="rounded-md bg-zinc-950 px-2 py-0.5 capitalize">
+	                          {departmentLabel(row.department)}
+	                        </span>
+	                        <span>{row.request_date}</span>
+	                        <span>{row.ingredient_id ? "Stok master" : "Manual"}</span>
+	                      </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={!canEdit || rowLocked}
+                            onClick={() => handleStartEdit(row)}
+                            className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canEdit || rowLocked || isDeleting}
+                            onClick={() => void handleDeleteRow(row)}
+                            className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-red-500/40 px-2.5 text-xs font-semibold text-red-200 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {isDeleting ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                            Hapus
+                          </button>
+                        </div>
+	                    </div>
+	                  </div>
+	                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2 lg:block">
+                  <div className="flex items-center gap-2">
+                    <Truck className="h-4 w-4 shrink-0 text-zinc-500" />
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-zinc-100">{row.supplier_name || "-"}</p>
+                      <p className="truncate text-xs text-zinc-500">{row.supplier_contact || "No contact"}</p>
                     </div>
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="font-semibold text-zinc-100">
-                      {Number(row.qty).toLocaleString("id-ID")} {row.unit}
-                    </div>
-                    {row.stock_applied_at ? (
-                      <div className="mt-1 inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-100">
-                        <PackageCheck className="h-3.5 w-3.5" />
-                        +{Number(row.stock_applied_qty).toLocaleString("id-ID")}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="font-medium text-zinc-100">{row.supplier_name || "-"}</div>
-                    <div className="mt-1 text-xs text-zinc-500">{row.supplier_contact || "No contact"}</div>
-                    {row.purchase_link ? (
+                  </div>
+                  <div className="mt-0 text-xs text-zinc-500 lg:mt-2">
+                    {row.purchase_link && row.purchase_link.startsWith("http") ? (
                       <a
-                        href={row.purchase_link.startsWith("http") ? row.purchase_link : undefined}
+                        href={row.purchase_link}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-1 inline-flex items-center gap-1 text-xs text-sky-300"
+                        className="inline-flex items-center gap-1 text-sky-300"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                         {row.purchase_method}
                       </a>
                     ) : (
-                      <div className="mt-1 text-xs text-zinc-600">{row.purchase_method}</div>
+                      row.purchase_method
                     )}
-                  </td>
-                  <td className="px-3 py-3">
-                    <div>{formatRupiah(Number(row.unit_price))}</div>
-                    <div className="mt-1 font-semibold text-zinc-100">
-                      {formatRupiah(Number(row.total_price))}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3">
+                  </div>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label>
+                    <span className={LABEL_CLASS}>Status PO</span>
                     <select
                       value={row.po_status}
-                      disabled={!canEdit}
+	                      disabled={!canEdit || rowLocked}
                       onChange={(event) =>
                         void updateRow(row, {
                           po_status: event.target.value as PurchaseRequestPoStatus,
                         })
                       }
-                      className="min-h-9 rounded-lg border border-zinc-700 bg-zinc-950 px-2 text-sm text-zinc-100 outline-none focus:border-emerald-400"
+                      className={FIELD_CLASS}
                     >
                       {PO_STATUSES.map((status) => (
                         <option key={status} value={status}>
@@ -695,20 +869,18 @@ export function PurchaseRequestTracker() {
                         </option>
                       ))}
                     </select>
-                    <div className="mt-1 text-xs text-zinc-500">
-                      {row.approved_by_name || "Belum approve"}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3">
+                  </label>
+                  <label>
+                    <span className={LABEL_CLASS}>Pembelian</span>
                     <select
                       value={row.purchase_status}
-                      disabled={!canEdit}
+	                      disabled={!canEdit || rowLocked}
                       onChange={(event) =>
                         void updateRow(row, {
                           purchase_status: event.target.value as PurchaseRequestStatus,
                         })
                       }
-                      className={`min-h-9 rounded-lg border px-2 text-sm font-semibold outline-none ${STATUS_STYLE[row.purchase_status]}`}
+                      className={`mt-1 min-h-10 w-full rounded-lg border px-3 text-sm font-semibold outline-none transition focus:ring-1 ${STATUS_STYLE[row.purchase_status]}`}
                     >
                       {PURCHASE_STATUSES.map((status) => (
                         <option key={status} value={status}>
@@ -716,70 +888,67 @@ export function PurchaseRequestTracker() {
                         </option>
                       ))}
                     </select>
-                    {row.purchase_status === "Arrived" ? (
-                      <div className="mt-1 inline-flex items-center gap-1 text-xs text-emerald-200">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Stok terkoreksi
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="text-xs text-zinc-500">ETA {row.estimated_arrival_date || "-"}</div>
+                  </label>
+                  <label className="sm:col-span-2">
+                    <span className={LABEL_CLASS}>Tanggal Datang</span>
                     <input
                       type="date"
                       value={row.arrival_date ?? ""}
-                      disabled={!canEdit || row.stock_applied_at !== null}
+	                      disabled={!canEdit || rowLocked}
                       onChange={(event) =>
                         void updateRow(row, {
                           arrival_date: event.target.value || null,
                         })
                       }
-                      className="mt-1 min-h-9 rounded-lg border border-zinc-700 bg-zinc-950 px-2 text-sm text-zinc-100 outline-none focus:border-emerald-400 disabled:opacity-60"
+                      className={FIELD_CLASS}
                     />
-                    <div className="mt-1 text-xs text-zinc-500">
-                      Selisih {row.arrival_day_diff ?? "-"} hari
-                    </div>
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="text-zinc-100">{row.pic_request_name || "-"}</div>
-                    <div className="mt-1 text-xs text-zinc-500">{row.approved_by_name || "-"}</div>
-                  </td>
-                  <td className="max-w-[220px] px-3 py-3 text-zinc-400">{row.note || "-"}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-zinc-100">Supplier List</p>
-          <p className="text-xs text-zinc-500">{suppliers.length} supplier aktif</p>
-        </div>
-        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {suppliers.slice(0, 9).map((supplier) => (
-            <div key={supplier.id} className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-zinc-100">{supplier.name}</p>
-                  <p className="mt-1 truncate text-xs text-zinc-500">
-                    {supplier.category || "General"} - PIC {supplier.pic_name || "-"}
-                  </p>
+                  </label>
                 </div>
-                <p className="shrink-0 text-xs text-zinc-500">
-                  {supplier.phone_number && supplier.phone_number !== "62" ? supplier.phone_number : "-"}
-                </p>
-              </div>
-              {supplier.link_url ? (
-                <p className="mt-1 truncate text-xs text-sky-300">{supplier.link_url}</p>
-              ) : null}
-            </div>
-          ))}
-          {suppliers.length === 0 ? (
-            <p className="text-sm text-zinc-500">Belum ada supplier aktif.</p>
-          ) : null}
-        </div>
+
+                <div className="grid gap-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                        <PackageCheck className="h-3.5 w-3.5" />
+                        Qty
+                      </div>
+                      <p className="mt-1 font-semibold text-zinc-100">
+                        {Number(row.qty).toLocaleString("id-ID")} {row.unit}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                        <CircleDollarSign className="h-3.5 w-3.5" />
+                        Total
+                      </div>
+                      <p className="mt-1 font-semibold text-zinc-100">
+                        {formatRupiah(Number(row.total_price))}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-zinc-500">
+                    <div className="flex items-center gap-1.5">
+                      <CalendarDays className="h-3.5 w-3.5" />
+                      ETA {row.estimated_arrival_date || "-"}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <UserRound className="h-3.5 w-3.5" />
+                      {row.pic_request_name || "-"}
+                    </div>
+                  </div>
+                  {row.stock_applied_at ? (
+                    <div className="inline-flex w-fit items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-100">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Stok +{Number(row.stock_applied_qty).toLocaleString("id-ID")}
+                    </div>
+                  ) : null}
+                  {row.note ? <p className="text-xs leading-relaxed text-zinc-500">{row.note}</p> : null}
+                </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </div>
     </section>
   );

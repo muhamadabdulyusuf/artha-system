@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ClipboardList, LayoutDashboard, LogOut, Package, Settings2, Shield, Truck } from "lucide-react";
+import {
+  ClipboardList,
+  LayoutDashboard,
+  LogOut,
+  Menu as MenuIcon,
+  Package,
+  Settings2,
+  Shield,
+  Truck,
+  X,
+} from "lucide-react";
 import { LogoutButton } from "@/components/auth/LogoutButton";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ADMIN_ROLES } from "@/lib/auth/routeAccess";
@@ -37,6 +47,7 @@ export default function MasterDataView() {
 function MasterDataContent() {
   const session = getStaffSession();
   const [activeTab, setActiveTab] = useState<TabId>("ingredients");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     if (session && isViewerRole(session.role)) {
@@ -55,6 +66,8 @@ function MasterDataContent() {
       : session.role === "viewer"
         ? "Viewer (Read-Only)"
         : "Operational Manager";
+  const activeTabMeta = visibleTabs.find((tab) => tab.id === activeTab) ?? visibleTabs[0];
+  const ActiveIcon = activeTabMeta.icon;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -84,43 +97,73 @@ function MasterDataContent() {
       </header>
 
       <div className="mx-auto max-w-7xl px-4 py-5">
-        <nav
-          className="sticky top-0 z-30 mb-5 flex gap-2 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/95 p-1.5 shadow-lg shadow-black/20 backdrop-blur"
-          aria-label="Tab admin"
-        >
-          {visibleTabs.map((tab) => {
-            const Icon = tab.icon;
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition sm:px-5 ${
-                  active
-                    ? "bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
-                    : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                <span className="hidden sm:inline">{tab.label}</span>
-                <span className="sm:hidden">
-                  {tab.id === "ingredients"
-                    ? "Bahan"
-                    : tab.id === "menu"
-                      ? "Menu"
-                      : tab.id === "suppliers"
-                        ? "Supplier"
-                        : tab.id === "worksheet"
-                          ? "Worksheet"
-                        : tab.id === "monitoring"
-                          ? "Monitor"
-                          : "Setting"}
-                </span>
-              </button>
-            );
-          })}
-        </nav>
+        <div className="sticky top-0 z-30 mb-5 flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/95 px-3 py-2 shadow-lg shadow-black/20 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cyan-400 text-zinc-950">
+              <ActiveIcon className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-zinc-100">{activeTabMeta.label}</p>
+              <p className="text-xs text-zinc-500">{session.name}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-800"
+          >
+            <MenuIcon className="h-4 w-4" />
+            Menu
+          </button>
+        </div>
+
+        {menuOpen ? (
+          <div className="fixed inset-0 z-50">
+            <button
+              type="button"
+              aria-label="Tutup menu"
+              onClick={() => setMenuOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <aside className="relative flex h-full w-[min(86vw,340px)] flex-col border-r border-zinc-800 bg-zinc-950 p-4 shadow-2xl shadow-black">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-zinc-100">Menu</p>
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen(false)}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 text-zinc-300"
+                  aria-label="Tutup menu"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-2">
+                {visibleTabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const active = activeTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveTab(tab.id);
+                        setMenuOpen(false);
+                      }}
+                      className={`flex min-h-12 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-semibold transition ${
+                        active
+                          ? "bg-cyan-400 text-zinc-950"
+                          : "border border-zinc-800 bg-zinc-900/60 text-zinc-300 hover:border-zinc-700 hover:text-white"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4 shrink-0" />
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
+          </div>
+        ) : null}
 
         <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 shadow-xl shadow-black/20 sm:p-6">
           {activeTab === "ingredients" && <IngredientsTab />}

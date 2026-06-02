@@ -1,59 +1,72 @@
 "use client";
 
 import { useState } from "react";
-import { Building2 } from "lucide-react";
+import { Building2, ClipboardList, ShoppingCart } from "lucide-react";
 import { PurchaseRequestTracker } from "@/components/admin/PurchaseRequestTracker";
 import { WorksheetClosing } from "@/components/staff/WorksheetClosing";
 import type { Department } from "@/lib/types/database";
 
-const DEPARTMENTS: { id: Department; label: string; title: string }[] = [
-  { id: "bar", label: "Bar", title: "Worksheet Admin Bar" },
-  { id: "kitchen", label: "Kitchen", title: "Worksheet Admin Kitchen" },
+type AdminWorksheetWorkspace = "po" | Department;
+
+const WORKSPACES: {
+  id: AdminWorksheetWorkspace;
+  label: string;
+  title: string;
+  icon: typeof ShoppingCart;
+}[] = [
+  { id: "po", label: "PO", title: "PO Tracker", icon: ShoppingCart },
+  { id: "bar", label: "Bar", title: "Worksheet Bar", icon: Building2 },
+  { id: "kitchen", label: "Kitchen", title: "Worksheet Kitchen", icon: ClipboardList },
 ];
 
 export function AdminWorksheetTab() {
-  const [department, setDepartment] = useState<Department>("bar");
-  const selected = DEPARTMENTS.find((item) => item.id === department) ?? DEPARTMENTS[0];
+  const [activeWorkspace, setActiveWorkspace] = useState<AdminWorksheetWorkspace>("po");
+  const selected = WORKSPACES.find((item) => item.id === activeWorkspace) ?? WORKSPACES[0];
+  const SelectedIcon = selected.icon;
+  const department = activeWorkspace === "po" ? null : activeWorkspace;
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-col gap-3 border-b border-zinc-800 pb-3 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            Inventory Control Desk
-          </p>
-          <p className="mt-1 text-sm text-zinc-400">
-            Full worksheet admin untuk input dan koreksi operasional.
-          </p>
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-400 text-zinc-950">
+            <SelectedIcon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-semibold text-zinc-100">{selected.title}</h2>
+          </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
-          {DEPARTMENTS.map((item) => {
-            const active = item.id === department;
+        <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1">
+          {WORKSPACES.map((item) => {
+            const Icon = item.icon;
+            const active = item.id === activeWorkspace;
             return (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setDepartment(item.id)}
-                className={`flex min-h-10 items-center gap-2 rounded-md px-4 text-sm font-semibold transition ${
+                onClick={() => setActiveWorkspace(item.id)}
+                className={`flex min-h-10 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-semibold transition sm:gap-2 sm:px-3 sm:text-sm ${
                   active
-                    ? "bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/40"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                    ? "bg-emerald-400 text-zinc-950"
+                    : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
                 }`}
               >
-                <Building2 className="h-4 w-4" />
-                {item.label}
+                <Icon className="h-4 w-4" />
+                <span>{item.label}</span>
               </button>
             );
           })}
         </div>
       </div>
 
-      <PurchaseRequestTracker />
+      {activeWorkspace === "po" ? <PurchaseRequestTracker /> : null}
 
-      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/20">
-        <WorksheetClosing key={department} department={department} title={selected.title} embedded />
-      </div>
+      {department ? (
+        <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
+          <WorksheetClosing key={department} department={department} title={selected.title} embedded />
+        </div>
+      ) : null}
     </div>
   );
 }

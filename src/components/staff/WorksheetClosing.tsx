@@ -812,6 +812,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   const showResubmitCta = canRequestResubmit(worksheetStatus ?? undefined);
   const canEdit = canEditStaffData(staff?.role);
   const canApproveCorrection = staff?.role === "admin" || staff?.role === "op_manager";
+  const canFinalizeWorksheet = canApproveCorrection;
   const correctionReasonReady = correctionReason.trim().length >= 5;
 
   const businessDateLabel = useMemo(
@@ -883,12 +884,10 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   const formatOwnerLabel = useCallback(
     (owner?: WorksheetLineOwner | null) => {
       if (!owner) return null;
-      if (!owner.staffId) return "Data lama - bisa diedit";
-      return isCurrentStaffOwner(owner)
-        ? `Input kamu - bisa diedit`
-        : `Dikunci oleh ${owner.staffName}`;
+      if (!owner.staffId) return "Data lama";
+      return owner.staffName;
     },
-    [isCurrentStaffOwner]
+    []
   );
 
   const currentStaffOwner = useCallback(
@@ -943,10 +942,8 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
   const summarizeStaffEntry = useCallback(
     (summary: SoldEntrySummary) =>
-      isCurrentStaffOwner({ staffId: summary.staffId, staffName: summary.staffName })
-        ? `${summary.staffName}: ${formatQty(summary.quantity)} - punya kamu`
-        : `${summary.staffName}: ${formatQty(summary.quantity)}`,
-    [isCurrentStaffOwner]
+      `${summary.staffName}: ${formatQty(summary.quantity)}`,
+    []
   );
 
   const getEditableOwnerIds = useCallback(
@@ -986,7 +983,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   );
 
   const renderEntrySummaries = useCallback(
-    (entries: SoldEntrySummary[], unit: string, totalLabel = "Akumulasi tersimpan") => {
+    (entries: SoldEntrySummary[], unit: string, totalLabel = "Akumulasi") => {
       if (entries.length === 0) return null;
       const total = entries.reduce((sum, entry) => sum + entry.quantity, 0);
 
@@ -2303,9 +2300,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       await savePendingReceiveEntries(activeSessionId);
       await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
-      showSuccessToast(
-        "Receive tersimpan. Monitoring dan persediaan admin langsung ikut terupdate."
-      );
+      showSuccessToast("Receive tersimpan.");
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -2384,7 +2379,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
 
-      showSuccessToast("Out stock tersimpan. Monitoring dan persediaan admin langsung ikut terupdate.");
+      showSuccessToast("Out stock tersimpan.");
     } catch (err) {
       showTranslatedSubmitError(err);
       setActiveTab("outstock");
@@ -2470,7 +2465,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       await syncWorksheetFinalMonitoringData(activeSessionId, date, staff.id);
 
-      showSuccessToast("Opname tersimpan. Monitoring dan persediaan admin langsung ikut terupdate.");
+      showSuccessToast("Opname tersimpan.");
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -2551,8 +2546,8 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       showSuccessToast(
         hasPendingReceive
-          ? "Receive pending dan produksi premix tersimpan. Monitoring langsung ikut terupdate."
-          : "Produksi premix tersimpan. Monitoring langsung ikut terupdate."
+          ? "Receive dan premix tersimpan."
+          : "Premix tersimpan."
       );
     } catch (err) {
       showTranslatedSubmitError(err);
@@ -2605,7 +2600,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
         setEditRequest(requestRow);
         setCorrectionReason("");
-        showSuccessToast("Request koreksi dikirim ke admin/master untuk approval.");
+      showSuccessToast("Request koreksi dikirim.");
         return;
       }
 
@@ -2637,7 +2632,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       setWorksheetStatus("DRAFT");
       showSuccessToast(
-        `Worksheet ${formatBusinessDateLabel(businessDate || selectedBusinessDate)} department ${department} dibuka kembali dan perlu submit ulang.`
+        `Worksheet ${formatBusinessDateLabel(businessDate || selectedBusinessDate)} dibuka.`
       );
     } catch (err) {
       showTranslatedSubmitError(err);
@@ -2810,7 +2805,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
       }
       await syncWorksheetFinalMonitoringData(ensuredSessionId, date, staff.id);
-      showSuccessToast("Sales menu tersimpan. Monitoring dan persediaan admin langsung ikut terupdate.");
+      showSuccessToast("Sales menu tersimpan.");
     } catch (err) {
       showTranslatedSubmitError(err);
     } finally {
@@ -3362,8 +3357,10 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     runWithTypoGuard(["closingStock"], () => void handleSaveOpname());
   const stickySavePremix = () => void handleSavePremix();
   const stickySaveMenuProgress = () => void handleSaveMenuProgress();
-  const stickySubmit = () =>
+  const stickySubmit = () => {
+    if (!canFinalizeWorksheet) return;
     runWithTypoGuard(["inQty", "closingStock", "outQty"], () => void handleSubmit());
+  };
 
   return (
     <main
@@ -3410,7 +3407,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         >
           <Loader2 className="h-10 w-10 animate-spin text-indigo-400" />
           <p className="text-sm font-medium text-zinc-200">{overlayMessage}</p>
-          <p className="text-xs text-zinc-500">Jangan tutup aplikasi</p>
         </div>
       ) : null}
 
@@ -3420,28 +3416,18 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             <div className="min-w-0">
               <AbdulCompanyMark
                 size="sm"
-                subtitle="Operational Worksheet"
                 className="mb-3"
               />
-              <p className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
-                {title}
-              </p>
-              <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-                Penanggung jawab (otomatis dari login)
-              </p>
               <h1 className="text-lg font-bold text-zinc-50">{staff.name}</h1>
               {businessDateLabel ? (
                 <p className="mt-1 text-sm text-zinc-300">
-                  Hari Bisnis: <span className="font-medium text-zinc-50">{businessDateLabel}</span>
+                  {businessDateLabel}
                 </p>
-              ) : null}
-              {sessionId ? (
-                <p className="mt-0.5 text-[10px] text-zinc-500">Session: {sessionId.slice(0, 8)}…</p>
               ) : null}
               {worksheetStatus ? (
                 <p className="mt-1 inline-flex items-center gap-1 rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
                   {locked ? <Lock className="h-3 w-3 text-sky-400" /> : null}
-                  Status: {worksheetStatus}
+                  {worksheetStatus}
                 </p>
               ) : null}
             </div>
@@ -3502,7 +3488,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                 {worksheetStatus}
               </span>
             ) : null}
-            <span className="hidden sm:inline">PIC: {staff.name}</span>
+            <span className="hidden sm:inline">{staff.name}</span>
           </div>
         ) : null}
         </div>
@@ -3510,7 +3496,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       {!embedded && visibleTabs.length === 0 ? (
         <section className="mx-4 mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          Worksheet staff untuk departemen ini sedang dinonaktifkan dari Master Admin.
+          Worksheet nonaktif.
         </section>
       ) : null}
 
@@ -3525,11 +3511,8 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
           <div className={embedded ? "hidden" : ""}>
             <div className={`flex items-center gap-2 text-xs font-semibold uppercase tracking-wide ${embedded ? "text-cyan-300" : "text-indigo-300"}`}>
             <CalendarDays className="h-4 w-4" />
-            Tanggal Worksheet
+            Tanggal
             </div>
-            <p className={`mt-1 text-xs leading-relaxed ${embedded ? "text-zinc-500" : "text-indigo-100/75"}`}>
-              Pilih tanggal kerja. Data yang sudah submit tetap harus lewat approval untuk koreksi.
-            </p>
           </div>
           <div className={embedded ? "flex flex-col gap-2 sm:flex-row sm:items-center lg:w-auto" : "mt-2 flex flex-col gap-2 sm:flex-row"}>
             {embedded ? (
@@ -3577,12 +3560,12 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder={
                   activeTab === "sold"
-                    ? "Cari menu terjual..."
+                    ? "Cari menu..."
                     : activeTab === "issue"
-                      ? "Cari menu remake..."
+                      ? "Cari remake..."
                     : activeTab === "premix"
                       ? "Cari premix..."
-                      : "Cari bahan baku..."
+                      : "Cari bahan..."
                 }
                 autoCorrect="off"
                 spellCheck={false}
@@ -3612,15 +3595,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
               type="search"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder={
-                activeTab === "sold"
-                  ? "Cari menu terjual…"
-                  : activeTab === "issue"
-                    ? "Cari menu remake…"
-                  : activeTab === "premix"
-                    ? "Cari premix…"
-                    : "Cari bahan baku…"
-              }
+                placeholder={
+                  activeTab === "sold"
+                    ? "Cari menu…"
+                    : activeTab === "issue"
+                      ? "Cari remake…"
+                    : activeTab === "premix"
+                      ? "Cari premix…"
+                      : "Cari bahan…"
+                }
               autoCorrect="off"
               spellCheck={false}
               className={SEARCH_INPUT_CLASS}
@@ -3641,18 +3624,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       ) : null}
 
       <div className="px-4 pt-4">
-        {staff.role === "admin" || staff.role === "op_manager" ? (
-          <p className="mb-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs text-indigo-200">
-            Mode Admin/Ops — melihat worksheet {department}.
-          </p>
-        ) : null}
-
         {pendingAdminApproval ? (
           <div className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4">
-            <p className="text-sm font-semibold text-emerald-100">Laporan Closing Berhasil Dikirim!</p>
-            <p className="mt-1 text-xs text-emerald-200/90">
-              Sesi Anda sudah selesai. Tim Admin akan meninjau data di dashboard Monitoring jika diperlukan.
-            </p>
+            <p className="text-sm font-semibold text-emerald-100">Terkirim</p>
           </div>
         ) : null}
 
@@ -3662,16 +3636,12 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
               <Lock className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-sky-100">
-                  Worksheet tanggal ini sudah terkunci
-                </p>
-                <p className="mt-1 text-xs text-sky-200/90">
-                  Status: <span className="font-medium">{worksheetStatus}</span>. Input dinonaktifkan
-                  sampai request koreksi disetujui admin/master.
+                  Terkunci
                 </p>
                 {editRequest ? (
                   <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
                     <p className="text-xs font-semibold text-amber-100">
-                      Request koreksi menunggu approval admin/master.
+                      Menunggu approval
                     </p>
                     <p className="mt-1 text-xs text-amber-100/75">{editRequest.reason}</p>
                   </div>
@@ -3711,7 +3681,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                   </>
                 ) : (
                   <p className="mt-2 text-xs text-sky-300/80">
-                    Hubungi Admin untuk koreksi status {worksheetStatus}.
+                    Hubungi Admin.
                   </p>
                 )}
               </div>
@@ -3728,32 +3698,28 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-zinc-400">
             <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
-            Memuat data dari Supabase…
+            Memuat data…
           </div>
                 ) : ingredients.length === 0 && activeTab !== "premix" && activeTab !== "issue" && activeTab !== "sold" ? (
           <p className="py-12 text-center text-zinc-400">
-            Belum ada bahan aktif untuk departemen ini. Tambahkan di Master Data Admin.
+            Belum ada bahan.
           </p>
         ) : (
           <>
             {activeTabEnabled && activeTab === "receive" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
-                  Kamar 1 — Receive
+                  Receive
                 </h2>
-                <p className="mb-4 text-xs text-zinc-500">
-                  Tambahkan barang yang baru datang. Total receive hari ini otomatis dijumlahkan dan bisa dilihat staff lain.
-                </p>
                 <ul className="space-y-3">
                   {filteredReceiveIngredients.length === 0 ? (
                     <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                      Tidak ada bahan raw cocok dengan &ldquo;{searchTerm}&rdquo;.
+                      Tidak ditemukan.
                     </li>
                   ) : null}
                   {filteredReceiveIngredients.map((ing) => {
                     const line = lines[ing.id] ?? DEFAULT_LINE;
                     const purchaseUnit = getPurchaseUnit(ing);
-                    const factor = getPurchaseToStockFactor(ing);
                     const totalReceiveQty = parseQty(line.inQty);
                     const entryQty = parseQty(receiveEntryInputs[ing.id] ?? "");
                     const entryStockQty = receiveInputToStockQty(
@@ -3778,13 +3744,10 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                         <div className="mb-3">
                           <p className="font-semibold text-zinc-50">{ing.name}</p>
                           <p className="text-xs text-zinc-500">
-                            Total hari ini:{" "}
+                            Total{" "}
                             <span className="font-semibold text-amber-200">
                               {formatQty(totalReceiveQty)} {purchaseUnit}
                             </span>
-                            {purchaseUnit !== ing.unit
-                              ? ` · Receive: 1 ${purchaseUnit} = ${factor} ${ing.unit}`
-                              : ""}
                           </p>
                           {receiveSummaries.length > 0 ? (
                             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -3798,9 +3761,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                                   }`}
                                 >
                                   {entry.staffName}: {formatQty(entry.quantity)} {purchaseUnit}
-                                  {isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
-                                    ? " · punya kamu"
-                                    : ""}
                                 </span>
                               ))}
                             </div>
@@ -3809,7 +3769,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                         <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                           <label className="block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Receive kamu ({purchaseUnit})
+                              Receive ({purchaseUnit})
                             </span>
                             <input
                               type="number"
@@ -3819,18 +3779,13 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                               disabled={locked}
                               value={receiveEntryInputs[ing.id] ?? ""}
                               onChange={(e) => updateReceiveEntryQty(ing.id, e.target.value)}
-                              placeholder="Kosong = hapus receive kamu"
+                              placeholder="Kosong"
                               className={INPUT_CLASS}
                             />
-                            {ownSavedReceiveQty > 0 ? (
-                              <p className="mt-1 text-[11px] text-indigo-300">
-                                Angka ini milik kamu. Ubah lalu Simpan Pasokan untuk koreksi.
-                              </p>
-                            ) : null}
                           </label>
                           <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-right">
                             <p className="text-[10px] uppercase tracking-wide text-zinc-500">
-                              Setelah save
+                              Preview
                             </p>
                             <p className="text-sm font-semibold tabular-nums text-zinc-100">
                               {formatQty(afterSaveReceiveQty)} {purchaseUnit}
@@ -3839,7 +3794,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                         </div>
                         {purchaseUnit !== ing.unit && entryQty > 0 ? (
                           <p className="mt-2 text-xs text-emerald-300">
-                            Tambahan masuk ledger: {formatQty(entryStockQty)} {ing.unit}
+                            +{formatQty(entryStockQty)} {ing.unit}
                           </p>
                         ) : null}
                       </li>
@@ -3852,16 +3807,12 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             {activeTabEnabled && activeTab === "outstock" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
-                  Kamar 2 — Out Stock
+                  Out Stock
                 </h2>
-                <p className="mb-4 text-xs text-zinc-500">
-                  Barang keluar/rusak/basi mengurangi stok. Keterangan dan foto bukti opsional,
-                  tapi foto akan ikut masuk export XLSX inventory sebagai bukti.
-                </p>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (
                     <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                      Tidak ada bahan cocok dengan &ldquo;{searchTerm}&rdquo;.
+                      Tidak ditemukan.
                     </li>
                   ) : null}
                   {filteredIngredients.map((ing) => {
@@ -3883,7 +3834,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                       >
                         <div className="mb-3">
                           <p className="font-semibold text-zinc-50">{ing.name}</p>
-                          <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
                           {owner ? (
                             <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
                               {formatOwnerLabel(owner)}
@@ -3893,7 +3843,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                         </div>
                         <label className="mb-3 block">
                           <span className="mb-1 block text-xs text-zinc-400">
-                            Out stock kamu ({ing.unit})
+                            Out Stock ({ing.unit})
                           </span>
                           <p className="mb-2 text-xs font-medium text-sky-300/90">
                             {formatStockAvailability(ing)}
@@ -3919,16 +3869,11 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                               {OUTSTOCK_LOGICAL_FALLACY_MESSAGE}
                             </p>
                           ) : null}
-                          {owner && !ownedByOther ? (
-                            <p className="mt-1 text-[11px] text-indigo-300">
-                              Angka ini milik kamu. Ubah lalu Simpan Out Stock untuk koreksi.
-                            </p>
-                          ) : null}
                         </label>
                         {showOutFields ? (
                           <label className="block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Keterangan / Alasan Outstock (opsional)
+                              Keterangan
                             </span>
                             <textarea
                               rows={3}
@@ -3945,10 +3890,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                                 <div className="min-w-0">
                                   <p className="flex items-center gap-1 text-xs font-medium text-zinc-300">
                                     <Camera className="h-3.5 w-3.5" />
-                                    Foto bukti (opsional)
-                                  </p>
-                                  <p className="mt-0.5 text-[11px] text-zinc-500">
-                                    JPG/PNG dari kamera atau galeri.
+                                    Foto
                                   </p>
                                 </div>
                                 <label className="shrink-0">
@@ -4014,16 +3956,12 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             {activeTabEnabled && activeTab === "opname" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
-                  Kamar 3 — Stock Opname
+                  Opname
                 </h2>
-                <p className="mb-4 text-xs text-zinc-500">
-                  Catat sisa fisik di rak. Setelah Submit Report Closing di tab Menu, data dikirim apa adanya —
-                  tidak perlu menunggu atau menyelesaikan selisih di sini.
-                </p>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (
                     <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                      Tidak ada bahan cocok dengan &ldquo;{searchTerm}&rdquo;.
+                      Tidak ditemukan.
                     </li>
                   ) : null}
                   {filteredIngredients.map((ing) => {
@@ -4038,7 +3976,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                       >
                         <div className="mb-3">
                           <p className="font-semibold text-zinc-50">{ing.name}</p>
-                          <p className="text-xs text-zinc-500">Satuan: {ing.unit}</p>
                           {owner ? (
                             <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
                               {formatOwnerLabel(owner)}
@@ -4048,7 +3985,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                         </div>
                         <label className="block">
                           <span className="mb-1 block text-xs text-zinc-400">
-                            Opname kamu ({ing.unit})
+                            Opname ({ing.unit})
                           </span>
                           <p className="mb-2 text-xs font-medium text-sky-300/90">
                             {formatSystemStockGuide(ing)}
@@ -4061,14 +3998,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                             disabled={locked || ownedByOther}
                             value={line.closingStock}
                             onChange={(e) => updateClosingStock(ing.id, e.target.value)}
-                            placeholder="Kosong = ikut stok sistem"
+                            placeholder="Kosong"
                             className={INPUT_CLASS}
                           />
-                          {owner && !ownedByOther ? (
-                            <p className="mt-1 text-[11px] text-indigo-300">
-                              Angka ini milik kamu. Ubah lalu Simpan Opname untuk koreksi.
-                            </p>
-                          ) : null}
                         </label>
                       </li>
                     );
@@ -4080,19 +4012,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             {activeTabEnabled && activeTab === "premix" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-emerald-400">
-                  Kamar 4 — Produksi Premix
+                  Premix
                 </h2>
-                <p className="mb-4 text-xs text-zinc-500">
-                  Input premix yang dibuat hari ini. Kebutuhan bahan dihitung dari resep dan
-                  stok tersedia = opname/stok fisik + receive hari ini.
-                </p>
                 {premixItems.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                    Belum ada premix aktif untuk departemen ini.
+                    Belum ada premix.
                   </p>
                 ) : filteredPremixItems.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                    Tidak ada premix cocok dengan &ldquo;{searchTerm}&rdquo;.
+                    Tidak ditemukan.
                   </p>
                 ) : (
                   <ul className="space-y-3">
@@ -4116,7 +4044,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                             <div>
                               <p className="font-semibold text-zinc-50">{premix.name}</p>
                               <p className="text-xs text-zinc-500">
-                                1 batch = {yieldQty.toLocaleString("id-ID")} {premix.unit} · Stok sistem {Number(premix.current_stock).toLocaleString("id-ID")}
+                                {yieldQty.toLocaleString("id-ID")} {premix.unit}
                               </p>
                               {owner ? (
                                 <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
@@ -4130,7 +4058,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
                           <label className="block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Jumlah dibuat kamu
+                              Jumlah
                             </span>
                             <div className="flex items-center gap-1">
                               <button
@@ -4164,24 +4092,16 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                           </label>
                           {qty > 0 && recipe ? (
                             <p className="mt-2 text-xs font-medium text-emerald-300">
-                              Output masuk stok: {outputQty.toLocaleString("id-ID")} {premix.unit}
+                              Output {outputQty.toLocaleString("id-ID")} {premix.unit}
                             </p>
                           ) : null}
-                          {owner && !ownedByOther ? (
-                            <p className="mt-1 text-[11px] text-indigo-300">
-                              Angka ini milik kamu. Ubah lalu Simpan Premix untuk koreksi.
-                            </p>
-                          ) : null}
-
                           {!recipe ? (
                             <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                              Resep premix belum disusun di Admin.
+                              Belum ada resep.
                             </p>
                           ) : recipe.recipe_component.length > 0 ? (
                             <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-                              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                Kebutuhan bahan
-                              </p>
+                              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Bahan</p>
                               <ul className="space-y-1.5 text-xs">
                                 {recipe.recipe_component.map((component) => {
                                   const componentIng = component.ingredient;
@@ -4218,7 +4138,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                                           </span>
                                         ) : !unlimited && baseStock.source === "opname" ? (
                                           <span className="text-[11px] text-indigo-300">
-                                            pakai opname {baseStock.quantity.toLocaleString("id-ID")}
+                                            Opname {baseStock.quantity.toLocaleString("id-ID")}
                                           </span>
                                         ) : null}
                                       </span>
@@ -4239,15 +4159,11 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             {activeTabEnabled && activeTab === "issue" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-red-400">
-                  Kamar 5 — Remake / Complaint
+                  Remake
                 </h2>
-                <p className="mb-4 text-xs text-zinc-500">
-                  Catat menu yang harus diganti baru karena kualitas tidak layak. Sistem otomatis
-                  mengurangi bahan berdasarkan resep aktif.
-                </p>
                 {filteredIssueMenus.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                    Tidak ada menu cocok dengan &ldquo;{searchTerm}&rdquo;.
+                    Tidak ditemukan.
                   </p>
                 ) : (
                   <ul className="space-y-3">
@@ -4265,11 +4181,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                         >
                           <div className="mb-3">
                             <p className="font-semibold text-zinc-50">{menu.menu_name}</p>
-                            <p className="text-xs text-zinc-500">
-                              {hasRecipe
-                                ? "Remake akan dikonversi otomatis ke bahan resep."
-                                : "Belum ada resep aktif — pemakaian bahan tidak bisa dihitung."}
-                            </p>
+                            {!hasRecipe ? <p className="text-xs text-zinc-500">Tanpa resep</p> : null}
                             {owner ? (
                               <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
                                 {formatOwnerLabel(owner)}
@@ -4293,11 +4205,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                                 placeholder="-"
                                 className={INPUT_CLASS}
                               />
-                              {owner && !ownedByOther ? (
-                                <p className="mt-1 text-[11px] text-indigo-300">
-                                  Angka ini milik kamu. Ubah lalu Simpan Remake untuk koreksi.
-                                </p>
-                              ) : null}
                             </label>
                             <label className="block">
                               <span className="mb-1 block text-xs text-zinc-400">Alasan</span>
@@ -4321,7 +4228,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                           </div>
                           <label className="mt-3 block">
                             <span className="mb-1 block text-xs text-zinc-400">
-                              Catatan opsional
+                              Catatan
                             </span>
                             <input
                               type="text"
@@ -4337,7 +4244,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                           <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
                             <div className="mb-2 flex items-center justify-between gap-3">
                               <span className="text-xs font-medium text-zinc-400">
-                                Foto bukti opsional
+                                Foto
                               </span>
                               {issue.photoUrl ? (
                                 <button
@@ -4396,19 +4303,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             {activeTabEnabled && activeTab === "sold" ? (
               <section>
                 <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
-                  Kamar 6 — Menu Terjual
+                  Menu
                 </h2>
-                <p className="mb-4 text-xs text-zinc-500">
-                  Kosong berarti tidak ada penjualan. Simpan sales menu saat pergantian shift;
-                  Submit Closing langsung mengunci worksheet dan menyinkronkan stok admin.
-                </p>
                 {menus.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                    Belum ada menu aktif untuk departemen ini.
+                    Belum ada menu.
                   </p>
                 ) : filteredMenus.length === 0 ? (
                   <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
-                    Tidak ada menu cocok dengan &ldquo;{searchTerm}&rdquo;.
+                    Tidak ditemukan.
                   </p>
                 ) : (
                   <ul className="space-y-2">
@@ -4426,12 +4329,11 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                               <p className="truncate font-medium text-zinc-50">{menu.menu_name}</p>
                               <p className="text-xs text-zinc-500">
                                 Rp {Number(menu.price).toLocaleString("id-ID")}
-                                {getActiveRecipeLines(menu).length === 0 ? " · tanpa resep" : ""}
                               </p>
                             </div>
                             <div className="shrink-0">
                               <span className="mb-1 block text-right text-xs text-zinc-400">
-                                Input kamu
+                                Qty
                               </span>
                               <div className="flex items-center gap-1">
                                 <button
@@ -4469,7 +4371,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                           {menuSoldEntries.length > 0 ? (
                             <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
                               <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                                <span className="font-medium text-zinc-400">Akumulasi tersimpan</span>
+                                <span className="font-medium text-zinc-400">Akumulasi</span>
                                 <span className="font-semibold tabular-nums text-indigo-200">
                                   {formatQty(totalSold)}
                                 </span>
@@ -4611,21 +4513,21 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                 )}
                 <span>{isSavingMenuProgress ? "Menyimpan sales…" : "Simpan Sales Menu"}</span>
               </button>
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={stickySubmit}
-                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
-              >
-                {isSubmitting ? (
-                  <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
-                ) : (
-                  <Lock className="h-5 w-5 shrink-0" />
-                )}
-                <span>
-                  {isSubmitting ? "Mengunci laporan…" : "Submit Report Closing"}
-                </span>
-              </button>
+              {canFinalizeWorksheet ? (
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={stickySubmit}
+                  className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
+                >
+                  {isSubmitting ? (
+                    <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
+                  ) : (
+                    <Lock className="h-5 w-5 shrink-0" />
+                  )}
+                  <span>{isSubmitting ? "Mengunci…" : "Lock"}</span>
+                </button>
+              ) : null}
             </div>
           ) : null}
         </WorksheetStickyActionBar>
