@@ -24,10 +24,28 @@
 \ir migrations/019_active_only_name_uniques.sql
 \ir migrations/020_allow_cross_department_menu_recipes.sql
 \ir migrations/021_receive_prices.sql
+\ir migrations/022_receive_entries.sql
+\ir migrations/023_worksheet_menu_issue_line.sql
+\ir migrations/024_demand_events.sql
+\ir migrations/025_demand_event_external_source.sql
+\ir migrations/026_staff_password_login.sql
+\ir migrations/027_staff_password_hash_trigger.sql
+\ir migrations/028_relax_staff_pin_code_for_password_login.sql
+\ir migrations/029_restrict_deleting_audited_staff.sql
+\ir migrations/030_worksheet_sold_entries.sql
+\ir migrations/031_worksheet_line_ownership.sql
+\ir migrations/032_worksheet_edit_request.sql
+\ir migrations/033_staff_owned_worksheet_lines.sql
+\ir migrations/034_worksheet_staff_settings.sql
+\ir migrations/035_purchase_request_tracker.sql
+\ir migrations/036_recipe_builder_safety.sql
+\ir migrations/037_restore_submitted_worksheet_locks.sql
+\ir migrations/038_business_day_calendar_date_comment.sql
+\ir migrations/039_harden_purchase_arrival_stock_apply.sql
+
+-- Optional JWT-only read-only viewer policies. Do not run for the current anon-client prototype.
+-- \ir seeds/viewer_rls_policies.sql
 
 -- Prototype access policies. Keep this for development only while the app still uses anon Supabase client.
 \ir seeds/dev_worksheet_rls.sql
 \ir seeds/dev_staff.sql
-
--- Optional JWT-only read-only viewer policies. Do not run for the current anon-client prototype.
--- \ir seeds/viewer_rls_policies.sql

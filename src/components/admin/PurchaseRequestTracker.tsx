@@ -27,6 +27,7 @@ import {
 import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import { resolveBusinessDate } from "@/lib/utils/dateHelper";
 import type {
   IngredientRow,
   Database,
@@ -252,7 +253,7 @@ function SearchablePicker({
   );
 }
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+const todayIso = () => resolveBusinessDate();
 
 function formatRupiah(amount: number): string {
   return new Intl.NumberFormat("id-ID", {
@@ -681,10 +682,12 @@ export function PurchaseRequestTracker() {
     setError(null);
     setSuccess(null);
 
-    const { error: updateError } = await supabase
+    const { data: updatedRow, error: updateError } = await supabase
       .from("purchase_request_tracker")
       .update(nextPatch)
-      .eq("id", row.id);
+      .eq("id", row.id)
+      .select("stock_applied_at, stock_applied_qty")
+      .maybeSingle();
 
     if (updateError) {
       setError(updateError.message);
@@ -693,7 +696,9 @@ export function PurchaseRequestTracker() {
 
     setSuccess(
       patch.purchase_status === "Arrived"
-        ? `${row.item_name} diterima.`
+        ? updatedRow?.stock_applied_at
+          ? `${row.item_name} diterima. Stok master +${Number(updatedRow.stock_applied_qty).toLocaleString("id-ID")}.`
+          : `${row.item_name} diterima.`
         : "PO tracker diperbarui.",
     );
     await loadData();
