@@ -33,6 +33,7 @@ import type {
   IngredientRow,
   MenuItemRow,
   RecipeLineForCalc,
+  StaffRole,
   WorksheetEditRequestRow,
 } from "@/lib/types/database";
 import { canAccessWorksheet } from "@/lib/worksheet/access";
@@ -104,29 +105,33 @@ type MenuIssueLineState = {
 type SoldEntrySummary = {
   staffId: string | null;
   staffName: string;
+  staffRole?: StaffRole | null;
   quantity: number;
 };
+
+type StaffSummaryJoin = { name: string; role?: StaffRole | null };
 
 type SoldEntryJoined = {
   menu_item_id: string;
   staff_id: string | null;
   quantity_sold: number;
-  staff: { name: string } | { name: string }[] | null;
+  staff: StaffSummaryJoin | StaffSummaryJoin[] | null;
 };
 
 type ReceiveEntryJoined = {
   ingredient_id: string;
   staff_id: string | null;
   quantity: number;
-  staff: { name: string } | { name: string }[] | null;
+  staff: StaffSummaryJoin | StaffSummaryJoin[] | null;
 };
 
 type WorksheetLineOwner = {
   staffId: string | null;
   staffName: string;
+  staffRole?: StaffRole | null;
 };
 
-type StaffJoin = { staff_id: string | null; staff: { name: string } | { name: string }[] | null };
+type StaffJoin = { staff_id: string | null; staff: StaffSummaryJoin | StaffSummaryJoin[] | null };
 
 type OutLineJoined = StaffJoin & {
   ingredient_id: string;
@@ -153,6 +158,12 @@ type PremixLineJoined = StaffJoin & {
 type OpnameLineJoined = StaffJoin & {
   ingredient_id: string;
   closing_stock: number;
+};
+
+type OpnameAggregateJoined = {
+  ingredient_id: string;
+  closing_stock: number;
+  staff: StaffSummaryJoin | StaffSummaryJoin[] | null;
 };
 
 type PremixRecipeComponent = {
@@ -346,12 +357,17 @@ function canRequestResubmit(status: ClosingStatus | null | undefined): boolean {
   return status === "SUBMITTED" || status === "LOCKED" || status === "PENDING_APPROVAL_ADMIN";
 }
 
+function isMasterRole(role: StaffRole | null | undefined): boolean {
+  return role === "admin" || role === "op_manager";
+}
+
 function resolveLineOwner(row: StaffJoin): WorksheetLineOwner {
   const staffRaw = row.staff;
   const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
   return {
     staffId: row.staff_id,
     staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+    staffRole: rowStaff?.role ?? null,
   };
 }
 
@@ -445,6 +461,31 @@ function computePremixEffectsFromTotals(
     ])
   );
   return computePremixEffects(premixItems, quantities);
+}
+
+function buildMasterFirstOpnameTotalMap(rows: OpnameAggregateJoined[]): Map<string, number> {
+  const allTotals = new Map<string, number>();
+  const masterTotals = new Map<string, number>();
+
+  for (const row of rows) {
+    const quantity = Number(row.closing_stock ?? 0);
+    allTotals.set(row.ingredient_id, (allTotals.get(row.ingredient_id) ?? 0) + quantity);
+
+    const staffRaw = row.staff;
+    const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+    if (isMasterRole(rowStaff?.role)) {
+      masterTotals.set(row.ingredient_id, (masterTotals.get(row.ingredient_id) ?? 0) + quantity);
+    }
+  }
+
+  const totals = new Map<string, number>();
+  for (const [ingredientId, quantity] of allTotals.entries()) {
+    totals.set(
+      ingredientId,
+      masterTotals.has(ingredientId) ? masterTotals.get(ingredientId) ?? 0 : quantity
+    );
+  }
+  return totals;
 }
 
 function createDefaultLine(preset?: Partial<IngredientLineState>): IngredientLineState {
@@ -906,8 +947,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     (): WorksheetLineOwner => ({
       staffId: staff?.id ?? null,
       staffName: staff?.name ?? "Staff ini",
+      staffRole: staff?.role ?? null,
     }),
-    [staff?.id, staff?.name]
+    [staff?.id, staff?.name, staff?.role]
   );
 
   const getReceiveStockQtyForIngredient = useCallback(
@@ -927,7 +969,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
 	  const getOpnameBaseStockQtyForIngredient = useCallback(
 	    (ingredient: Pick<IngredientRow, "id" | "current_stock">) => {
-	      const opnameSummaries = opnameEntrySummaries[ingredient.id] ?? [];
+      const opnameSummaries = opnameEntrySummaries[ingredient.id] ?? [];
+      const masterOpnameEntries = opnameSummaries.filter((entry) => isMasterRole(entry.staffRole));
+      if (masterOpnameEntries.length > 0) {
+        return {
+          quantity: masterOpnameEntries.reduce((sum, entry) => sum + entry.quantity, 0),
+          source: "opname" as const,
+        };
+      }
+
 	      const ownDraft = lines[ingredient.id]?.closingStock ?? "";
 	      if (canOverrideWorksheetOwnership) {
 	        const aggregateOpnameQty = opnameSummaries.reduce(
@@ -1316,7 +1366,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     async (activeSessionId: string) => {
       const { data, error: receiveEntryErr } = await supabase
         .from("worksheet_receive_entry")
-        .select("ingredient_id, staff_id, quantity, staff:staff_id ( name )")
+        .select("ingredient_id, staff_id, quantity, staff:staff_id ( name, role )")
         .eq("session_id", activeSessionId);
 
       if (receiveEntryErr) {
@@ -1335,6 +1385,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         const summary: SoldEntrySummary = {
           staffId: row.staff_id,
           staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+          staffRole: rowStaff?.role ?? null,
           quantity,
         };
         const key = `${row.ingredient_id}:${summary.staffId ?? summary.staffName}`;
@@ -1361,6 +1412,152 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     },
 	    [canOverrideWorksheetOwnership, isCurrentStaffOwner, supabase]
 	  );
+
+  const refreshOpnameEntrySummaries = useCallback(
+    async (activeSessionId: string) => {
+      const { data, error: opnameEntryErr } = await supabase
+        .from("worksheet_opname_line")
+        .select("ingredient_id, closing_stock, staff_id, staff:staff_id ( name, role )")
+        .eq("session_id", activeSessionId);
+
+      if (opnameEntryErr) {
+        throw new Error(`Gagal memuat detail opname staff: ${opnameEntryErr.message}`);
+      }
+
+      const nextSummaries: Record<string, SoldEntrySummary[]> = {};
+      for (const row of (data ?? []) as unknown as OpnameLineJoined[]) {
+        const quantity = Number(row.closing_stock);
+        const owner = resolveLineOwner(row);
+        nextSummaries[row.ingredient_id] = [
+          ...(nextSummaries[row.ingredient_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
+        ];
+      }
+
+      return nextSummaries;
+    },
+    [supabase]
+  );
+
+  const refreshLiveWorksheetSummaries = useCallback(
+    async (activeSessionId: string) => {
+      await Promise.all([
+        refreshIngredientStockFromDb(),
+        refreshReceiveEntrySummaries(activeSessionId),
+      ]);
+
+      const [
+        outResult,
+        soldResult,
+        issueResult,
+        premixResult,
+        opnameSummaries,
+      ] = await Promise.all([
+        supabase
+          .from("worksheet_out_line")
+          .select("ingredient_id, quantity, staff_id, staff:staff_id ( name, role )")
+          .eq("session_id", activeSessionId),
+        supabase
+          .from("worksheet_sold_entry")
+          .select("menu_item_id, staff_id, quantity_sold, staff:staff_id ( name, role )")
+          .eq("session_id", activeSessionId),
+        supabase
+          .from("worksheet_menu_issue_line")
+          .select("menu_item_id, quantity, staff_id, staff:staff_id ( name, role )")
+          .eq("session_id", activeSessionId),
+        supabase
+          .from("worksheet_premix_line")
+          .select("output_ingredient_id, batch_quantity, staff_id, staff:staff_id ( name, role )")
+          .eq("session_id", activeSessionId),
+        refreshOpnameEntrySummaries(activeSessionId),
+      ]);
+
+      if (outResult.error) {
+        throw new Error(`Gagal memuat update out stock: ${outResult.error.message}`);
+      }
+      if (soldResult.error) {
+        throw new Error(`Gagal memuat update menu terjual: ${soldResult.error.message}`);
+      }
+      if (issueResult.error) {
+        throw new Error(`Gagal memuat update issue menu: ${issueResult.error.message}`);
+      }
+      if (premixResult.error) {
+        throw new Error(`Gagal memuat update premix: ${premixResult.error.message}`);
+      }
+
+      const nextOutOwners: Record<string, WorksheetLineOwner> = {};
+      const nextOutSummaries: Record<string, SoldEntrySummary[]> = {};
+      for (const row of (outResult.data ?? []) as unknown as OutLineJoined[]) {
+        const quantity = Number(row.quantity);
+        if (quantity <= 0) continue;
+        const owner = resolveLineOwner(row);
+        nextOutSummaries[row.ingredient_id] = [
+          ...(nextOutSummaries[row.ingredient_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
+        ];
+        if (canEditLineOwner(owner)) nextOutOwners[row.ingredient_id] = owner;
+      }
+
+      const nextSoldSummaries: Record<string, SoldEntrySummary[]> = {};
+      for (const row of (soldResult.data ?? []) as unknown as SoldEntryJoined[]) {
+        const quantity = Number(row.quantity_sold ?? 0);
+        if (quantity <= 0) continue;
+        const staffRaw = row.staff;
+        const rowStaff = Array.isArray(staffRaw) ? staffRaw[0] : staffRaw;
+        nextSoldSummaries[row.menu_item_id] = [
+          ...(nextSoldSummaries[row.menu_item_id] ?? []),
+          {
+            staffId: row.staff_id,
+            staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+            staffRole: rowStaff?.role ?? null,
+            quantity,
+          },
+        ];
+      }
+
+      const nextIssueOwners: Record<string, WorksheetLineOwner> = {};
+      const nextIssueSummaries: Record<string, SoldEntrySummary[]> = {};
+      for (const row of (issueResult.data ?? []) as unknown as IssueLineJoined[]) {
+        const quantity = Number(row.quantity);
+        if (quantity <= 0) continue;
+        const owner = resolveLineOwner(row);
+        nextIssueSummaries[row.menu_item_id] = [
+          ...(nextIssueSummaries[row.menu_item_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
+        ];
+        if (canEditLineOwner(owner)) nextIssueOwners[row.menu_item_id] = owner;
+      }
+
+      const nextPremixOwners: Record<string, WorksheetLineOwner> = {};
+      const nextPremixSummaries: Record<string, SoldEntrySummary[]> = {};
+      for (const row of (premixResult.data ?? []) as unknown as PremixLineJoined[]) {
+        const quantity = Number(row.batch_quantity);
+        if (quantity <= 0) continue;
+        const owner = resolveLineOwner(row);
+        nextPremixSummaries[row.output_ingredient_id] = [
+          ...(nextPremixSummaries[row.output_ingredient_id] ?? []),
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
+        ];
+        if (canEditLineOwner(owner)) nextPremixOwners[row.output_ingredient_id] = owner;
+      }
+
+      setOutLineOwners(nextOutOwners);
+      setOutEntrySummaries(nextOutSummaries);
+      setSoldEntrySummaries(nextSoldSummaries);
+      setIssueLineOwners(nextIssueOwners);
+      setIssueEntrySummaries(nextIssueSummaries);
+      setPremixLineOwners(nextPremixOwners);
+      setPremixEntrySummaries(nextPremixSummaries);
+      setOpnameEntrySummaries(opnameSummaries);
+    },
+    [
+      canEditLineOwner,
+      refreshIngredientStockFromDb,
+      refreshOpnameEntrySummaries,
+      refreshReceiveEntrySummaries,
+      supabase,
+    ]
+  );
 
   const loadData = useCallback(async (dateOverride?: string) => {
     if (!staff) return;
@@ -1508,7 +1705,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       const { data: outLines } = await supabase
         .from("worksheet_out_line")
-        .select("ingredient_id, quantity, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name )")
+        .select("ingredient_id, quantity, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name, role )")
         .eq("session_id", ws.id);
 
       const nextOutOwners: Record<string, WorksheetLineOwner> = {};
@@ -1519,7 +1716,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         const owner = resolveLineOwner(row);
         nextOutSummaries[row.ingredient_id] = [
           ...(nextOutSummaries[row.ingredient_id] ?? []),
-          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
         ];
 	        if (canEditLineOwner(owner)) {
 	          const existingOutQty = ingredientPreset[row.ingredient_id]?.outQty ?? "";
@@ -1540,7 +1737,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       const { data: soldEntries, error: soldEntryErr } = await supabase
         .from("worksheet_sold_entry")
-        .select("menu_item_id, staff_id, quantity_sold, staff:staff_id ( name )")
+        .select("menu_item_id, staff_id, quantity_sold, staff:staff_id ( name, role )")
         .eq("session_id", ws.id);
 
       const soldSummaries: Record<string, SoldEntrySummary[]> = {};
@@ -1557,6 +1754,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             {
               staffId: row.staff_id,
               staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+              staffRole: rowStaff?.role ?? null,
               quantity,
             },
           ];
@@ -1583,6 +1781,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
             {
               staffId: null,
               staffName: "Data lama / belum ada staff",
+              staffRole: null,
               quantity,
             },
           ];
@@ -1593,7 +1792,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       const { data: issueLines } = await supabase
         .from("worksheet_menu_issue_line")
-        .select("menu_item_id, quantity, reason, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name )")
+        .select("menu_item_id, quantity, reason, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name, role )")
         .eq("session_id", ws.id);
 
       const nextIssueOwners: Record<string, WorksheetLineOwner> = {};
@@ -1604,7 +1803,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         const owner = resolveLineOwner(row);
         nextIssueSummaries[row.menu_item_id] = [
           ...(nextIssueSummaries[row.menu_item_id] ?? []),
-          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
         ];
 	        if (canEditLineOwner(owner)) {
 	          const existingIssue = issuePreset[row.menu_item_id] ?? createDefaultMenuIssue();
@@ -1625,7 +1824,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       const { data: premixLines } = await supabase
         .from("worksheet_premix_line")
-        .select("output_ingredient_id, batch_quantity, staff_id, staff:staff_id ( name )")
+        .select("output_ingredient_id, batch_quantity, staff_id, staff:staff_id ( name, role )")
         .eq("session_id", ws.id);
 
       const nextPremixOwners: Record<string, WorksheetLineOwner> = {};
@@ -1636,7 +1835,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         const owner = resolveLineOwner(row);
         nextPremixSummaries[row.output_ingredient_id] = [
           ...(nextPremixSummaries[row.output_ingredient_id] ?? []),
-          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
         ];
 	        if (canEditLineOwner(owner)) {
 	          premixPreset[row.output_ingredient_id] = canOverrideWorksheetOwnership
@@ -1650,7 +1849,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
       const { data: opnameLines } = await supabase
         .from("worksheet_opname_line")
-        .select("ingredient_id, closing_stock, staff_id, staff:staff_id ( name )")
+        .select("ingredient_id, closing_stock, staff_id, staff:staff_id ( name, role )")
         .eq("session_id", ws.id);
 
       const nextOpnameOwners: Record<string, WorksheetLineOwner> = {};
@@ -1660,7 +1859,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         const owner = resolveLineOwner(row);
         nextOpnameSummaries[row.ingredient_id] = [
           ...(nextOpnameSummaries[row.ingredient_id] ?? []),
-          { staffId: owner.staffId, staffName: owner.staffName, quantity },
+          { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
         ];
 	        if (canEditLineOwner(owner)) {
 	          ingredientPreset[row.ingredient_id] = {
@@ -1705,10 +1904,10 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     initPremixQuantities(premixList, premixPreset);
     setIsLoading(false);
 	  }, [
-	    canEditLineOwner,
-	    canOverrideWorksheetOwnership,
-	    department,
-	    embedded,
+    canEditLineOwner,
+    canOverrideWorksheetOwnership,
+    department,
+    embedded,
     initIngredientLines,
     initPremixQuantities,
     initSoldItems,
@@ -1732,6 +1931,28 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   useEffect(() => {
     if (staff) void loadData();
   }, [staff, loadData]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        await refreshLiveWorksheetSummaries(sessionId);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Gagal memuat update worksheet.");
+        }
+      }
+    };
+
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshLiveWorksheetSummaries, sessionId]);
 
   useWorksheetDraft({
     department,
@@ -2136,7 +2357,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         .eq("session_id", activeSessionId),
       supabase
         .from("worksheet_opname_line")
-        .select("ingredient_id, closing_stock")
+        .select("ingredient_id, closing_stock, staff:staff_id ( name, role )")
         .eq("session_id", activeSessionId),
       supabase
         .from("worksheet_premix_line")
@@ -2161,14 +2382,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       outTotalMap.set(row.ingredient_id, (outTotalMap.get(row.ingredient_id) ?? 0) + quantity);
     }
 
-    const opnameTotalMap = new Map<string, number>();
-    for (const row of opnameAggregateResult.data ?? []) {
-      const quantity = Number(row.closing_stock ?? 0);
-      opnameTotalMap.set(
-        row.ingredient_id,
-        (opnameTotalMap.get(row.ingredient_id) ?? 0) + quantity
-      );
-    }
+    const opnameTotalMap = buildMasterFirstOpnameTotalMap(
+      (opnameAggregateResult.data ?? []) as unknown as OpnameAggregateJoined[]
+    );
 
     const premixQuantityTotals = new Map<string, number>();
     for (const row of premixAggregateResult.data ?? []) {
@@ -2914,7 +3130,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 
     const { data: allSoldEntries, error: allSoldErr } = await supabase
       .from("worksheet_sold_entry")
-      .select("menu_item_id, staff_id, quantity_sold, staff:staff_id ( name )")
+      .select("menu_item_id, staff_id, quantity_sold, staff:staff_id ( name, role )")
       .eq("session_id", activeSessionId);
 
     if (allSoldErr) {
@@ -2936,6 +3152,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         {
           staffId: row.staff_id,
           staffName: rowStaff?.name ?? "Staff lama / tidak tercatat",
+          staffRole: rowStaff?.role ?? null,
           quantity,
         },
       ];
@@ -3473,7 +3690,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
           .eq("session_id", ensuredSessionId),
         supabase
           .from("worksheet_opname_line")
-          .select("ingredient_id, closing_stock")
+          .select("ingredient_id, closing_stock, staff:staff_id ( name, role )")
           .eq("session_id", ensuredSessionId),
         supabase
           .from("worksheet_premix_line")
@@ -3498,14 +3715,9 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
         outTotalMap.set(row.ingredient_id, (outTotalMap.get(row.ingredient_id) ?? 0) + quantity);
       }
 
-      const opnameTotalMap = new Map<string, number>();
-      for (const row of opnameAggregateResult.data ?? []) {
-        const quantity = Number(row.closing_stock ?? 0);
-        opnameTotalMap.set(
-          row.ingredient_id,
-          (opnameTotalMap.get(row.ingredient_id) ?? 0) + quantity
-        );
-      }
+      const opnameTotalMap = buildMasterFirstOpnameTotalMap(
+        (opnameAggregateResult.data ?? []) as unknown as OpnameAggregateJoined[]
+      );
 
       const premixQuantityTotals = new Map<string, number>();
       for (const row of premixAggregateResult.data ?? []) {
