@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   CalendarDays,
+  ChevronDown,
   CircleDollarSign,
   ClipboardCheck,
   Clock3,
@@ -57,6 +58,21 @@ type TrackerForm = {
   note: string;
 };
 
+type SearchPickerOption = {
+  id: string;
+  title: string;
+  subtitle?: string;
+};
+
+type SearchablePickerProps = {
+  label: string;
+  value: string;
+  options: SearchPickerOption[];
+  placeholder: string;
+  emptyLabel: string;
+  onChange: (value: string) => void;
+};
+
 const PURCHASE_STATUSES: PurchaseRequestStatus[] = [
   "Belum Dibeli",
   "On Progress",
@@ -95,6 +111,146 @@ const FIELD_CLASS =
   "mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60";
 const LABEL_CLASS = "text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500";
 const PANEL_CLASS = "rounded-lg border border-zinc-800 bg-zinc-900/35 p-3";
+
+function SearchablePicker({
+  label,
+  value,
+  options,
+  placeholder,
+  emptyLabel,
+  onChange,
+}: SearchablePickerProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+        setQuery("");
+      }
+    };
+
+    window.addEventListener("mousedown", handleClickOutside);
+    return () => window.removeEventListener("mousedown", handleClickOutside);
+  }, [isOpen]);
+
+  const selectedOption = options.find((option) => option.id === value) ?? null;
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) =>
+        [option.title, option.subtitle]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery),
+      )
+    : options;
+
+  const handleSelect = (nextValue: string) => {
+    onChange(nextValue);
+    setIsOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <span className={LABEL_CLASS}>{label}</span>
+      <button
+        type="button"
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        onClick={() => setIsOpen((current) => !current)}
+        className={`${FIELD_CLASS} flex min-h-12 items-center justify-between gap-2 py-2 text-left`}
+      >
+        <span className="min-w-0">
+          <span className={`block truncate font-semibold ${selectedOption ? "text-zinc-100" : "text-zinc-500"}`}>
+            {selectedOption?.title ?? emptyLabel}
+          </span>
+          <span className="block truncate text-[11px] text-zinc-500">
+            {selectedOption?.subtitle ?? placeholder}
+          </span>
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-zinc-500 transition ${isOpen ? "rotate-180" : ""}`}
+        />
+      </button>
+
+      {isOpen ? (
+        <div className="absolute left-0 right-0 z-30 mt-2 rounded-lg border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/40">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={placeholder}
+              className="min-h-10 w-full rounded-lg border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-9 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30"
+            />
+            {query ? (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-100"
+                aria-label="Bersihkan pencarian"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+
+          <div className="mt-2 max-h-56 overflow-y-auto pr-1" role="listbox">
+            <button
+              type="button"
+              onClick={() => handleSelect("")}
+              className={`mb-1 flex min-h-10 w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
+                value === ""
+                  ? "bg-emerald-400 text-zinc-950"
+                  : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+              }`}
+              role="option"
+              aria-selected={value === ""}
+            >
+              <span className="truncate font-semibold">{emptyLabel}</span>
+            </button>
+
+            {filteredOptions.map((option) => {
+              const active = option.id === value;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => handleSelect(option.id)}
+                  className={`mb-1 flex min-h-12 w-full flex-col justify-center rounded-lg px-3 py-2 text-left transition ${
+                    active
+                      ? "bg-emerald-400 text-zinc-950"
+                      : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+                  }`}
+                  role="option"
+                  aria-selected={active}
+                >
+                  <span className="truncate text-sm font-semibold">{option.title}</span>
+                  {option.subtitle ? (
+                    <span className={`truncate text-xs ${active ? "text-zinc-800" : "text-zinc-500"}`}>
+                      {option.subtitle}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+
+            {filteredOptions.length === 0 ? (
+              <p className="px-3 py-4 text-center text-sm text-zinc-500">Data tidak ditemukan.</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -298,6 +454,38 @@ export function PurchaseRequestTracker() {
         .reduce((sum, row) => sum + Number(row.total_price ?? 0), 0),
     };
   }, [rows]);
+
+  const ingredientOptions = useMemo<SearchPickerOption[]>(
+    () =>
+      ingredients.map((ingredient) => ({
+        id: ingredient.id,
+        title: ingredient.name,
+        subtitle: [
+          departmentLabel(ingredient.department),
+          ingredient.purchase_unit || ingredient.unit || "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      })),
+    [ingredients],
+  );
+
+  const supplierOptions = useMemo<SearchPickerOption[]>(
+    () =>
+      suppliers.map((supplier) => {
+        const phone =
+          supplier.phone_number && supplier.phone_number !== "62" ? supplier.phone_number : "";
+        return {
+          id: supplier.id,
+          title: supplier.name,
+          subtitle:
+            [supplier.category || "General", supplier.pic_name ? `PIC ${supplier.pic_name}` : "", phone]
+              .filter(Boolean)
+              .join(" · ") || "Supplier aktif",
+        };
+      }),
+    [suppliers],
+  );
 
   const selectedSupplier = suppliers.find((item) => item.id === form.supplier_id) ?? null;
   const estimatedTotal = parseNumber(form.qty) * parseNumber(form.unit_price);
@@ -654,21 +842,14 @@ export function PurchaseRequestTracker() {
                     className={FIELD_CLASS}
                   />
                 </label>
-                <label>
-                  <span className={LABEL_CLASS}>Bahan Persediaan</span>
-                  <select
-                    value={form.ingredient_id}
-                    onChange={(event) => handleIngredientChange(event.target.value)}
-                    className={FIELD_CLASS}
-                  >
-                    <option value="">Manual</option>
-                    {ingredients.map((ingredient) => (
-                      <option key={ingredient.id} value={ingredient.id}>
-                        {ingredient.name} - {departmentLabel(ingredient.department)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SearchablePicker
+                  label="Bahan Persediaan"
+                  value={form.ingredient_id}
+                  options={ingredientOptions}
+                  placeholder="Cari bahan persediaan"
+                  emptyLabel="Manual"
+                  onChange={handleIngredientChange}
+                />
               </div>
 
               <label className="block">
@@ -723,21 +904,14 @@ export function PurchaseRequestTracker() {
 
             <div className="space-y-3">
               <div className="grid gap-3 sm:grid-cols-[1fr_150px]">
-                <label>
-                  <span className={LABEL_CLASS}>Supplier</span>
-                  <select
-                    value={form.supplier_id}
-                    onChange={(event) => handleSupplierChange(event.target.value)}
-                    className={FIELD_CLASS}
-                  >
-                    <option value="">Manual</option>
-                    {suppliers.map((supplier) => (
-                      <option key={supplier.id} value={supplier.id}>
-                        {supplier.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SearchablePicker
+                  label="Supplier"
+                  value={form.supplier_id}
+                  options={supplierOptions}
+                  placeholder="Cari supplier"
+                  emptyLabel="Manual"
+                  onChange={handleSupplierChange}
+                />
                 <label>
                   <span className={LABEL_CLASS}>Metode</span>
                   <select
