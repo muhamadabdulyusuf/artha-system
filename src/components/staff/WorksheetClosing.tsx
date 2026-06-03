@@ -459,6 +459,17 @@ function resolveLineOwner(row: StaffJoin): WorksheetLineOwner {
   };
 }
 
+function preferWorksheetOwner(
+  current: WorksheetLineOwner | undefined,
+  incoming: WorksheetLineOwner
+): WorksheetLineOwner {
+  if (!current) return incoming;
+  if (!current.staffId) return incoming;
+  if (!incoming.staffId) return current;
+  if (isMasterRole(current.staffRole) && !isMasterRole(incoming.staffRole)) return incoming;
+  return current;
+}
+
 function normalizeOwnerText(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
@@ -1047,6 +1058,31 @@ function WorksheetClosingInner(
     [staff?.id, staff?.name, staff?.role]
   );
 
+  const getPersistedOwner = useCallback(
+    (owner?: WorksheetLineOwner | null): WorksheetLineOwner => {
+      if (canOverrideWorksheetOwnership && owner) return owner;
+      return currentStaffOwner();
+    },
+    [canOverrideWorksheetOwnership, currentStaffOwner]
+  );
+
+  const getPersistedOwnerFromSummaries = useCallback(
+    (entries: SoldEntrySummary[]): WorksheetLineOwner => {
+      if (!canOverrideWorksheetOwnership) return currentStaffOwner();
+      const preferred =
+        entries.find((entry) => entry.staffId && !isMasterRole(entry.staffRole)) ??
+        entries.find((entry) => entry.staffId) ??
+        entries[0];
+      if (!preferred) return currentStaffOwner();
+      return {
+        staffId: preferred.staffId,
+        staffName: preferred.staffName,
+        staffRole: preferred.staffRole ?? null,
+      };
+    },
+    [canOverrideWorksheetOwnership, currentStaffOwner]
+  );
+
 	  const getOpnameBaseStockQtyForIngredient = useCallback(
 	    (ingredient: Pick<IngredientRow, "id" | "current_stock">) => {
       const opnameSummaries = opnameEntrySummaries[ingredient.id] ?? [];
@@ -1122,7 +1158,8 @@ function WorksheetClosingInner(
     (
       previous: Record<string, SoldEntrySummary[]>,
       lineIds: string[],
-      quantitiesByLineId: Map<string, number>
+      quantitiesByLineId: Map<string, number>,
+      ownersByLineId?: Map<string, WorksheetLineOwner>
     ) => {
       const next = { ...previous };
       for (const lineId of lineIds) {
@@ -1132,9 +1169,10 @@ function WorksheetClosingInner(
               (entry) => !isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
             );
         const quantity = quantitiesByLineId.get(lineId) ?? 0;
+        const owner = ownersByLineId?.get(lineId) ?? currentStaffOwner();
         next[lineId] =
           quantity > 0
-            ? [...retained, { ...currentStaffOwner(), quantity }]
+            ? [...retained, { ...owner, quantity }]
             : retained;
         if (next[lineId].length === 0) delete next[lineId];
       }
@@ -1585,7 +1623,12 @@ function WorksheetClosingInner(
           ...(nextOutSummaries[row.ingredient_id] ?? []),
           { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
         ];
-        if (canEditLineOwner(owner)) nextOutOwners[row.ingredient_id] = owner;
+        if (canEditLineOwner(owner)) {
+          nextOutOwners[row.ingredient_id] = preferWorksheetOwner(
+            nextOutOwners[row.ingredient_id],
+            owner
+          );
+        }
       }
 
       const nextSoldSummaries: Record<string, SoldEntrySummary[]> = {};
@@ -1615,7 +1658,12 @@ function WorksheetClosingInner(
           ...(nextIssueSummaries[row.menu_item_id] ?? []),
           { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
         ];
-        if (canEditLineOwner(owner)) nextIssueOwners[row.menu_item_id] = owner;
+        if (canEditLineOwner(owner)) {
+          nextIssueOwners[row.menu_item_id] = preferWorksheetOwner(
+            nextIssueOwners[row.menu_item_id],
+            owner
+          );
+        }
       }
 
       const nextPremixOwners: Record<string, WorksheetLineOwner> = {};
@@ -1628,7 +1676,12 @@ function WorksheetClosingInner(
           ...(nextPremixSummaries[row.output_ingredient_id] ?? []),
           { staffId: owner.staffId, staffName: owner.staffName, staffRole: owner.staffRole, quantity },
         ];
-        if (canEditLineOwner(owner)) nextPremixOwners[row.output_ingredient_id] = owner;
+        if (canEditLineOwner(owner)) {
+          nextPremixOwners[row.output_ingredient_id] = preferWorksheetOwner(
+            nextPremixOwners[row.output_ingredient_id],
+            owner
+          );
+        }
       }
 
       setOutLineOwners(nextOutOwners);
@@ -1819,7 +1872,10 @@ function WorksheetClosingInner(
 	            outPhotoUrl: row.photo_url ?? "",
 	            outPhotoPublicId: row.photo_public_id ?? "",
           };
-          nextOutOwners[row.ingredient_id] = owner;
+          nextOutOwners[row.ingredient_id] = preferWorksheetOwner(
+            nextOutOwners[row.ingredient_id],
+            owner
+          );
         }
       }
       setOutLineOwners(nextOutOwners);
@@ -1906,7 +1962,10 @@ function WorksheetClosingInner(
             photoUrl: row.photo_url ?? "",
             photoPublicId: row.photo_public_id ?? "",
           };
-          nextIssueOwners[row.menu_item_id] = owner;
+          nextIssueOwners[row.menu_item_id] = preferWorksheetOwner(
+            nextIssueOwners[row.menu_item_id],
+            owner
+          );
         }
       }
       setIssueLineOwners(nextIssueOwners);
@@ -1931,7 +1990,10 @@ function WorksheetClosingInner(
 	          premixPreset[row.output_ingredient_id] = canOverrideWorksheetOwnership
 	            ? String(parseQty(premixPreset[row.output_ingredient_id] ?? "") + quantity)
 	            : String(row.batch_quantity);
-	          nextPremixOwners[row.output_ingredient_id] = owner;
+	          nextPremixOwners[row.output_ingredient_id] = preferWorksheetOwner(
+	            nextPremixOwners[row.output_ingredient_id],
+	            owner
+	          );
 	        }
       }
       setPremixLineOwners(nextPremixOwners);
@@ -1956,7 +2018,10 @@ function WorksheetClosingInner(
 	            ...ingredientPreset[row.ingredient_id],
 	            closingStock: String(row.closing_stock),
           };
-          nextOpnameOwners[row.ingredient_id] = owner;
+          nextOpnameOwners[row.ingredient_id] = preferWorksheetOwner(
+            nextOpnameOwners[row.ingredient_id],
+            owner
+          );
         }
       }
       setOpnameLineOwners(nextOpnameOwners);
@@ -2343,12 +2408,15 @@ function WorksheetClosingInner(
     }
 
     const entryPayload = rawIngredients
-      .map((ing) => ({
-        session_id: activeSessionId,
-        ingredient_id: ing.id,
-        staff_id: staff.id,
-        quantity: parseQty(receiveEntryInputs[ing.id] ?? ""),
-      }))
+      .map((ing) => {
+        const owner = getPersistedOwnerFromSummaries(receiveEntrySummaries[ing.id] ?? []);
+        return {
+          session_id: activeSessionId,
+          ingredient_id: ing.id,
+          staff_id: owner.staffId,
+          quantity: parseQty(receiveEntryInputs[ing.id] ?? ""),
+        };
+      })
       .filter((row) => row.quantity > 0);
     const nextOwnReceive = new Map(
       entryPayload.map((row) => [row.ingredient_id, row.quantity])
@@ -2864,15 +2932,22 @@ function WorksheetClosingInner(
         .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
         .map((ing) => ing.id);
       const editableOutOwnerIds = getEditableOwnerIds(outLineOwners, editableIngredientIds);
+      const outOwnerByIngredientId = new Map(
+        editableIngredientIds.map((ingredientId) => [
+          ingredientId,
+          getPersistedOwner(outLineOwners[ingredientId]),
+        ])
+      );
 
       const outLinePayload = freshIngredients
         .filter((ing) => editableIngredientIds.includes(ing.id))
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
+          const owner = outOwnerByIngredientId.get(ing.id) ?? currentStaffOwner();
           return {
             session_id: activeSessionId,
             ingredient_id: ing.id,
-            staff_id: staff.id,
+            staff_id: owner.staffId,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
             photo_url: line.outPhotoUrl || null,
@@ -2910,13 +2985,17 @@ function WorksheetClosingInner(
 
       const nextOwners = { ...outLineOwners };
       for (const ingredientId of editableIngredientIds) delete nextOwners[ingredientId];
-      for (const row of outLinePayload) nextOwners[row.ingredient_id] = currentStaffOwner();
+      for (const row of outLinePayload) {
+        nextOwners[row.ingredient_id] =
+          outOwnerByIngredientId.get(row.ingredient_id) ?? currentStaffOwner();
+      }
       setOutLineOwners(nextOwners);
       setOutEntrySummaries((prev) =>
         replaceCurrentStaffSummaries(
           prev,
           editableIngredientIds,
-          new Map(outLinePayload.map((row) => [row.ingredient_id, row.quantity]))
+          new Map(outLinePayload.map((row) => [row.ingredient_id, row.quantity])),
+          outOwnerByIngredientId
         )
       );
 
@@ -2949,6 +3028,12 @@ function WorksheetClosingInner(
         opnameLineOwners,
         editableIngredients.map((ing) => ing.id)
       );
+      const opnameOwnerByIngredientId = new Map(
+        editableIngredients.map((ing) => [
+          ing.id,
+          getPersistedOwner(opnameLineOwners[ing.id]),
+        ])
+      );
       const opnamePayload = editableIngredients.flatMap((ing) => {
         const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
         if (isBlankQty(raw)) {
@@ -2964,7 +3049,7 @@ function WorksheetClosingInner(
           {
             session_id: activeSessionId,
             ingredient_id: ing.id,
-            staff_id: staff.id,
+            staff_id: (opnameOwnerByIngredientId.get(ing.id) ?? currentStaffOwner()).staffId,
             closing_stock,
           },
         ];
@@ -3000,13 +3085,17 @@ function WorksheetClosingInner(
 
       const nextOwners = { ...opnameLineOwners };
       for (const ingredientId of editableOpnameIngredientIds) delete nextOwners[ingredientId];
-      for (const row of opnamePayload) nextOwners[row.ingredient_id] = currentStaffOwner();
+      for (const row of opnamePayload) {
+        nextOwners[row.ingredient_id] =
+          opnameOwnerByIngredientId.get(row.ingredient_id) ?? currentStaffOwner();
+      }
       setOpnameLineOwners(nextOwners);
       setOpnameEntrySummaries((prev) =>
         replaceCurrentStaffSummaries(
           prev,
           editableOpnameIngredientIds,
-          new Map(opnamePayload.map((row) => [row.ingredient_id, row.closing_stock]))
+          new Map(opnamePayload.map((row) => [row.ingredient_id, row.closing_stock])),
+          opnameOwnerByIngredientId
         )
       );
 
@@ -3040,15 +3129,22 @@ function WorksheetClosingInner(
         .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
         .map((premix) => premix.id);
       const editablePremixOwnerIds = getEditableOwnerIds(premixLineOwners, editablePremixIds);
+      const premixOwnerById = new Map(
+        editablePremixIds.map((premixId) => [
+          premixId,
+          getPersistedOwner(premixLineOwners[premixId]),
+        ])
+      );
       const payload = premixItems
         .filter((premix) => editablePremixIds.includes(premix.id))
         .map((premix) => {
           const recipe = getActivePremixRecipe(premix);
+          const owner = premixOwnerById.get(premix.id) ?? currentStaffOwner();
           return {
             session_id: activeSessionId,
             output_ingredient_id: premix.id,
             recipe_id: recipe?.id ?? "",
-            staff_id: staff.id,
+            staff_id: owner.staffId,
             batch_quantity: parseQty(premixQuantities[premix.id] ?? ""),
           };
         })
@@ -3083,13 +3179,17 @@ function WorksheetClosingInner(
 
       const nextOwners = { ...premixLineOwners };
       for (const premixId of editablePremixIds) delete nextOwners[premixId];
-      for (const row of payload) nextOwners[row.output_ingredient_id] = currentStaffOwner();
+      for (const row of payload) {
+        nextOwners[row.output_ingredient_id] =
+          premixOwnerById.get(row.output_ingredient_id) ?? currentStaffOwner();
+      }
       setPremixLineOwners(nextOwners);
       setPremixEntrySummaries((prev) =>
         replaceCurrentStaffSummaries(
           prev,
           editablePremixIds,
-          new Map(payload.map((row) => [row.output_ingredient_id, row.batch_quantity]))
+          new Map(payload.map((row) => [row.output_ingredient_id, row.batch_quantity])),
+          premixOwnerById
         )
       );
 
@@ -3201,12 +3301,15 @@ function WorksheetClosingInner(
     }
 
     const soldEntryPayload = menuList
-      .map((menu) => ({
-        session_id: activeSessionId,
-        menu_item_id: menu.id,
-        staff_id: staff.id,
-        quantity_sold: parseQty(soldItems[menu.id] ?? ""),
-      }))
+      .map((menu) => {
+        const owner = getPersistedOwnerFromSummaries(soldEntrySummaries[menu.id] ?? []);
+        return {
+          session_id: activeSessionId,
+          menu_item_id: menu.id,
+          staff_id: owner.staffId,
+          quantity_sold: parseQty(soldItems[menu.id] ?? ""),
+        };
+      })
       .filter((row) => row.quantity_sold > 0);
 
 	    const clearSoldEntryQuery = supabase
@@ -3292,14 +3395,21 @@ function WorksheetClosingInner(
       .filter((menu) => !isOwnedByOther(issueLineOwners[menu.id]))
       .map((menu) => menu.id);
     const editableIssueOwnerIds = getEditableOwnerIds(issueLineOwners, editableIssueMenuIds);
+    const issueOwnerByMenuId = new Map(
+      editableIssueMenuIds.map((menuId) => [
+        menuId,
+        getPersistedOwner(issueLineOwners[menuId]),
+      ])
+    );
     const issuePayload = menuList
       .filter((menu) => editableIssueMenuIds.includes(menu.id))
       .map((menu) => {
         const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
+        const owner = issueOwnerByMenuId.get(menu.id) ?? currentStaffOwner();
         return {
           session_id: activeSessionId,
           menu_item_id: menu.id,
-          staff_id: staff.id,
+          staff_id: owner.staffId,
           quantity: parseQty(issue.quantity),
           reason: issue.reason,
           note: issue.note.trim(),
@@ -3338,13 +3448,17 @@ function WorksheetClosingInner(
 
     const nextIssueOwners = { ...issueLineOwners };
     for (const menuId of editableIssueMenuIds) delete nextIssueOwners[menuId];
-    for (const row of issuePayload) nextIssueOwners[row.menu_item_id] = currentStaffOwner();
+    for (const row of issuePayload) {
+      nextIssueOwners[row.menu_item_id] =
+        issueOwnerByMenuId.get(row.menu_item_id) ?? currentStaffOwner();
+    }
     setIssueLineOwners(nextIssueOwners);
     setIssueEntrySummaries((prev) =>
       replaceCurrentStaffSummaries(
         prev,
         editableIssueMenuIds,
-        new Map(issuePayload.map((row) => [row.menu_item_id, row.quantity]))
+        new Map(issuePayload.map((row) => [row.menu_item_id, row.quantity])),
+        issueOwnerByMenuId
       )
     );
   };
@@ -3399,14 +3513,21 @@ function WorksheetClosingInner(
         .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
         .map((ing) => ing.id);
       const editableOutOwnerIds = getEditableOwnerIds(outLineOwners, editableOutIngredientIds);
+      const outOwnerByIngredientId = new Map(
+        editableOutIngredientIds.map((ingredientId) => [
+          ingredientId,
+          getPersistedOwner(outLineOwners[ingredientId]),
+        ])
+      );
       const outLinePayload = ledgerFreshIngredients
         .filter((ing) => editableOutIngredientIds.includes(ing.id))
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
+          const owner = outOwnerByIngredientId.get(ing.id) ?? currentStaffOwner();
           return {
             session_id: activeSessionId,
             ingredient_id: ing.id,
-            staff_id: staff.id,
+            staff_id: owner.staffId,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
             photo_url: line.outPhotoUrl || null,
@@ -3444,13 +3565,17 @@ function WorksheetClosingInner(
 
       const nextOutOwners = { ...outLineOwners };
       for (const ingredientId of editableOutIngredientIds) delete nextOutOwners[ingredientId];
-      for (const row of outLinePayload) nextOutOwners[row.ingredient_id] = currentStaffOwner();
+      for (const row of outLinePayload) {
+        nextOutOwners[row.ingredient_id] =
+          outOwnerByIngredientId.get(row.ingredient_id) ?? currentStaffOwner();
+      }
       setOutLineOwners(nextOutOwners);
       setOutEntrySummaries((prev) =>
         replaceCurrentStaffSummaries(
           prev,
           editableOutIngredientIds,
-          new Map(outLinePayload.map((row) => [row.ingredient_id, row.quantity]))
+          new Map(outLinePayload.map((row) => [row.ingredient_id, row.quantity])),
+          outOwnerByIngredientId
         )
       );
 
@@ -3460,15 +3585,22 @@ function WorksheetClosingInner(
         .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
         .map((premix) => premix.id);
       const editablePremixOwnerIds = getEditableOwnerIds(premixLineOwners, editablePremixIds);
+      const premixOwnerById = new Map(
+        editablePremixIds.map((premixId) => [
+          premixId,
+          getPersistedOwner(premixLineOwners[premixId]),
+        ])
+      );
       const premixPayload = premixItems
         .filter((premix) => editablePremixIds.includes(premix.id))
         .map((premix) => {
           const recipe = getActivePremixRecipe(premix);
+          const owner = premixOwnerById.get(premix.id) ?? currentStaffOwner();
           return {
             session_id: activeSessionId,
             output_ingredient_id: premix.id,
             recipe_id: recipe?.id ?? "",
-            staff_id: staff.id,
+            staff_id: owner.staffId,
             batch_quantity: parseQty(premixQuantities[premix.id] ?? ""),
           };
         })
@@ -3503,13 +3635,17 @@ function WorksheetClosingInner(
 
       const nextPremixOwners = { ...premixLineOwners };
       for (const premixId of editablePremixIds) delete nextPremixOwners[premixId];
-      for (const row of premixPayload) nextPremixOwners[row.output_ingredient_id] = currentStaffOwner();
+      for (const row of premixPayload) {
+        nextPremixOwners[row.output_ingredient_id] =
+          premixOwnerById.get(row.output_ingredient_id) ?? currentStaffOwner();
+      }
       setPremixLineOwners(nextPremixOwners);
       setPremixEntrySummaries((prev) =>
         replaceCurrentStaffSummaries(
           prev,
           editablePremixIds,
-          new Map(premixPayload.map((row) => [row.output_ingredient_id, row.batch_quantity]))
+          new Map(premixPayload.map((row) => [row.output_ingredient_id, row.batch_quantity])),
+          premixOwnerById
         )
       );
 
@@ -3520,6 +3656,12 @@ function WorksheetClosingInner(
       const editableOpnameOwnerIds = getEditableOwnerIds(
         opnameLineOwners,
         editableOpnameIngredientIds
+      );
+      const opnameOwnerByIngredientId = new Map(
+        editableOpnameIngredients.map((ing) => [
+          ing.id,
+          getPersistedOwner(opnameLineOwners[ing.id]),
+        ])
       );
       const opnamePayload = editableOpnameIngredients.flatMap((ing) => {
         const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
@@ -3532,7 +3674,7 @@ function WorksheetClosingInner(
           {
             session_id: activeSessionId,
             ingredient_id: ing.id,
-            staff_id: staff.id,
+            staff_id: (opnameOwnerByIngredientId.get(ing.id) ?? currentStaffOwner()).staffId,
             closing_stock,
           },
         ];
@@ -3567,13 +3709,17 @@ function WorksheetClosingInner(
 
       const nextOpnameOwners = { ...opnameLineOwners };
       for (const ingredientId of editableOpnameIngredientIds) delete nextOpnameOwners[ingredientId];
-      for (const row of opnamePayload) nextOpnameOwners[row.ingredient_id] = currentStaffOwner();
+      for (const row of opnamePayload) {
+        nextOpnameOwners[row.ingredient_id] =
+          opnameOwnerByIngredientId.get(row.ingredient_id) ?? currentStaffOwner();
+      }
       setOpnameLineOwners(nextOpnameOwners);
       setOpnameEntrySummaries((prev) =>
         replaceCurrentStaffSummaries(
           prev,
           editableOpnameIngredientIds,
-          new Map(opnamePayload.map((row) => [row.ingredient_id, row.closing_stock]))
+          new Map(opnamePayload.map((row) => [row.ingredient_id, row.closing_stock])),
+          opnameOwnerByIngredientId
         )
       );
 
@@ -3666,14 +3812,21 @@ function WorksheetClosingInner(
         .filter((ing) => !isOwnedByOther(outLineOwners[ing.id]))
         .map((ing) => ing.id);
       const editableOutOwnerIds = getEditableOwnerIds(outLineOwners, editableOutIngredientIds);
+      const outOwnerByIngredientId = new Map(
+        editableOutIngredientIds.map((ingredientId) => [
+          ingredientId,
+          getPersistedOwner(outLineOwners[ingredientId]),
+        ])
+      );
       const outLinePayload = ledgerFreshIngredients
         .filter((ing) => editableOutIngredientIds.includes(ing.id))
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
+          const owner = outOwnerByIngredientId.get(ing.id) ?? currentStaffOwner();
           return {
             session_id: ensuredSessionId,
             ingredient_id: ing.id,
-            staff_id: submittingStaffId,
+            staff_id: owner.staffId,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
             photo_url: line.outPhotoUrl || null,
@@ -3715,15 +3868,22 @@ function WorksheetClosingInner(
         .filter((premix) => !isOwnedByOther(premixLineOwners[premix.id]))
         .map((premix) => premix.id);
       const editablePremixOwnerIds = getEditableOwnerIds(premixLineOwners, editablePremixIds);
+      const premixOwnerById = new Map(
+        editablePremixIds.map((premixId) => [
+          premixId,
+          getPersistedOwner(premixLineOwners[premixId]),
+        ])
+      );
       const premixPayload = premixItems
         .filter((premix) => editablePremixIds.includes(premix.id))
         .map((premix) => {
           const recipe = getActivePremixRecipe(premix);
+          const owner = premixOwnerById.get(premix.id) ?? currentStaffOwner();
           return {
             session_id: ensuredSessionId,
             output_ingredient_id: premix.id,
             recipe_id: recipe?.id ?? "",
-            staff_id: submittingStaffId,
+            staff_id: owner.staffId,
             batch_quantity: parseQty(premixQuantities[premix.id] ?? ""),
           };
         })
@@ -3764,6 +3924,12 @@ function WorksheetClosingInner(
         opnameLineOwners,
         editableOpnameIngredientIds
       );
+      const opnameOwnerByIngredientId = new Map(
+        editableOpnameIngredients.map((ing) => [
+          ing.id,
+          getPersistedOwner(opnameLineOwners[ing.id]),
+        ])
+      );
       const opnamePayload = editableOpnameIngredients.flatMap((ing) => {
         const raw = (lines[ing.id] ?? DEFAULT_LINE).closingStock;
         if (isBlankQty(raw)) return [];
@@ -3775,7 +3941,7 @@ function WorksheetClosingInner(
           {
             session_id: ensuredSessionId,
             ingredient_id: ing.id,
-            staff_id: submittingStaffId,
+            staff_id: (opnameOwnerByIngredientId.get(ing.id) ?? currentStaffOwner()).staffId,
             closing_stock,
           },
         ];
