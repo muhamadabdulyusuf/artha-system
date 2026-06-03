@@ -103,6 +103,11 @@ type MenuIssueLineState = {
   photoPublicId: string;
 };
 
+type WorksheetPhoto = {
+  url: string;
+  publicId: string;
+};
+
 type SoldEntrySummary = {
   staffId: string | null;
   staffName: string;
@@ -224,6 +229,83 @@ const DEFAULT_LINE: IngredientLineState = {
   outPhotoUrl: "",
   outPhotoPublicId: "",
 };
+
+function splitStoredPhotoValue(value: string | null | undefined): string[] {
+  return (value ?? "")
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinStoredPhotoValue(values: string[]): string {
+  return values.map((item) => item.trim()).filter(Boolean).join("; ");
+}
+
+function buildStoredPhotoItems(
+  photoUrl: string | null | undefined,
+  photoPublicId: string | null | undefined
+): WorksheetPhoto[] {
+  const urls = splitStoredPhotoValue(photoUrl);
+  const publicIds = splitStoredPhotoValue(photoPublicId);
+  return urls.map((url, index) => ({
+    url,
+    publicId: publicIds[index] ?? "",
+  }));
+}
+
+function appendStoredPhotos(
+  photoUrl: string | null | undefined,
+  photoPublicId: string | null | undefined,
+  photos: WorksheetPhoto[]
+): Pick<IngredientLineState, "outPhotoUrl" | "outPhotoPublicId"> {
+  return {
+    outPhotoUrl: joinStoredPhotoValue([
+      ...splitStoredPhotoValue(photoUrl),
+      ...photos.map((photo) => photo.url),
+    ]),
+    outPhotoPublicId: joinStoredPhotoValue([
+      ...splitStoredPhotoValue(photoPublicId),
+      ...photos.map((photo) => photo.publicId),
+    ]),
+  };
+}
+
+function removeStoredPhotoAt(
+  photoUrl: string | null | undefined,
+  photoPublicId: string | null | undefined,
+  indexToRemove: number
+): Pick<IngredientLineState, "outPhotoUrl" | "outPhotoPublicId"> {
+  return {
+    outPhotoUrl: joinStoredPhotoValue(
+      splitStoredPhotoValue(photoUrl).filter((_, index) => index !== indexToRemove)
+    ),
+    outPhotoPublicId: joinStoredPhotoValue(
+      splitStoredPhotoValue(photoPublicId).filter((_, index) => index !== indexToRemove)
+    ),
+  };
+}
+
+async function uploadWorksheetPhoto(file: File, folder: string): Promise<WorksheetPhoto> {
+  const formData = new FormData();
+  formData.set("file", file);
+  formData.set("folder", folder);
+
+  const response = await fetch("/api/cloudinary/upload", {
+    method: "POST",
+    body: formData,
+  });
+  const result = (await response.json()) as {
+    url?: string;
+    publicId?: string;
+    error?: string;
+  };
+
+  if (!response.ok || !result.url || !result.publicId) {
+    throw new Error(result.error ?? "Upload foto gagal.");
+  }
+
+  return { url: result.url, publicId: result.publicId };
+}
 
 const TAB_CONFIG: { id: WorksheetTab; label: string; icon: typeof Package }[] = [
   { id: "receive", label: "Receive", icon: Package },
@@ -1231,7 +1313,8 @@ function WorksheetClosingInner(
 
 	      const noteParts = [formatIssueReasonLabel(issue.reason)];
 	      if (issue.note.trim()) noteParts.push(issue.note.trim());
-	      if (issue.photoUrl) noteParts.push("Ada foto");
+	      const photoCount = splitStoredPhotoValue(issue.photoUrl).length;
+	      if (photoCount > 0) noteParts.push(`${photoCount} foto`);
 
 	      return [
 	        {
@@ -2138,31 +2221,34 @@ function WorksheetClosingInner(
     }));
   };
 
-  const updateOutPhoto = (
-    ingredientId: string,
-    value: { url: string; publicId: string }
-  ) => {
+  const appendOutPhotos = (ingredientId: string, photos: WorksheetPhoto[]) => {
+    if (photos.length === 0) return;
     if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
     setLines((prev) => ({
       ...prev,
       [ingredientId]: {
         ...(prev[ingredientId] ?? DEFAULT_LINE),
-        outPhotoUrl: value.url,
-        outPhotoPublicId: value.publicId,
+        ...appendStoredPhotos(
+          prev[ingredientId]?.outPhotoUrl,
+          prev[ingredientId]?.outPhotoPublicId,
+          photos
+        ),
       },
     }));
   };
 
-  const clearOutPhoto = (ingredientId: string) => {
+  const removeOutPhoto = (ingredientId: string, photoIndex: number) => {
     if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
-    setLines((prev) => ({
-      ...prev,
-      [ingredientId]: {
-        ...(prev[ingredientId] ?? DEFAULT_LINE),
-        outPhotoUrl: "",
-        outPhotoPublicId: "",
-      },
-    }));
+    setLines((prev) => {
+      const current = prev[ingredientId] ?? DEFAULT_LINE;
+      return {
+        ...prev,
+        [ingredientId]: {
+          ...current,
+          ...removeStoredPhotoAt(current.outPhotoUrl, current.outPhotoPublicId, photoIndex),
+        },
+      };
+    });
   };
 
   const syncReceiveAggregate = async (activeSessionId: string): Promise<Map<string, number>> => {
@@ -2622,33 +2708,21 @@ function WorksheetClosingInner(
     });
   };
 
-  const uploadOutStockPhoto = async (ingredientId: string, file: File | null) => {
-    if (!file || locked || isOwnedByOther(outLineOwners[ingredientId])) return;
+  const uploadOutStockPhotos = async (ingredientId: string, files: File[]) => {
+    if (files.length === 0 || locked || isOwnedByOther(outLineOwners[ingredientId])) return;
 
     setUploadingPhotoFor(ingredientId);
     setError(null);
 
     try {
-      const formData = new FormData();
-      formData.set("file", file);
-      formData.set("folder", `artha/outstock/${department}`);
+      const uploadedPhotos = await Promise.all(
+        files.map((file) => uploadWorksheetPhoto(file, `artha/outstock/${department}`))
+      );
 
-      const response = await fetch("/api/cloudinary/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const result = (await response.json()) as {
-        url?: string;
-        publicId?: string;
-        error?: string;
-      };
-
-      if (!response.ok || !result.url || !result.publicId) {
-        throw new Error(result.error ?? "Upload foto gagal.");
-      }
-
-      updateOutPhoto(ingredientId, { url: result.url, publicId: result.publicId });
-      showSuccessToast("Foto bukti out stock tersimpan.");
+      appendOutPhotos(ingredientId, uploadedPhotos);
+      showSuccessToast(
+        `${uploadedPhotos.length} foto bukti out stock tersimpan.`
+      );
     } catch (err) {
       showPlainErrorToast(err instanceof Error ? err.message : "Upload foto gagal.");
     } finally {
@@ -2673,33 +2747,29 @@ function WorksheetClosingInner(
     }));
   };
 
-  const uploadMenuIssuePhoto = async (menuId: string, file: File | null) => {
-    if (!file || locked || isOwnedByOther(issueLineOwners[menuId])) return;
+  const uploadMenuIssuePhotos = async (menuId: string, files: File[]) => {
+    if (files.length === 0 || locked || isOwnedByOther(issueLineOwners[menuId])) return;
 
     setUploadingPhotoFor(`issue-${menuId}`);
     setError(null);
 
     try {
-      const formData = new FormData();
-      formData.set("file", file);
-      formData.set("folder", `artha/menu-issue/${department}`);
+      const uploadedPhotos = await Promise.all(
+        files.map((file) => uploadWorksheetPhoto(file, `artha/menu-issue/${department}`))
+      );
+      const current = menuIssues[menuId] ?? createDefaultMenuIssue();
 
-      const response = await fetch("/api/cloudinary/upload", {
-        method: "POST",
-        body: formData,
+      updateMenuIssue(menuId, {
+        photoUrl: joinStoredPhotoValue([
+          ...splitStoredPhotoValue(current.photoUrl),
+          ...uploadedPhotos.map((photo) => photo.url),
+        ]),
+        photoPublicId: joinStoredPhotoValue([
+          ...splitStoredPhotoValue(current.photoPublicId),
+          ...uploadedPhotos.map((photo) => photo.publicId),
+        ]),
       });
-      const result = (await response.json()) as {
-        url?: string;
-        publicId?: string;
-        error?: string;
-      };
-
-      if (!response.ok || !result.url || !result.publicId) {
-        throw new Error(result.error ?? "Upload foto gagal.");
-      }
-
-      updateMenuIssue(menuId, { photoUrl: result.url, photoPublicId: result.publicId });
-      showSuccessToast("Foto bukti remake tersimpan.");
+      showSuccessToast(`${uploadedPhotos.length} foto bukti remake tersimpan.`);
     } catch (err) {
       showPlainErrorToast(err instanceof Error ? err.message : "Upload foto gagal.");
     } finally {
@@ -2707,8 +2777,13 @@ function WorksheetClosingInner(
     }
   };
 
-  const clearMenuIssuePhoto = (menuId: string) => {
-    updateMenuIssue(menuId, { photoUrl: "", photoPublicId: "" });
+  const removeMenuIssuePhoto = (menuId: string, photoIndex: number) => {
+    const current = menuIssues[menuId] ?? createDefaultMenuIssue();
+    const next = removeStoredPhotoAt(current.photoUrl, current.photoPublicId, photoIndex);
+    updateMenuIssue(menuId, {
+      photoUrl: next.outPhotoUrl,
+      photoPublicId: next.outPhotoPublicId,
+    });
   };
 
   const updatePremixQty = (premixId: string, value: string) => {
@@ -4550,6 +4625,10 @@ function WorksheetClosingInner(
                     const ownedByOther = isOwnedByOther(owner);
                     const inputDisabled = locked || ownedByOther;
                     const outSummaries = outEntrySummaries[ing.id] ?? [];
+                    const outPhotoItems = buildStoredPhotoItems(
+                      line.outPhotoUrl,
+                      line.outPhotoPublicId
+                    );
 
                     return (
                       <li
@@ -4622,12 +4701,12 @@ function WorksheetClosingInner(
                                   <input
                                     type="file"
                                     accept="image/*"
-                                    capture="environment"
+                                    multiple
                                     disabled={inputDisabled || isUploadingPhoto}
                                     onChange={(e) => {
-                                      const file = e.target.files?.[0] ?? null;
+                                      const files = Array.from(e.target.files ?? []);
                                       e.currentTarget.value = "";
-                                      void uploadOutStockPhoto(ing.id, file);
+                                      void uploadOutStockPhotos(ing.id, files);
                                     }}
                                     className="sr-only"
                                   />
@@ -4637,35 +4716,45 @@ function WorksheetClosingInner(
                                     ) : (
                                       <ImageIcon className="h-4 w-4" />
                                     )}
-                                    {line.outPhotoUrl ? "Ganti" : "Upload"}
+                                    {outPhotoItems.length > 0 ? "Tambah" : "Upload"}
                                   </span>
                                 </label>
                               </div>
-                              {line.outPhotoUrl ? (
-                                <div className="mt-3 flex items-center gap-3">
-                                  <img
-                                    src={line.outPhotoUrl}
-                                    alt={`Bukti out stock ${ing.name}`}
-                                    className="h-16 w-16 rounded-lg object-cover ring-1 ring-zinc-700"
-                                  />
-                                  <div className="min-w-0 flex-1">
-                                    <a
-                                      href={line.outPhotoUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="block truncate text-xs font-medium text-sky-300 hover:text-sky-200"
+                              {outPhotoItems.length > 0 ? (
+                                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                  {outPhotoItems.map((photo, photoIndex) => (
+                                    <div
+                                      key={`${photo.url}-${photoIndex}`}
+                                      className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-2"
                                     >
-                                      Lihat foto bukti
-                                    </a>
-                                    <button
-                                      type="button"
-                                      disabled={inputDisabled || isUploadingPhoto}
-                                      onClick={() => clearOutPhoto(ing.id)}
-                                      className="mt-1 text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
-                                    >
-                                      Hapus dari draft
-                                    </button>
-                                  </div>
+                                      <a href={photo.url} target="_blank" rel="noreferrer">
+                                        <img
+                                          src={photo.url}
+                                          alt={`Bukti out stock ${ing.name} ${photoIndex + 1}`}
+                                          className="aspect-square w-full rounded-md object-cover ring-1 ring-zinc-700"
+                                        />
+                                      </a>
+                                      <div className="mt-2 flex items-center justify-between gap-2">
+                                        <a
+                                          href={photo.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="truncate text-xs font-medium text-sky-300 hover:text-sky-200"
+                                        >
+                                          Foto {photoIndex + 1}
+                                        </a>
+                                        <button
+                                          type="button"
+                                          disabled={inputDisabled || isUploadingPhoto}
+                                          onClick={() => removeOutPhoto(ing.id, photoIndex)}
+                                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-red-300 transition hover:bg-red-500/10 hover:text-red-200 disabled:opacity-50"
+                                          aria-label={`Hapus foto out stock ${photoIndex + 1}`}
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
                                 </div>
                               ) : null}
                             </div>
@@ -4912,6 +5001,10 @@ function WorksheetClosingInner(
                       const ownedByOther = isOwnedByOther(owner);
                       const inputDisabled = locked || ownedByOther;
                       const issueSummaries = issueEntrySummaries[menu.id] ?? [];
+                      const issuePhotoItems = buildStoredPhotoItems(
+                        issue.photoUrl,
+                        issue.photoPublicId
+                      );
                       return (
                         <li
                           key={menu.id}
@@ -4984,28 +5077,43 @@ function WorksheetClosingInner(
                               <span className="text-xs font-medium text-zinc-400">
                                 Foto
                               </span>
-                              {issue.photoUrl ? (
-                                <button
-                                  type="button"
-                                  disabled={inputDisabled}
-                                  onClick={() => clearMenuIssuePhoto(menu.id)}
-                                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-red-500/40 px-2 text-xs font-medium text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  <X className="h-3.5 w-3.5" />
-                                  Hapus
-                                </button>
-                              ) : null}
                             </div>
-                            {issue.photoUrl ? (
-                              <a
-                                href={issue.photoUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="mb-3 flex items-center gap-2 text-xs text-indigo-300 underline decoration-indigo-500/40 underline-offset-4"
-                              >
-                                <ImageIcon className="h-4 w-4" />
-                                Lihat foto bukti
-                              </a>
+                            {issuePhotoItems.length > 0 ? (
+                              <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                {issuePhotoItems.map((photo, photoIndex) => (
+                                  <div
+                                    key={`${photo.url}-${photoIndex}`}
+                                    className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-2"
+                                  >
+                                    <a href={photo.url} target="_blank" rel="noreferrer">
+                                      <img
+                                        src={photo.url}
+                                        alt={`Bukti remake ${menu.menu_name} ${photoIndex + 1}`}
+                                        className="aspect-square w-full rounded-md object-cover ring-1 ring-zinc-700"
+                                      />
+                                    </a>
+                                    <div className="mt-2 flex items-center justify-between gap-2">
+                                      <a
+                                        href={photo.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="truncate text-xs font-medium text-indigo-300 hover:text-indigo-200"
+                                      >
+                                        Foto {photoIndex + 1}
+                                      </a>
+                                      <button
+                                        type="button"
+                                        disabled={inputDisabled || uploadingPhotoFor === `issue-${menu.id}`}
+                                        onClick={() => removeMenuIssuePhoto(menu.id, photoIndex)}
+                                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-red-300 transition hover:bg-red-500/10 hover:text-red-200 disabled:opacity-50"
+                                        aria-label={`Hapus foto remake ${photoIndex + 1}`}
+                                      >
+                                        <X className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             ) : null}
                             <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-medium text-zinc-200 active:bg-zinc-800">
                               {uploadingPhotoFor === `issue-${menu.id}` ? (
@@ -5015,15 +5123,19 @@ function WorksheetClosingInner(
                               )}
                               {uploadingPhotoFor === `issue-${menu.id}`
                                 ? "Upload foto..."
-                                : issue.photoUrl
-                                  ? "Ganti foto"
+                                : issuePhotoItems.length > 0
+                                  ? "Tambah foto"
                                   : "Upload foto"}
                               <input
                                 type="file"
                                 accept="image/*"
+                                multiple
                                 disabled={inputDisabled || uploadingPhotoFor === `issue-${menu.id}`}
                                 onChange={(e) => {
-                                  void uploadMenuIssuePhoto(menu.id, e.target.files?.[0] ?? null);
+                                  void uploadMenuIssuePhotos(
+                                    menu.id,
+                                    Array.from(e.target.files ?? [])
+                                  );
                                   e.currentTarget.value = "";
                                 }}
                                 className="hidden"

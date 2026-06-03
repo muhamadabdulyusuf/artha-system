@@ -57,6 +57,13 @@ const DEMAND_SCENARIO_LABEL: Record<DemandScenario, string> = {
   promo_kol: "Promo / KOL",
 };
 
+function splitStoredPhotoUrls(value: string | null | undefined): string[] {
+  return (value ?? "")
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 type StockLedgerExportRow = {
   business_date: string;
   ingredient_id: string;
@@ -3834,36 +3841,44 @@ export function MonitoringDashboard() {
                         </td>
                       </tr>
                     ) : (
-                      filteredMenuIssueRows.slice(0, 40).map((row) => (
-                        <tr key={row.id} className="hover:bg-zinc-950/50">
-                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
-                            {formatBusinessDateLabel(row.businessDate)}
-                          </td>
-                          <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
-                          <td className="px-3 py-2 text-slate-100">{row.menuName}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-red-200">
-                            {formatQtyId(row.quantity)}
-                          </td>
-                          <td className="px-3 py-2 text-amber-200">{row.reasonLabel}</td>
-                          <td className="max-w-xs px-3 py-2 text-slate-400">
-                            {row.note || "-"}
-                          </td>
-                          <td className="px-3 py-2">
-                            {row.photoUrl ? (
-                              <a
-                                href={row.photoUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-indigo-300 underline decoration-indigo-500/40 underline-offset-4"
-                              >
-                                Lihat
-                              </a>
-                            ) : (
-                              <span className="text-slate-600">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))
+                      filteredMenuIssueRows.slice(0, 40).map((row) => {
+                        const photoUrls = splitStoredPhotoUrls(row.photoUrl);
+                        return (
+                          <tr key={row.id} className="hover:bg-zinc-950/50">
+                            <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                              {formatBusinessDateLabel(row.businessDate)}
+                            </td>
+                            <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+                            <td className="px-3 py-2 text-slate-100">{row.menuName}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-red-200">
+                              {formatQtyId(row.quantity)}
+                            </td>
+                            <td className="px-3 py-2 text-amber-200">{row.reasonLabel}</td>
+                            <td className="max-w-xs px-3 py-2 text-slate-400">
+                              {row.note || "-"}
+                            </td>
+                            <td className="px-3 py-2">
+                              {photoUrls.length > 0 ? (
+                                <div className="flex flex-wrap gap-2">
+                                  {photoUrls.map((photoUrl, index) => (
+                                    <a
+                                      key={`${photoUrl}-${index}`}
+                                      href={photoUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-indigo-300 underline decoration-indigo-500/40 underline-offset-4"
+                                    >
+                                      Foto {index + 1}
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-slate-600">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

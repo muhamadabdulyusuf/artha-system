@@ -1,4 +1,7 @@
 -- Rebuild Artha database from zero using psql/Supabase CLI connection.
+-- Do not paste this file into Supabase SQL Editor.
+-- Run from terminal:
+--   psql "$DATABASE_URL" -f supabase/rebuild_from_zero.psql
 -- This file uses psql \ir include commands, so it is not supported by Supabase SQL Editor.
 -- For SQL Editor, run reset_public_schema.sql first, then paste each migration file in order.
 
@@ -42,6 +45,7 @@
 \ir migrations/037_restore_submitted_worksheet_locks.sql
 \ir migrations/038_business_day_calendar_date_comment.sql
 \ir migrations/039_harden_purchase_arrival_stock_apply.sql
+\ir migrations/040_multi_photo_column_comments.sql
 
 -- Optional JWT-only read-only viewer policies. Do not run for the current anon-client prototype.
 -- \ir seeds/viewer_rls_policies.sql
