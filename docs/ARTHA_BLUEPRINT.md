@@ -12,7 +12,7 @@
 | **Tujuan** | Cegah kebocoran modal, kurangi waste, pantau stok realtime |
 | **UX** | Mobile-first, idiot-proof, input angka saja (tanpa QR, tanpa form panjang) |
 | **Closing** | **Satu kali** per hari operasional (akumulasi semua shift), biasanya submit ~02:00 |
-| **Business Date** | Pergantian hari pembukuan jam **05:00**. Input jam **00:00–04:59** → dicatat ke **business date = kalender − 1 hari** |
+| **Business Date** | Mengikuti tanggal kalender outlet (`Asia/Jakarta`). Tanggal 1, 2, 3, dst. punya worksheet dan status submit masing-masing. |
 | **Bahan irisan** | Item sama (lemon, susu, dll.) = **record terpisah** per `department`; staf hanya lihat/input departemen sendiri |
 
 ---
@@ -65,26 +65,22 @@ Audit: semua perubahan angka tercatat lewat session + adjustment; tidak menghapu
 
 ---
 
-## 3. Business Date Custom
+## 3. Business Date
 
 ### 3.1 Aturan
 
 | Waktu sistem (wall clock) | Business date yang dipakai |
 |---------------------------|----------------------------|
-| 05:00 hari D s/d 04:59 hari D+1 | **D** (tanggal kalender hari D) |
-| 00:00–04:59 hari D+1 | **D** (bukan D+1) |
+| 00:00 s/d 23:59 hari D | **D** (tanggal kalender lokal outlet) |
 
-**Contoh:** Staf submit closing jam **02:00 Senin** → `business_date` = **Minggu** (bukan Senin).
+**Contoh:** Staf submit worksheet jam **02:00 Senin** → `business_date` = **Senin**.
 
 ### 3.2 Implementasi logika (konsep)
 
 ```
 function resolveBusinessDate(now):
   calendarDate = date(now)           // tanggal kalender lokal outlet
-  if hour(now) < 5:
-    return calendarDate - 1 day
-  else:
-    return calendarDate
+  return calendarDate
 ```
 
 - Semua API create/read worksheet, ledger, dan laporan **wajib** memakai `resolveBusinessDate()`, bukan `CURRENT_DATE` mentah.
@@ -234,4 +230,4 @@ Setelah blueprint disetujui: init repository, pilih stack (disarankan: API + DB 
 
 ---
 
-*Dokumen ini mengunci keputusan alignment Bos: department terpisah, single closing, business date 05:00, adjustment sebelum lock, ledger + resep berversi.*
+*Dokumen ini mengunci keputusan alignment Bos: department terpisah, single closing, business date kalender outlet, adjustment sebelum lock, ledger + resep berversi.*
