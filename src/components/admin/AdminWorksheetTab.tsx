@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { Building2, ClipboardList, ShoppingCart } from "lucide-react";
+import { useRef, useState } from "react";
+import { Building2, ClipboardList, Loader2, Save, ShoppingCart } from "lucide-react";
 import { PurchaseRequestTracker } from "@/components/admin/PurchaseRequestTracker";
-import { WorksheetClosing } from "@/components/staff/WorksheetClosing";
+import { WorksheetClosing, type WorksheetClosingHandle } from "@/components/staff/WorksheetClosing";
+import { TypoConfirmModal } from "@/components/worksheet/TypoConfirmModal";
+import type { TypoGuardPreviewEntry } from "@/lib/worksheet/typoGuard";
 import type { Department } from "@/lib/types/database";
 
 type AdminWorksheetWorkspace = "po" | Department;
@@ -21,9 +23,67 @@ const WORKSPACES: {
 
 export function AdminWorksheetTab() {
   const [activeWorkspace, setActiveWorkspace] = useState<AdminWorksheetWorkspace>("po");
+  const [isSavingAllDepartments, setIsSavingAllDepartments] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<{ message: string; variant: "success" | "error" } | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [combinedPreviewEntries, setCombinedPreviewEntries] = useState<TypoGuardPreviewEntry[]>([]);
+  const barWorksheetRef = useRef<WorksheetClosingHandle>(null);
+  const kitchenWorksheetRef = useRef<WorksheetClosingHandle>(null);
   const selected = WORKSPACES.find((item) => item.id === activeWorkspace) ?? WORKSPACES[0];
   const SelectedIcon = selected.icon;
   const department = activeWorkspace === "po" ? null : activeWorkspace;
+
+  const buildCombinedPreviewEntries = () => {
+    if (!barWorksheetRef.current || !kitchenWorksheetRef.current) {
+      throw new Error("Worksheet Bar dan Kitchen belum siap. Tunggu sebentar lalu coba lagi.");
+    }
+    const barEntries = barWorksheetRef.current?.buildPreviewEntries() ?? [];
+    const kitchenEntries = kitchenWorksheetRef.current?.buildPreviewEntries() ?? [];
+    return [
+      ...barEntries.map((entry) => ({
+        ...entry,
+        ingredientId: `bar-${entry.ingredientId}`,
+        ingredientName: `[Bar] ${entry.ingredientName}`,
+      })),
+      ...kitchenEntries.map((entry) => ({
+        ...entry,
+        ingredientId: `kitchen-${entry.ingredientId}`,
+        ingredientName: `[Kitchen] ${entry.ingredientName}`,
+      })),
+    ];
+  };
+
+  const openSaveAllPreview = () => {
+    try {
+      setCombinedPreviewEntries(buildCombinedPreviewEntries());
+      setPreviewOpen(true);
+      setSaveNotice(null);
+    } catch (err) {
+      setSaveNotice({
+        message: err instanceof Error ? err.message : "Gagal memuat preview worksheet.",
+        variant: "error",
+      });
+    }
+  };
+
+  const handleSaveAllDepartments = async () => {
+    if (isSavingAllDepartments) return;
+
+    setIsSavingAllDepartments(true);
+    setSaveNotice(null);
+    try {
+      await barWorksheetRef.current?.saveAllProgress();
+      await kitchenWorksheetRef.current?.saveAllProgress();
+      setSaveNotice({ message: "Worksheet Bar dan Kitchen tersimpan.", variant: "success" });
+    } catch (err) {
+      setSaveNotice({
+        message: err instanceof Error ? err.message : "Gagal menyimpan worksheet Bar dan Kitchen.",
+        variant: "error",
+      });
+    } finally {
+      setIsSavingAllDepartments(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -37,34 +97,87 @@ export function AdminWorksheetTab() {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1">
-          {WORKSPACES.map((item) => {
-            const Icon = item.icon;
-            const active = item.id === activeWorkspace;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveWorkspace(item.id)}
-                className={`flex min-h-10 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-semibold transition sm:gap-2 sm:px-3 sm:text-sm ${
-                  active
-                    ? "bg-emerald-400 text-zinc-950"
-                    : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          {department ? (
+            <button
+              type="button"
+              disabled={isSavingAllDepartments}
+              onClick={openSaveAllPreview}
+              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSavingAllDepartments ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              <span>{isSavingAllDepartments ? "Menyimpan…" : "Simpan Bar + Kitchen"}</span>
+            </button>
+          ) : null}
+
+          <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1">
+            {WORKSPACES.map((item) => {
+              const Icon = item.icon;
+              const active = item.id === activeWorkspace;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveWorkspace(item.id);
+                    setSaveNotice(null);
+                  }}
+                  className={`flex min-h-10 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-semibold transition sm:gap-2 sm:px-3 sm:text-sm ${
+                    active
+                      ? "bg-emerald-400 text-zinc-950"
+                      : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
+
+      {saveNotice ? (
+        <div
+          className={`rounded-lg border px-3 py-2 text-sm ${
+            saveNotice.variant === "success"
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+              : "border-red-500/40 bg-red-500/10 text-red-100"
+          }`}
+        >
+          {saveNotice.message}
+        </div>
+      ) : null}
+
+      <TypoConfirmModal
+        open={previewOpen}
+        warnings={[]}
+        previewEntries={combinedPreviewEntries}
+        onCancel={() => setPreviewOpen(false)}
+        onConfirm={() => {
+          setPreviewOpen(false);
+          void handleSaveAllDepartments();
+        }}
+      />
 
       {activeWorkspace === "po" ? <PurchaseRequestTracker /> : null}
 
       {department ? (
-        <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
-          <WorksheetClosing key={department} department={department} title={selected.title} embedded />
+        <div className="space-y-4">
+          <div className={activeWorkspace === "bar" ? "" : "hidden"}>
+            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
+              <WorksheetClosing ref={barWorksheetRef} department="bar" title="Worksheet Bar" embedded />
+            </div>
+          </div>
+          <div className={activeWorkspace === "kitchen" ? "" : "hidden"}>
+            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
+              <WorksheetClosing ref={kitchenWorksheetRef} department="kitchen" title="Worksheet Kitchen" embedded />
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

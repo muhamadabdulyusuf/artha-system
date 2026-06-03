@@ -2,12 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
   CalendarDays,
   CircleDollarSign,
+  ClipboardCheck,
+  Clock3,
   ExternalLink,
+  ListFilter,
   Loader2,
   PackageCheck,
+  PackageX,
   Pencil,
   RefreshCw,
   Save,
@@ -33,6 +38,7 @@ import type {
 } from "@/lib/types/database";
 
 type PurchaseRequestUpdate = Database["public"]["Tables"]["purchase_request_tracker"]["Update"];
+type MonitoringView = "all" | "need_order" | "ordered" | "process" | "received" | "cancelled";
 
 type TrackerForm = {
   request_date: string;
@@ -61,6 +67,20 @@ const PURCHASE_STATUSES: PurchaseRequestStatus[] = [
 ];
 
 const PO_STATUSES: PurchaseRequestPoStatus[] = ["Pending", "Approved", "Rejected"];
+
+const MONITORING_VIEWS: {
+  id: MonitoringView;
+  label: string;
+  description: string;
+  icon: typeof ShoppingCart;
+}[] = [
+  { id: "all", label: "Semua", description: "Semua PO", icon: ListFilter },
+  { id: "need_order", label: "Perlu Order", description: "Belum dibeli", icon: AlertTriangle },
+  { id: "ordered", label: "Sudah Order", description: "Sudah dibeli", icon: ShoppingCart },
+  { id: "process", label: "On Process", description: "Diproses/dikirim", icon: Clock3 },
+  { id: "received", label: "Diterima", description: "Sudah masuk stok", icon: ClipboardCheck },
+  { id: "cancelled", label: "Cancelled", description: "Batal/reject", icon: PackageX },
+];
 
 const STATUS_STYLE: Record<PurchaseRequestStatus, string> = {
   "Belum Dibeli": "border-red-500/40 bg-red-500/10 text-red-200",
@@ -120,6 +140,35 @@ function statusCount(rows: PurchaseRequestTrackerRow[], status: PurchaseRequestS
   return rows.filter((row) => row.purchase_status === status).length;
 }
 
+function monitoringCount(rows: PurchaseRequestTrackerRow[], view: MonitoringView): number {
+  return rows.filter((row) => rowMatchesMonitoringView(row, view)).length;
+}
+
+function rowMatchesMonitoringView(row: PurchaseRequestTrackerRow, view: MonitoringView): boolean {
+  if (view === "all") return true;
+  if (view === "need_order") {
+    return row.purchase_status === "Belum Dibeli" && row.po_status !== "Rejected";
+  }
+  if (view === "ordered") return row.purchase_status === "Purchased";
+  if (view === "process") {
+    return row.purchase_status === "On Progress" || row.purchase_status === "Shipped";
+  }
+  if (view === "received") return row.purchase_status === "Arrived";
+  return row.purchase_status === "Cancelled" || row.po_status === "Rejected";
+}
+
+function isOverdue(row: PurchaseRequestTrackerRow): boolean {
+  if (!row.estimated_arrival_date || row.purchase_status === "Arrived" || row.purchase_status === "Cancelled") {
+    return false;
+  }
+  return row.estimated_arrival_date < todayIso();
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return "-";
+  return value;
+}
+
 function departmentLabel(department: PurchaseRequestDepartment): string {
   if (department === "bar") return "Bar";
   if (department === "kitchen") return "Kitchen";
@@ -158,6 +207,7 @@ export function PurchaseRequestTracker() {
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [form, setForm] = useState<TrackerForm>(() => newForm());
   const [search, setSearch] = useState("");
+  const [activeView, setActiveView] = useState<MonitoringView>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
@@ -213,23 +263,41 @@ export function PurchaseRequestTracker() {
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return rows;
-    return rows.filter((row) =>
-      [
-        row.item_name,
-        row.department,
-        row.supplier_name,
-        row.supplier_contact,
-        row.pic_request_name,
-        row.po_status,
-        row.purchase_status,
-        row.note,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [rows, search]);
+    return rows.filter((row) => {
+      if (!rowMatchesMonitoringView(row, activeView)) return false;
+      if (!query) return true;
+      return [
+          row.item_name,
+          row.department,
+          row.supplier_name,
+          row.supplier_contact,
+          row.pic_request_name,
+          row.po_status,
+          row.purchase_status,
+          row.note,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+    });
+  }, [activeView, rows, search]);
+
+  const dashboardMetrics = useMemo(() => {
+    const openRows = rows.filter((row) => row.purchase_status !== "Arrived" && row.purchase_status !== "Cancelled");
+    const overdueRows = rows.filter(isOverdue);
+    return {
+      needOrder: monitoringCount(rows, "need_order"),
+      ordered: monitoringCount(rows, "ordered"),
+      process: monitoringCount(rows, "process"),
+      received: monitoringCount(rows, "received"),
+      cancelled: monitoringCount(rows, "cancelled"),
+      overdue: overdueRows.length,
+      openEstimatedTotal: openRows.reduce((sum, row) => sum + Number(row.total_price ?? 0), 0),
+      receivedValue: rows
+        .filter((row) => row.purchase_status === "Arrived")
+        .reduce((sum, row) => sum + Number(row.total_price ?? 0), 0),
+    };
+  }, [rows]);
 
   const selectedSupplier = suppliers.find((item) => item.id === form.supplier_id) ?? null;
   const estimatedTotal = parseNumber(form.qty) * parseNumber(form.unit_price);
@@ -451,8 +519,10 @@ export function PurchaseRequestTracker() {
             <ShoppingCart className="h-5 w-5 text-emerald-300" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-base font-semibold text-zinc-100">PO Tracker</h3>
-            <p className="mt-0.5 truncate text-sm text-zinc-500">{rows.length} request</p>
+            <h3 className="text-base font-semibold text-zinc-100">Purchase Order Control</h3>
+            <p className="mt-0.5 truncate text-sm text-zinc-500">
+              {rows.length} request · open value {formatRupiah(dashboardMetrics.openEstimatedTotal)}
+            </p>
           </div>
         </div>
         <button
@@ -462,6 +532,76 @@ export function PurchaseRequestTracker() {
         >
           <RefreshCw className="h-4 w-4" />
           Refresh
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <button
+          type="button"
+          onClick={() => setActiveView("need_order")}
+          className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
+            activeView === "need_order"
+              ? "border-red-400 bg-red-500/15"
+              : "border-zinc-800 bg-zinc-900/35 hover:border-red-500/50"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-red-200">Perlu Order</span>
+            <AlertTriangle className="h-4 w-4 text-red-300" />
+          </div>
+          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.needOrder}</p>
+          <p className="mt-1 text-xs text-zinc-500">Belum dibeli atau approval pending</p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveView("ordered")}
+          className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
+            activeView === "ordered"
+              ? "border-indigo-400 bg-indigo-500/15"
+              : "border-zinc-800 bg-zinc-900/35 hover:border-indigo-500/50"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-indigo-200">Sudah Order</span>
+            <ShoppingCart className="h-4 w-4 text-indigo-300" />
+          </div>
+          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.ordered}</p>
+          <p className="mt-1 text-xs text-zinc-500">Status Purchased</p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveView("process")}
+          className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
+            activeView === "process"
+              ? "border-sky-400 bg-sky-500/15"
+              : "border-zinc-800 bg-zinc-900/35 hover:border-sky-500/50"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-200">On Process</span>
+            <Clock3 className="h-4 w-4 text-sky-300" />
+          </div>
+          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.process}</p>
+          <p className="mt-1 text-xs text-zinc-500">{dashboardMetrics.overdue} lewat ETA</p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveView("received")}
+          className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
+            activeView === "received"
+              ? "border-emerald-400 bg-emerald-500/15"
+              : "border-zinc-800 bg-zinc-900/35 hover:border-emerald-500/50"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-200">Diterima</span>
+            <ClipboardCheck className="h-4 w-4 text-emerald-300" />
+          </div>
+          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.received}</p>
+          <p className="mt-1 text-xs text-zinc-500">{formatRupiah(dashboardMetrics.receivedValue)} masuk stok</p>
         </button>
       </div>
 
@@ -751,17 +891,45 @@ export function PurchaseRequestTracker() {
       <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/30">
         <div className="flex flex-col gap-3 border-b border-zinc-800 p-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-sm font-semibold text-zinc-100">Request Queue</p>
-            <p className="mt-0.5 text-xs text-zinc-500">{filteredRows.length} request</p>
+            <p className="text-sm font-semibold text-zinc-100">Monitoring PO</p>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              {filteredRows.length} request · {MONITORING_VIEWS.find((view) => view.id === activeView)?.description}
+            </p>
           </div>
-          <div className="relative w-full lg:w-96">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Cari barang, supplier, status, PIC..."
-              className="min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30"
-            />
+          <div className="flex w-full flex-col gap-2 lg:w-auto lg:min-w-[520px]">
+            <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1 sm:grid-cols-6">
+              {MONITORING_VIEWS.map((view) => {
+                const ViewIcon = view.icon;
+                const active = activeView === view.id;
+                return (
+                  <button
+                    key={view.id}
+                    type="button"
+                    onClick={() => setActiveView(view.id)}
+                    className={`flex min-h-9 items-center justify-center gap-1.5 rounded-md px-2 text-[11px] font-semibold transition ${
+                      active
+                        ? "bg-emerald-400 text-zinc-950"
+                        : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                    }`}
+                  >
+                    <ViewIcon className="h-3.5 w-3.5" />
+                    <span className="truncate">{view.label}</span>
+                    <span className={active ? "text-zinc-800" : "text-zinc-600"}>
+                      {monitoringCount(rows, view.id)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Cari barang, supplier, status, PIC..."
+                className="min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30"
+              />
+            </div>
           </div>
         </div>
 
@@ -777,6 +945,7 @@ export function PurchaseRequestTracker() {
             {filteredRows.map((row, index) => {
               const rowLocked = isLockedPurchaseRow(row);
               const isDeleting = deletingRowId === row.id;
+              const overdue = isOverdue(row);
 
               return (
                 <article
@@ -794,8 +963,13 @@ export function PurchaseRequestTracker() {
 	                        <span className="rounded-md bg-zinc-950 px-2 py-0.5 capitalize">
 	                          {departmentLabel(row.department)}
 	                        </span>
-	                        <span>{row.request_date}</span>
+	                        <span>{formatDate(row.request_date)}</span>
 	                        <span>{row.ingredient_id ? "Stok master" : "Manual"}</span>
+                          {overdue ? (
+                            <span className="rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 font-semibold text-red-200">
+                              Lewat ETA
+                            </span>
+                          ) : null}
 	                      </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button
@@ -903,6 +1077,62 @@ export function PurchaseRequestTracker() {
                       className={FIELD_CLASS}
                     />
                   </label>
+                  <div className="sm:col-span-2">
+                    <span className={LABEL_CLASS}>Quick Actions</span>
+                    <div className="mt-1 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={!canEdit || rowLocked || row.po_status === "Approved"}
+                        onClick={() => void updateRow(row, { po_status: "Approved" })}
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/35 px-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canEdit || rowLocked || row.purchase_status === "Purchased"}
+                        onClick={() =>
+                          void updateRow(row, {
+                            po_status: "Approved",
+                            purchase_status: "Purchased",
+                          })
+                        }
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-indigo-500/35 px-2 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <ShoppingCart className="h-3.5 w-3.5" />
+                        Ordered
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canEdit || rowLocked || row.purchase_status === "Shipped"}
+                        onClick={() =>
+                          void updateRow(row, {
+                            po_status: "Approved",
+                            purchase_status: "Shipped",
+                          })
+                        }
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-sky-500/35 px-2 text-xs font-semibold text-sky-200 transition hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Truck className="h-3.5 w-3.5" />
+                        Shipped
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canEdit || rowLocked}
+                        onClick={() =>
+                          void updateRow(row, {
+                            po_status: "Approved",
+                            purchase_status: "Arrived",
+                          })
+                        }
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/35 px-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <PackageCheck className="h-3.5 w-3.5" />
+                        Terima
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid gap-2">
@@ -929,7 +1159,7 @@ export function PurchaseRequestTracker() {
                   <div className="grid grid-cols-2 gap-2 text-xs text-zinc-500">
                     <div className="flex items-center gap-1.5">
                       <CalendarDays className="h-3.5 w-3.5" />
-                      ETA {row.estimated_arrival_date || "-"}
+                      ETA {formatDate(row.estimated_arrival_date)}
                     </div>
                     <div className="flex items-center gap-1.5">
                       <UserRound className="h-3.5 w-3.5" />

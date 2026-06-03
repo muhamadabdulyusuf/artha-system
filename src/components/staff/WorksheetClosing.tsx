@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import type { ForwardedRef } from "react";
 import {
   AlertTriangle,
   Loader2,
@@ -202,6 +203,11 @@ type WorksheetClosingProps = {
   department: Department;
   title: string;
   embedded?: boolean;
+};
+
+export type WorksheetClosingHandle = {
+  saveAllProgress: () => Promise<void>;
+  buildPreviewEntries: () => TypoGuardPreviewEntry[];
 };
 
 type WorksheetEditRequestSummary = Pick<
@@ -794,7 +800,10 @@ async function fetchLedgerClosingMap(
   return map;
 }
 
-export function WorksheetClosing({ department, title, embedded = false }: WorksheetClosingProps) {
+function WorksheetClosingInner(
+  { department, title, embedded = false }: WorksheetClosingProps,
+  ref: ForwardedRef<WorksheetClosingHandle>
+) {
   const router = useRouter();
   const supabase = getSupabaseClient();
 
@@ -868,6 +877,10 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   );
 
   const normalizedSearch = searchTerm.trim().toLowerCase();
+  const ingredientById = useMemo(
+    () => new Map(ingredients.map((ingredient) => [ingredient.id, ingredient])),
+    [ingredients]
+  );
 
   const filteredIngredients = useMemo(() => {
     const sorted = [...ingredients].sort((a, b) =>
@@ -950,21 +963,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       staffRole: staff?.role ?? null,
     }),
     [staff?.id, staff?.name, staff?.role]
-  );
-
-  const getReceiveStockQtyForIngredient = useCallback(
-    (ingredient: Pick<IngredientRow, "id" | "purchase_to_stock_factor">) => {
-      const savedReceiveQty = receiveInputToStockQty(
-        ingredient,
-        lines[ingredient.id]?.inQty ?? ""
-      );
-      const pendingReceiveQty = receiveInputToStockQty(
-        ingredient,
-        receiveEntryInputs[ingredient.id] ?? ""
-      );
-      return savedReceiveQty + pendingReceiveQty;
-    },
-    [lines, receiveEntryInputs]
   );
 
 	  const getOpnameBaseStockQtyForIngredient = useCallback(
@@ -1112,6 +1110,15 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 	        .reduce((sum, entry) => sum + entry.quantity, 0),
 	    [canOverrideWorksheetOwnership, isCurrentStaffOwner]
 	  );
+
+  const getPendingReceiveStockDeltaForIngredient = useCallback(
+    (ingredient: Pick<IngredientRow, "id" | "purchase_to_stock_factor">) => {
+      const savedInputQty = editableSummaryQuantity(receiveEntrySummaries[ingredient.id] ?? []);
+      const pendingInputQty = parseQty(receiveEntryInputs[ingredient.id] ?? "");
+      return receiveInputToStockQty(ingredient, String(pendingInputQty - savedInputQty));
+    },
+    [editableSummaryQuantity, receiveEntryInputs, receiveEntrySummaries]
+  );
 
 	  const shouldShowPreviewEntry = useCallback(
 	    (rawValue: string | undefined, savedQty: number) =>
@@ -2006,6 +2013,26 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
 	    const warnings = findTypoGuardWarnings(ingredients, lines, fields);
 	    runWithPreviewConfirm(warnings, previewEntries, action);
 	  };
+
+  const buildAllWorksheetPreviewEntries = useCallback(
+    () => [
+      ...buildReceivePreviewEntries(),
+      ...buildLinePreviewEntries("outQty", outEntrySummaries),
+      ...buildLinePreviewEntries("closingStock", opnameEntrySummaries),
+      ...buildPremixPreviewEntries(),
+      ...buildIssuePreviewEntries(),
+      ...buildSoldPreviewEntries(),
+    ],
+    [
+      buildIssuePreviewEntries,
+      buildLinePreviewEntries,
+      buildPremixPreviewEntries,
+      buildReceivePreviewEntries,
+      buildSoldPreviewEntries,
+      opnameEntrySummaries,
+      outEntrySummaries,
+    ]
+  );
 
   const clearDraftAfterSuccess = () => {
     if (businessDate) clearWorksheetDraft(department, businessDate);
@@ -3270,7 +3297,16 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
   };
 
   const handleSaveAllProgress = async () => {
-    if (locked || isSavingAll || isSubmitting || !staff?.id) return;
+    if (isLoading) {
+      throw new Error(`Worksheet ${department} masih memuat. Tunggu sebentar lalu coba lagi.`);
+    }
+    if (locked) return;
+    if (isSavingAll || isSubmitting) {
+      throw new Error(`Worksheet ${department} sedang diproses.`);
+    }
+    if (!staff?.id) {
+      throw new Error("Sesi staf tidak ditemukan. Silakan logout dan login ulang.");
+    }
 
     const date = businessDate || resolveWorksheetBusinessDate();
     setIsSavingAll(true);
@@ -3474,6 +3510,20 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
       setIsSavingAll(false);
     }
   };
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      saveAllProgress: handleSaveAllProgress,
+      buildPreviewEntries: () => {
+        if (isLoading) {
+          throw new Error(`Worksheet ${department} masih memuat. Tunggu sebentar lalu coba lagi.`);
+        }
+        return buildAllWorksheetPreviewEntries();
+      },
+    }),
+    [buildAllWorksheetPreviewEntries, department, handleSaveAllProgress, isLoading]
+  );
 
   const handleSubmit = async () => {
     if (isSubmitting) {
@@ -4020,15 +4070,6 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                 : "Menyimpan opname…";
 
   const activeTabEnabled = worksheetFeatures[activeTab];
-
-  const buildAllWorksheetPreviewEntries = () => [
-    ...buildReceivePreviewEntries(),
-    ...buildLinePreviewEntries("outQty", outEntrySummaries),
-    ...buildLinePreviewEntries("closingStock", opnameEntrySummaries),
-    ...buildPremixPreviewEntries(),
-    ...buildIssuePreviewEntries(),
-    ...buildSoldPreviewEntries(),
-  ];
 
   const stickySaveAll = () =>
     runWithTypoGuard(
@@ -4718,6 +4759,7 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                       const ownedByOther = isOwnedByOther(owner);
                       const inputDisabled = locked || ownedByOther;
                       const premixSummaries = premixEntrySummaries[premix.id] ?? [];
+                      const savedEditablePremixQty = editableSummaryQuantity(premixSummaries);
 
                       return (
                         <li
@@ -4789,36 +4831,48 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
                               <ul className="space-y-1.5 text-xs">
                                 {recipe.recipe_component.map((component) => {
                                   const componentIng = component.ingredient;
+                                  const liveComponentIng = componentIng
+                                    ? ingredientById.get(componentIng.id) ?? componentIng
+                                    : null;
                                   const required = Number(component.qty_per_batch) * qty;
-                                  const receive = componentIng
-                                    ? getReceiveStockQtyForIngredient(componentIng)
+                                  const receiveDelta = liveComponentIng
+                                    ? getPendingReceiveStockDeltaForIngredient(liveComponentIng)
                                     : 0;
-                                  const baseStock = componentIng
-                                    ? getOpnameBaseStockQtyForIngredient(componentIng)
+                                  const baseStock = liveComponentIng
+                                    ? getOpnameBaseStockQtyForIngredient(liveComponentIng)
                                     : { quantity: 0, source: "master" as const };
-                                  const available = componentIng
-                                    ? baseStock.quantity + receive
+                                  const savedEditableUsage =
+                                    Number(component.qty_per_batch) * savedEditablePremixQty;
+                                  const available = liveComponentIng
+                                    ? baseStock.quantity + receiveDelta + savedEditableUsage
                                     : 0;
-                                  const unlimited = componentIng?.is_stock_tracked === false;
+                                  const unlimited = liveComponentIng?.is_stock_tracked === false;
                                   const enough = unlimited || required <= available;
                                   return (
                                     <li
                                       key={component.ingredient_id}
                                       className="flex justify-between gap-3 text-zinc-300"
                                     >
-                                      <span>{componentIng?.name ?? component.ingredient_id}</span>
+                                      <span>{liveComponentIng?.name ?? componentIng?.name ?? component.ingredient_id}</span>
                                       <span className="flex flex-col items-end text-right">
                                         <span className={enough ? "text-zinc-400" : "text-red-300"}>
-                                          {required.toLocaleString("id-ID")} {componentIng?.unit ?? ""}{" "}
+                                          {required.toLocaleString("id-ID")} {liveComponentIng?.unit ?? componentIng?.unit ?? ""}{" "}
                                           {unlimited
                                             ? "(non-stok)"
                                             : `/ tersedia ${available.toLocaleString("id-ID")}`}
                                         </span>
-                                        {!unlimited && receive > 0 ? (
+                                        {!unlimited && receiveDelta !== 0 ? (
+                                          <span className={`text-[11px] ${receiveDelta > 0 ? "text-emerald-300" : "text-amber-300"}`}>
+                                            {baseStock.source === "opname" ? "opname" : "stok"}{" "}
+                                            {baseStock.quantity.toLocaleString("id-ID")}{" "}
+                                            {receiveDelta > 0 ? "+ receive" : "- koreksi receive"}{" "}
+                                            {Math.abs(receiveDelta).toLocaleString("id-ID")}
+                                          </span>
+                                        ) : !unlimited && savedEditableUsage > 0 ? (
                                           <span className="text-[11px] text-emerald-300">
                                             {baseStock.source === "opname" ? "opname" : "stok"}{" "}
-                                            {baseStock.quantity.toLocaleString("id-ID")} + receive{" "}
-                                            {receive.toLocaleString("id-ID")}
+                                            {baseStock.quantity.toLocaleString("id-ID")} + premix tersimpan{" "}
+                                            {savedEditableUsage.toLocaleString("id-ID")}
                                           </span>
                                         ) : !unlimited && baseStock.source === "opname" ? (
                                           <span className="text-[11px] text-indigo-300">
@@ -5126,3 +5180,8 @@ export function WorksheetClosing({ department, title, embedded = false }: Worksh
     </main>
   );
 }
+
+export const WorksheetClosing = forwardRef<WorksheetClosingHandle, WorksheetClosingProps>(
+  WorksheetClosingInner
+);
+WorksheetClosing.displayName = "WorksheetClosing";
