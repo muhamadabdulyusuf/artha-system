@@ -2088,12 +2088,16 @@ function WorksheetClosingInner(
   }, [staff, loadData]);
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!staff) return;
 
     let cancelled = false;
     const refresh = async () => {
       try {
-        await refreshLiveWorksheetSummaries(sessionId);
+        if (sessionId) {
+          await refreshLiveWorksheetSummaries(sessionId);
+        } else {
+          await refreshIngredientStockFromDb();
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Gagal memuat update worksheet.");
@@ -2101,13 +2105,21 @@ function WorksheetClosingInner(
       }
     };
 
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 8000);
+    const timer = window.setInterval(() => void refresh(), 5000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [refreshLiveWorksheetSummaries, sessionId]);
+  }, [refreshIngredientStockFromDb, refreshLiveWorksheetSummaries, sessionId, staff]);
 
   useWorksheetDraft({
     department,
