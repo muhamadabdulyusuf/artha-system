@@ -1208,7 +1208,7 @@ export function PurchaseRequestTracker() {
                     <span className={LABEL_CLASS}>Status PO</span>
                     <select
                       value={row.po_status}
-	                      disabled={!canEdit || rowLocked}
+                      disabled={!canEdit || rowLocked}
                       onChange={(event) =>
                         void updateRow(row, {
                           po_status: event.target.value as PurchaseRequestPoStatus,
@@ -1227,7 +1227,7 @@ export function PurchaseRequestTracker() {
                     <span className={LABEL_CLASS}>Pembelian</span>
                     <select
                       value={row.purchase_status}
-	                      disabled={!canEdit || rowLocked}
+                      disabled={!canEdit || rowLocked}
                       onChange={(event) =>
                         void updateRow(row, {
                           purchase_status: event.target.value as PurchaseRequestStatus,
@@ -1242,20 +1242,59 @@ export function PurchaseRequestTracker() {
                       ))}
                     </select>
                   </label>
-                  <label className="sm:col-span-2">
-                    <span className={LABEL_CLASS}>Tanggal Datang</span>
-                    <input
-                      type="date"
-                      value={row.arrival_date ?? ""}
-	                      disabled={!canEdit || rowLocked}
-                      onChange={(event) =>
-                        void updateRow(row, {
-                          arrival_date: event.target.value || null,
-                        })
-                      }
-                      className={FIELD_CLASS}
-                    />
-                  </label>
+                  <div className="sm:col-span-2">
+                    <span className={LABEL_CLASS}>Adjustment Tanggal</span>
+                    <div className="mt-1 grid gap-2 sm:grid-cols-3">
+                      <label>
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-600">
+                          Request
+                        </span>
+                        <input
+                          type="date"
+                          value={row.request_date}
+                          disabled={!canEdit || rowLocked}
+                          onChange={(event) =>
+                            void updateRow(row, {
+                              request_date: event.target.value || todayIso(),
+                            })
+                          }
+                          className={FIELD_CLASS}
+                        />
+                      </label>
+                      <label>
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-600">
+                          ETA
+                        </span>
+                        <input
+                          type="date"
+                          value={row.estimated_arrival_date ?? ""}
+                          disabled={!canEdit || rowLocked}
+                          onChange={(event) =>
+                            void updateRow(row, {
+                              estimated_arrival_date: event.target.value || null,
+                            })
+                          }
+                          className={FIELD_CLASS}
+                        />
+                      </label>
+                      <label>
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-600">
+                          Datang
+                        </span>
+                        <input
+                          type="date"
+                          value={row.arrival_date ?? ""}
+                          disabled={!canEdit || rowLocked}
+                          onChange={(event) =>
+                            void updateRow(row, {
+                              arrival_date: event.target.value || null,
+                            })
+                          }
+                          className={FIELD_CLASS}
+                        />
+                      </label>
+                    </div>
+                  </div>
                   <div className="sm:col-span-2">
                     <span className={LABEL_CLASS}>Quick Actions</span>
                     <div className="mt-1 grid grid-cols-2 gap-2">

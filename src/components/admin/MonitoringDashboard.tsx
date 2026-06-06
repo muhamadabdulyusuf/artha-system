@@ -3888,10 +3888,10 @@ export function MonitoringDashboard() {
             </>
           ) : null}
 
-          {activeMonitoringTab === "overview" || activeMonitoringTab === "sales" ? (
+          {activeMonitoringTab === "overview" ? (
           <section className="grid gap-4 lg:grid-cols-2">
             <TopSellingWidget
-              title="Top 5 Best-Selling Beverages"
+              title="Sales Contributor Beverages"
               items={filteredTopBeverages}
               unitLabel="cup"
               barColorClass="bg-indigo-500"
@@ -3902,7 +3902,7 @@ export function MonitoringDashboard() {
               }
             />
             <TopSellingWidget
-              title="Top 5 Best-Selling Foods"
+              title="Sales Contributor Foods"
               items={filteredTopFoods}
               unitLabel="porsi"
               barColorClass="bg-amber-500"
@@ -4672,10 +4672,9 @@ function buildTopSellingList(
   aggregate: Map<string, { menu_name: string; quantity_sold: number }>
 ): TopSellingEntry[] {
   const sorted = Array.from(aggregate.values()).sort((a, b) => b.quantity_sold - a.quantity_sold);
-  const topFive = sorted.slice(0, 5);
-  const totalQty = topFive.reduce((sum, item) => sum + item.quantity_sold, 0);
+  const totalQty = sorted.reduce((sum, item) => sum + item.quantity_sold, 0);
 
-  return topFive.map((item) => ({
+  return sorted.map((item) => ({
     menu_name: item.menu_name,
     quantity_sold: item.quantity_sold,
     sharePercent: totalQty > 0 ? (item.quantity_sold / totalQty) * 100 : 0,
