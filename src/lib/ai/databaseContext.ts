@@ -26,6 +26,32 @@ type MenuSalesRow = {
   is_active: boolean;
   quantity_sold: number;
   revenue: number;
+  active_sales_days: number;
+  average_daily_sold_30d: number;
+  average_daily_revenue_30d: number;
+};
+
+type RecipeVersionContextRow = {
+  id: string;
+  menu_item_id: string;
+  is_active: boolean;
+};
+
+type RecipeLineContextRow = {
+  recipe_version_id: string;
+  ingredient_id: string;
+  quantity_per_serving: number;
+};
+
+type MenuIngredientUsageRow = {
+  menu: string;
+  department: Department;
+  active: boolean;
+  ingredient: string;
+  qtyPerServing: number;
+  unit: string;
+  sold30d: number;
+  avgDailySold30d: number;
 };
 
 type QueryIntent =
@@ -54,6 +80,7 @@ export type DatabaseAssistantContext = {
     lowStockIngredients: unknown[];
     matchedIngredients: unknown[];
     matchedMenus: unknown[];
+    menuIngredientMatches: unknown[];
     salesLast30Days: unknown[];
     openPurchaseRequests: unknown[];
     matchedPurchaseRequests: unknown[];
@@ -68,6 +95,8 @@ export type DatabaseAssistantContext = {
 
 const STOP_WORDS = new Set([
   "apa",
+  "aja",
+  "saja",
   "yang",
   "gue",
   "gua",
@@ -93,6 +122,14 @@ const STOP_WORDS = new Set([
   "data",
   "menu",
   "bahan",
+  "pakai",
+  "dipakai",
+  "menggunakan",
+  "hari",
+  "terakhir",
+  "penjualan",
+  "average",
+  "rata",
 ]);
 
 function addIsoDays(isoDate: string, days: number): string {
@@ -133,10 +170,12 @@ function detectIntents(question: string): QueryIntent[] {
   const intents = new Set<QueryIntent>();
 
   if (/stok|stock|bahan|ingredient|minimum|low|habis|kurang|opname|adjust/.test(q)) intents.add("stock");
-  if (/po|purchase|order|supplier|vendor|belanja|datang|dibeli|beli/.test(q)) intents.add("po");
-  if (/sales|jual|terjual|sold|revenue|omzet|best|slow|grade|ranking|rank/.test(q)) intents.add("sales");
-  if (/menu|resep|recipe|food|beverage|bar|kitchen/.test(q)) intents.add("menu");
-  if (/supplier|vendor|kontak|phone|wa|whatsapp/.test(q)) intents.add("supplier");
+  if (/\bpo\b|purchase|order|supplier|vendor|belanja|datang|dibeli|\bbeli\b/.test(q)) intents.add("po");
+  if (/sales|jual|terjual|sold|revenue|omzet|best|slow|grade|ranking|rank|average|rata/.test(q)) {
+    intents.add("sales");
+  }
+  if (/menu|resep|recipe|food|beverage|\bbar\b|kitchen|pakai|dipakai|menggunakan/.test(q)) intents.add("menu");
+  if (/supplier|vendor|kontak|phone|\bwa\b|whatsapp/.test(q)) intents.add("supplier");
   if (/ledger|closing|opening|variance|selisih|pemakaian|usage/.test(q)) intents.add("ledger");
   if (/remake|complaint|komplain|issue|rusak|gosong|asin|rambut/.test(q)) intents.add("issue");
   if (/event|promo|kol|holiday|libur|demand/.test(q)) intents.add("event");
@@ -156,21 +195,29 @@ function aggregateSales(
   sessions: Pick<WorksheetSessionRow, "id" | "business_date" | "department">[],
   soldLines: { session_id?: string; menu_item_id: string; quantity_sold: number }[],
 ): MenuSalesRow[] {
-  const menuMap = new Map(menus.map((menu) => [menu.id, menu]));
   const sessionIds = new Set(sessions.map((session) => session.id));
+  const sessionDateById = new Map(sessions.map((session) => [session.id, session.business_date]));
   const qtyByMenuId = new Map<string, number>();
+  const salesDayByMenuId = new Map<string, Set<string>>();
 
   for (const line of soldLines) {
     if (line.session_id && !sessionIds.has(line.session_id)) continue;
     const qty = Number(line.quantity_sold ?? 0);
     if (qty <= 0) continue;
     qtyByMenuId.set(line.menu_item_id, (qtyByMenuId.get(line.menu_item_id) ?? 0) + qty);
+    const date = line.session_id ? sessionDateById.get(line.session_id) : null;
+    if (date) {
+      const dates = salesDayByMenuId.get(line.menu_item_id) ?? new Set<string>();
+      dates.add(date);
+      salesDayByMenuId.set(line.menu_item_id, dates);
+    }
   }
 
   return menus
     .map((menu) => {
       const quantity = qtyByMenuId.get(menu.id) ?? 0;
       const price = Number(menu.price ?? 0);
+      const revenue = quantity * price;
       return {
         menu_id: menu.id,
         menu_name: menu.menu_name,
@@ -178,7 +225,10 @@ function aggregateSales(
         price,
         is_active: menu.is_active,
         quantity_sold: quantity,
-        revenue: quantity * price,
+        revenue,
+        active_sales_days: salesDayByMenuId.get(menu.id)?.size ?? 0,
+        average_daily_sold_30d: quantity / 30,
+        average_daily_revenue_30d: revenue / 30,
       };
     })
     .sort((a, b) => {
@@ -204,10 +254,13 @@ export async function buildDatabaseAssistantContext(
   const wantsLedger = intents.includes("ledger") || wantsStock;
   const wantsIssue = intents.includes("issue");
   const wantsEvent = intents.includes("event");
+  const wantsIngredientUsage = /bahan|ingredient|resep|recipe|pakai|dipakai|menggunakan/.test(question.toLowerCase());
 
   const [
     ingredientResult,
     menuResult,
+    recipeVersionResult,
+    recipeLineResult,
     supplierResult,
     poResult,
     sessionResult,
@@ -224,6 +277,12 @@ export async function buildDatabaseAssistantContext(
       .order("name", { ascending: true })
       .limit(300),
     supabase.from("menu_item").select("*").order("menu_name", { ascending: true }).limit(300),
+    supabase
+      .from("menu_recipe_version")
+      .select("id, menu_item_id, is_active")
+      .eq("is_active", true)
+      .limit(300),
+    supabase.from("recipe_line").select("recipe_version_id, ingredient_id, quantity_per_serving").limit(1200),
     supabase
       .from("supplier")
       .select("id, name, category, pic_name, min_order_amount, phone_number, link_url, is_active")
@@ -273,6 +332,8 @@ export async function buildDatabaseAssistantContext(
     default_unit_price: Number(row.default_unit_price ?? 0),
   }));
   const menus = (menuResult.data ?? []) as MenuItemRow[];
+  const recipeVersions = (recipeVersionResult.data ?? []) as RecipeVersionContextRow[];
+  const recipeLines = (recipeLineResult.data ?? []) as RecipeLineContextRow[];
   const sessions = (sessionResult.data ?? []) as Pick<WorksheetSessionRow, "id" | "business_date" | "department">[];
   const sessionIds = sessions.map((session) => session.id);
 
@@ -298,7 +359,11 @@ export async function buildDatabaseAssistantContext(
   const issueRows = issueResult.data ?? [];
   const demandEvents = eventResult.data ?? [];
   const ingredientNameById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient.name]));
+  const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
+  const menuById = new Map(menus.map((menu) => [menu.id, menu]));
   const menuNameById = new Map(menus.map((menu) => [menu.id, menu.menu_name]));
+  const salesByMenuId = new Map(salesRows.map((row) => [row.menu_id, row]));
+  const activeVersionById = new Map(recipeVersions.map((version) => [version.id, version]));
 
   const lowStockIngredients = ingredients
     .filter(
@@ -327,7 +392,31 @@ export async function buildDatabaseAssistantContext(
     sold: row.quantity_sold,
     revenue: row.revenue,
     price: row.price,
+    activeSalesDays: row.active_sales_days,
+    avgDailySold30d: Number(row.average_daily_sold_30d.toFixed(2)),
+    avgDailyRevenue30d: Math.round(row.average_daily_revenue_30d),
   });
+  const menuIngredientUsageRows: MenuIngredientUsageRow[] = recipeLines
+    .map((line) => {
+      const version = activeVersionById.get(line.recipe_version_id);
+      if (!version) return null;
+      const menu = menuById.get(version.menu_item_id);
+      const ingredient = ingredientById.get(line.ingredient_id);
+      if (!menu || !ingredient) return null;
+      const sales = salesByMenuId.get(menu.id);
+      return {
+        menu: menu.menu_name,
+        department: menu.department,
+        active: menu.is_active,
+        ingredient: ingredient.name,
+        qtyPerServing: Number(line.quantity_per_serving ?? 0),
+        unit: ingredient.unit,
+        sold30d: sales?.quantity_sold ?? 0,
+        avgDailySold30d: Number((sales?.average_daily_sold_30d ?? 0).toFixed(2)),
+      };
+    })
+    .filter((row): row is MenuIngredientUsageRow => row !== null)
+    .sort((a, b) => b.sold30d - a.sold30d);
   const compactPurchaseRequest = (row: Record<string, unknown>) => ({
     requestDate: row.request_date,
     item: row.item_name,
@@ -402,6 +491,8 @@ export async function buildDatabaseAssistantContext(
         pendingOpnameRows: pendingOpname.length,
         menuIssueRows: issueRows.length,
         demandEvents: demandEvents.length,
+        activeRecipeVersions: recipeVersions.length,
+        recipeLines: recipeLines.length,
       },
       lowStockIngredients: limitRows(lowStockIngredients, wantsStock ? 18 : 6).map(compactIngredient),
       matchedIngredients: limitRows(
@@ -412,6 +503,12 @@ export async function buildDatabaseAssistantContext(
         salesRows.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms)),
         wantsSales ? 12 : 5,
       ).map(compactMenu),
+      menuIngredientMatches: limitRows(
+        wantsIngredientUsage
+          ? menuIngredientUsageRows.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms))
+          : [],
+        wantsSales || wantsStock ? 30 : 8,
+      ),
       salesLast30Days: limitRows(salesRows, wantsSales ? 25 : 5).map(compactMenu),
       openPurchaseRequests: limitRows(openPurchaseRequests, wantsPo ? 25 : 5).map((row) =>
         compactPurchaseRequest(row as Record<string, unknown>),

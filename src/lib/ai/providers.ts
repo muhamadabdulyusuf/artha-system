@@ -19,6 +19,9 @@ const SYSTEM_PROMPT = [
   "Gunakan hanya data JSON yang diberikan. Jangan mengarang angka, status, atau nama item.",
   "Kalau data tidak cukup, bilang data yang kurang dan sarankan filter/tanggal yang perlu dicek.",
   "Prioritaskan nama menu/bahan/supplier, jumlah, tanggal, status PO, dan rekomendasi tindakan.",
+  "Untuk pertanyaan bahan yang dipakai menu, gunakan database.menuIngredientMatches dari resep aktif.",
+  "Untuk pertanyaan average penjualan menu, gunakan avgDailySold30d, avgDailyRevenue30d, activeSalesDays, dan sold 30 hari.",
+  "Jangan mengganti menu exact dengan kandidat terdekat; kalau nama exact tidak ada, bilang tidak ditemukan lalu tampilkan kandidat yang mirip.",
   "Jangan tampilkan raw JSON kecuali diminta.",
 ].join(" ");
 
