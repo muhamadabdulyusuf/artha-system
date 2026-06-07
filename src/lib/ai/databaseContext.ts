@@ -146,6 +146,20 @@ function normalize(value: unknown): string {
   return String(value ?? "").toLowerCase();
 }
 
+function normalizeWords(value: unknown): string {
+  return normalize(value)
+    .replace(/[^a-z0-9\u00c0-\u024f]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function includesPhrase(haystack: unknown, phrase: unknown): boolean {
+  const normalizedHaystack = normalizeWords(haystack);
+  const normalizedPhrase = normalizeWords(phrase);
+  if (!normalizedHaystack || !normalizedPhrase) return false;
+  return ` ${normalizedHaystack} `.includes(` ${normalizedPhrase} `);
+}
+
 function rowMatchesTerms(row: Record<string, unknown>, terms: string[]): boolean {
   if (terms.length === 0) return false;
   const haystack = Object.values(row).map(normalize).join(" ");
@@ -364,6 +378,9 @@ export async function buildDatabaseAssistantContext(
   const menuNameById = new Map(menus.map((menu) => [menu.id, menu.menu_name]));
   const salesByMenuId = new Map(salesRows.map((row) => [row.menu_id, row]));
   const activeVersionById = new Map(recipeVersions.map((version) => [version.id, version]));
+  const exactIngredientNameSet = new Set(
+    ingredients.filter((ingredient) => includesPhrase(question, ingredient.name)).map((ingredient) => ingredient.name),
+  );
 
   const lowStockIngredients = ingredients
     .filter(
@@ -496,7 +513,9 @@ export async function buildDatabaseAssistantContext(
       },
       lowStockIngredients: limitRows(lowStockIngredients, wantsStock ? 18 : 6).map(compactIngredient),
       matchedIngredients: limitRows(
-        ingredients.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms)),
+        exactIngredientNameSet.size > 0
+          ? ingredients.filter((row) => exactIngredientNameSet.has(row.name))
+          : ingredients.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms)),
         wantsStock ? 12 : 5,
       ).map(compactIngredient),
       matchedMenus: limitRows(
@@ -505,7 +524,9 @@ export async function buildDatabaseAssistantContext(
       ).map(compactMenu),
       menuIngredientMatches: limitRows(
         wantsIngredientUsage
-          ? menuIngredientUsageRows.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms))
+          ? exactIngredientNameSet.size > 0
+            ? menuIngredientUsageRows.filter((row) => exactIngredientNameSet.has(row.ingredient))
+            : menuIngredientUsageRows.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms))
           : [],
         wantsSales || wantsStock ? 30 : 8,
       ),
