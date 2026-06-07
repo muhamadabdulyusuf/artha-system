@@ -54,6 +54,19 @@ type MenuIngredientUsageRow = {
   avgDailySold30d: number;
 };
 
+type MenuRecipeMatch = {
+  menu: string;
+  department: Department;
+  active: boolean;
+  sold30d: number;
+  avgDailySold30d: number;
+  ingredients: {
+    name: string;
+    qtyPerServing: number;
+    unit: string;
+  }[];
+};
+
 type QueryIntent =
   | "stock"
   | "po"
@@ -80,6 +93,8 @@ export type DatabaseAssistantContext = {
     lowStockIngredients: unknown[];
     matchedIngredients: unknown[];
     matchedMenus: unknown[];
+    menuCatalog: unknown[];
+    menuRecipeMatches: unknown[];
     menuIngredientMatches: unknown[];
     salesLast30Days: unknown[];
     openPurchaseRequests: unknown[];
@@ -158,6 +173,12 @@ function includesPhrase(haystack: unknown, phrase: unknown): boolean {
   const normalizedPhrase = normalizeWords(phrase);
   if (!normalizedHaystack || !normalizedPhrase) return false;
   return ` ${normalizedHaystack} `.includes(` ${normalizedPhrase} `);
+}
+
+function rowMatchesEveryTerm(row: Record<string, unknown>, terms: string[]): boolean {
+  if (terms.length === 0) return false;
+  const haystack = Object.values(row).map(normalize).join(" ");
+  return terms.every((term) => haystack.includes(term));
 }
 
 function rowMatchesTerms(row: Record<string, unknown>, terms: string[]): boolean {
@@ -259,16 +280,19 @@ export async function buildDatabaseAssistantContext(
   const businessDate = resolveBusinessDate();
   const last7Start = addIsoDays(businessDate, -6);
   const last30Start = addIsoDays(businessDate, -29);
+  const q = question.toLowerCase();
   const terms = extractSearchTerms(question);
   const intents = detectIntents(question);
   const wantsStock = intents.includes("stock");
   const wantsPo = intents.includes("po");
   const wantsSales = intents.includes("sales") || intents.includes("menu");
   const wantsSupplier = intents.includes("supplier") || wantsPo;
-  const wantsLedger = intents.includes("ledger") || wantsStock;
+  const wantsIngredientUsage = /bahan|ingredient|resep|recipe|pakai|dipakai|menggunakan/.test(q);
+  const wantsStockContext = (wantsStock && !wantsIngredientUsage) || /stok|stock|minimum|low|habis|kurang|opname|adjust/.test(q);
+  const wantsLedger = intents.includes("ledger") || wantsStockContext;
   const wantsIssue = intents.includes("issue");
   const wantsEvent = intents.includes("event");
-  const wantsIngredientUsage = /bahan|ingredient|resep|recipe|pakai|dipakai|menggunakan/.test(question.toLowerCase());
+  const wantsMenuCatalog = /daftar|list|semua|catalog|katalog|menu apa|apa aja.*menu|menu.*apa aja/.test(q);
 
   const [
     ingredientResult,
@@ -378,6 +402,9 @@ export async function buildDatabaseAssistantContext(
   const menuNameById = new Map(menus.map((menu) => [menu.id, menu.menu_name]));
   const salesByMenuId = new Map(salesRows.map((row) => [row.menu_id, row]));
   const activeVersionById = new Map(recipeVersions.map((version) => [version.id, version]));
+  const exactMenuNameSet = new Set(
+    menus.filter((menu) => includesPhrase(question, menu.menu_name)).map((menu) => menu.menu_name),
+  );
   const exactIngredientNameSet = new Set(
     ingredients.filter((ingredient) => includesPhrase(question, ingredient.name)).map((ingredient) => ingredient.name),
   );
@@ -413,6 +440,12 @@ export async function buildDatabaseAssistantContext(
     avgDailySold30d: Number(row.average_daily_sold_30d.toFixed(2)),
     avgDailyRevenue30d: Math.round(row.average_daily_revenue_30d),
   });
+  const compactMenuCatalog = (row: MenuSalesRow) => ({
+    menu: row.menu_name,
+    department: row.department,
+    active: row.is_active,
+    price: row.price,
+  });
   const menuIngredientUsageRows: MenuIngredientUsageRow[] = recipeLines
     .map((line) => {
       const version = activeVersionById.get(line.recipe_version_id);
@@ -433,6 +466,42 @@ export async function buildDatabaseAssistantContext(
       };
     })
     .filter((row): row is MenuIngredientUsageRow => row !== null)
+    .sort((a, b) => b.sold30d - a.sold30d);
+  const matchedMenuIngredientRows = wantsIngredientUsage
+    ? exactMenuNameSet.size > 0
+      ? menuIngredientUsageRows.filter((row) => exactMenuNameSet.has(row.menu))
+      : exactIngredientNameSet.size > 0
+        ? menuIngredientUsageRows.filter((row) => exactIngredientNameSet.has(row.ingredient))
+        : menuIngredientUsageRows.filter((row) => {
+            const record = row as unknown as Record<string, unknown>;
+            return rowMatchesEveryTerm(record, terms) || rowMatchesTerms(record, terms);
+          })
+    : [];
+  const menuRecipeMatches: MenuRecipeMatch[] = Array.from(
+    matchedMenuIngredientRows.reduce((map, row) => {
+      const current =
+        map.get(row.menu) ??
+        ({
+          menu: row.menu,
+          department: row.department,
+          active: row.active,
+          sold30d: row.sold30d,
+          avgDailySold30d: row.avgDailySold30d,
+          ingredients: [],
+        } satisfies MenuRecipeMatch);
+      current.ingredients.push({
+        name: row.ingredient,
+        qtyPerServing: row.qtyPerServing,
+        unit: row.unit,
+      });
+      map.set(row.menu, current);
+      return map;
+    }, new Map<string, MenuRecipeMatch>()),
+  )
+    .map(([, match]) => ({
+      ...match,
+      ingredients: match.ingredients.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 30),
+    }))
     .sort((a, b) => b.sold30d - a.sold30d);
   const compactPurchaseRequest = (row: Record<string, unknown>) => ({
     requestDate: row.request_date,
@@ -511,26 +580,26 @@ export async function buildDatabaseAssistantContext(
         activeRecipeVersions: recipeVersions.length,
         recipeLines: recipeLines.length,
       },
-      lowStockIngredients: limitRows(lowStockIngredients, wantsStock ? 18 : 6).map(compactIngredient),
+      lowStockIngredients: limitRows(lowStockIngredients, wantsStockContext ? 18 : 4).map(compactIngredient),
       matchedIngredients: limitRows(
         exactIngredientNameSet.size > 0
           ? ingredients.filter((row) => exactIngredientNameSet.has(row.name))
           : ingredients.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms)),
-        wantsStock ? 12 : 5,
+        wantsStockContext || wantsIngredientUsage ? 12 : 5,
       ).map(compactIngredient),
       matchedMenus: limitRows(
-        salesRows.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms)),
-        wantsSales ? 12 : 5,
+        exactMenuNameSet.size > 0
+          ? salesRows.filter((row) => exactMenuNameSet.has(row.menu_name))
+          : salesRows.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms)),
+        wantsSales ? 18 : 5,
       ).map(compactMenu),
+      menuCatalog: wantsMenuCatalog ? salesRows.map(compactMenuCatalog) : [],
+      menuRecipeMatches: limitRows(menuRecipeMatches, exactMenuNameSet.size > 0 ? 12 : 8),
       menuIngredientMatches: limitRows(
-        wantsIngredientUsage
-          ? exactIngredientNameSet.size > 0
-            ? menuIngredientUsageRows.filter((row) => exactIngredientNameSet.has(row.ingredient))
-            : menuIngredientUsageRows.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms))
-          : [],
-        wantsSales || wantsStock ? 30 : 8,
+        exactMenuNameSet.size > 0 ? [] : matchedMenuIngredientRows,
+        exactMenuNameSet.size > 0 ? 80 : wantsSales || wantsStock ? 36 : 10,
       ),
-      salesLast30Days: limitRows(salesRows, wantsSales ? 25 : 5).map(compactMenu),
+      salesLast30Days: limitRows(salesRows, wantsIngredientUsage ? 5 : wantsSales ? 25 : 5).map(compactMenu),
       openPurchaseRequests: limitRows(openPurchaseRequests, wantsPo ? 25 : 5).map((row) =>
         compactPurchaseRequest(row as Record<string, unknown>),
       ),
@@ -548,7 +617,7 @@ export async function buildDatabaseAssistantContext(
       recentLedger: limitRows(ledgerRows, wantsLedger ? 25 : 4).map((row) =>
         compactLedger(row as Record<string, unknown>),
       ),
-      pendingOpname: limitRows(pendingOpname, wantsStock ? 15 : 3).map((row) =>
+      pendingOpname: limitRows(pendingOpname, wantsStockContext ? 15 : 3).map((row) =>
         compactOpname(row as Record<string, unknown>),
       ),
       recentIssues: limitRows(issueRows, wantsIssue ? 20 : 3).map((row) =>

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { FloatingAIAssistant } from "@/components/ai/FloatingAIAssistant";
 import { AppFooter } from "@/components/layout/AppFooter";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import "./globals.css";
@@ -19,6 +20,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
           <AppFooter />
+          <FloatingAIAssistant />
         </ThemeProvider>
       </body>
     </html>

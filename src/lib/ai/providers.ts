@@ -11,26 +11,57 @@ export type AiProviderResult = {
 type ChatPayload = {
   question: string;
   context: DatabaseAssistantContext;
+  history?: {
+    role: "user" | "assistant";
+    content: string;
+  }[];
 };
 
 const SYSTEM_PROMPT = [
-  "Kamu adalah Artha AI, analis operasional untuk Abdul Company.",
-  "Jawab dalam Bahasa Indonesia yang jelas, ringkas, dan actionable.",
+  "Kamu adalah Artha AI, asisten virtual personal untuk Abdul Company.",
+  "Bicara natural, hangat, percaya diri, dan langsung ke jawaban; jangan terdengar seperti template atau robot.",
+  "Jawab dalam Bahasa Indonesia yang jelas, ringkas, dan actionable dengan gaya internal yang santai-profesional.",
+  "Hindari pembuka generik seperti 'Halo' dan penutup generik seperti 'Semoga membantu'; jawab seperti rekan kerja yang sigap.",
   "Gunakan hanya data JSON yang diberikan. Jangan mengarang angka, status, atau nama item.",
-  "Kalau data tidak cukup, bilang data yang kurang dan sarankan filter/tanggal yang perlu dicek.",
+  "Kalau data tidak cukup, bilang persis data apa yang tidak ditemukan lalu berikan opsi paling dekat dari database.",
   "Prioritaskan nama menu/bahan/supplier, jumlah, tanggal, status PO, dan rekomendasi tindakan.",
-  "Untuk pertanyaan bahan yang dipakai menu, gunakan database.menuIngredientMatches dari resep aktif.",
+  "Untuk pertanyaan bahan yang dipakai sebuah menu, gunakan database.menuRecipeMatches lebih dulu, lalu database.menuIngredientMatches.",
+  "Untuk pertanyaan daftar menu atau nama menu, gunakan database.menuCatalog dan database.matchedMenus.",
   "Untuk pertanyaan average penjualan menu, gunakan avgDailySold30d, avgDailyRevenue30d, activeSalesDays, dan sold 30 hari.",
   "Jangan mengganti menu exact dengan kandidat terdekat; kalau nama exact tidak ada, bilang tidak ditemukan lalu tampilkan kandidat yang mirip.",
+  "Pakai riwayat chat hanya untuk memahami referensi seperti 'itu', 'menu tadi', atau pertanyaan lanjutan.",
   "Jangan tampilkan raw JSON kecuali diminta.",
 ].join(" ");
 
-function buildUserPrompt({ question, context }: ChatPayload): string {
+function buildUserPrompt({ question, context, history }: ChatPayload): string {
+  const recentHistory =
+    history && history.length > 0
+      ? history
+          .slice(-6)
+          .map((message) => `${message.role === "user" ? "User" : "Artha AI"}: ${message.content}`)
+          .join("\n")
+      : "";
+
   return [
+    recentHistory ? `Riwayat chat terbaru:\n${recentHistory}` : "",
     `Pertanyaan user: ${question}`,
     "Data database Artha:",
     JSON.stringify(context),
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function cleanAssistantAnswer(answer: string): string {
+  return answer
+    .split(/\r?\n/)
+    .filter((line) => {
+      const normalized = line.trim().toLowerCase();
+      return normalized !== "halo!" && !/^semoga (informasi ini )?membantu!?$/.test(normalized);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {
@@ -72,7 +103,7 @@ async function callGroq(payload: ChatPayload): Promise<AiProviderResult> {
     throw new Error(typeof data.error === "string" ? data.error : data.error?.message || "Groq request gagal.");
   }
 
-  const answer = data.choices?.[0]?.message?.content?.trim();
+  const answer = cleanAssistantAnswer(data.choices?.[0]?.message?.content?.trim() ?? "");
   if (!answer) throw new Error("Groq tidak mengembalikan jawaban.");
   return { provider: "groq", model, answer };
 }
@@ -111,7 +142,9 @@ async function callGemini(payload: ChatPayload): Promise<AiProviderResult> {
   };
   if (!response.ok) throw new Error(data.error?.message || "Gemini request gagal.");
 
-  const answer = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
+  const answer = cleanAssistantAnswer(
+    data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? "",
+  );
   if (!answer) throw new Error("Gemini tidak mengembalikan jawaban.");
   return { provider: "gemini", model, answer };
 }
@@ -146,7 +179,7 @@ async function callMistral(payload: ChatPayload): Promise<AiProviderResult> {
     throw new Error(typeof data.error === "string" ? data.error : data.error?.message || "Mistral request gagal.");
   }
 
-  const answer = data.choices?.[0]?.message?.content?.trim();
+  const answer = cleanAssistantAnswer(data.choices?.[0]?.message?.content?.trim() ?? "");
   if (!answer) throw new Error("Mistral tidak mengembalikan jawaban.");
   return { provider: "mistral", model, answer };
 }

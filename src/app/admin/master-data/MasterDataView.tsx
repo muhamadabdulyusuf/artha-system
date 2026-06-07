@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import {
-  Bot,
   ClipboardList,
   LayoutDashboard,
   LogOut,
@@ -26,9 +25,8 @@ import { MenuRecipeTab } from "@/components/admin/MenuRecipeTab";
 import { MonitoringDashboard } from "@/components/admin/MonitoringDashboard";
 import { SuppliersTab } from "@/components/admin/SuppliersTab";
 import { WorksheetStaffSettingsTab } from "@/components/admin/WorksheetStaffSettingsTab";
-import { DatabaseAIAssistant } from "@/components/admin/DatabaseAIAssistant";
 
-type TabId = "ingredients" | "menu" | "suppliers" | "worksheet" | "monitoring" | "ai" | "settings";
+type TabId = "ingredients" | "menu" | "suppliers" | "worksheet" | "monitoring" | "settings";
 
 const TABS: { id: TabId; label: string; icon: typeof Package }[] = [
   { id: "ingredients", label: "Ingredients", icon: Package },
@@ -36,7 +34,6 @@ const TABS: { id: TabId; label: string; icon: typeof Package }[] = [
   { id: "suppliers", label: "Supplier", icon: Truck },
   { id: "worksheet", label: "Worksheet", icon: ClipboardList },
   { id: "monitoring", label: "Monitoring", icon: Shield },
-  { id: "ai", label: "AI", icon: Bot },
   { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
@@ -176,7 +173,6 @@ function MasterDataContent() {
           {activeTab === "suppliers" && <SuppliersTab />}
           {activeTab === "worksheet" && <AdminWorksheetTab />}
           {activeTab === "monitoring" && <MonitoringDashboard />}
-          {activeTab === "ai" && <DatabaseAIAssistant />}
           {activeTab === "settings" && <WorksheetStaffSettingsTab />}
         </section>
       </div>
