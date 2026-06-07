@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AppFooter } from "@/components/layout/AppFooter";
+import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,10 +14,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="id">
+    <html lang="id" data-theme="dark">
       <body className="min-h-screen">
-        {children}
-        <AppFooter />
+        <ThemeProvider>
+          {children}
+          <AppFooter />
+        </ThemeProvider>
       </body>
     </html>
   );

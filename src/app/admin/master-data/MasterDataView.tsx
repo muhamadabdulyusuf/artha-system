@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  Bot,
   ClipboardList,
   LayoutDashboard,
   LogOut,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { LogoutButton } from "@/components/auth/LogoutButton";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { ADMIN_ROLES } from "@/lib/auth/routeAccess";
 import { isViewerRole } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
@@ -24,8 +26,9 @@ import { MenuRecipeTab } from "@/components/admin/MenuRecipeTab";
 import { MonitoringDashboard } from "@/components/admin/MonitoringDashboard";
 import { SuppliersTab } from "@/components/admin/SuppliersTab";
 import { WorksheetStaffSettingsTab } from "@/components/admin/WorksheetStaffSettingsTab";
+import { DatabaseAIAssistant } from "@/components/admin/DatabaseAIAssistant";
 
-type TabId = "ingredients" | "menu" | "suppliers" | "worksheet" | "monitoring" | "settings";
+type TabId = "ingredients" | "menu" | "suppliers" | "worksheet" | "monitoring" | "ai" | "settings";
 
 const TABS: { id: TabId; label: string; icon: typeof Package }[] = [
   { id: "ingredients", label: "Ingredients", icon: Package },
@@ -33,6 +36,7 @@ const TABS: { id: TabId; label: string; icon: typeof Package }[] = [
   { id: "suppliers", label: "Supplier", icon: Truck },
   { id: "worksheet", label: "Worksheet", icon: ClipboardList },
   { id: "monitoring", label: "Monitoring", icon: Shield },
+  { id: "ai", label: "AI", icon: Bot },
   { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
@@ -88,6 +92,7 @@ function MasterDataContent() {
               <p className="text-xs font-semibold text-zinc-100">{session.name}</p>
               <p className="text-[11px] text-zinc-500">{roleLabel}</p>
             </div>
+            <ThemeToggle />
             <LogoutButton className="flex min-h-10 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 text-sm font-medium text-zinc-200 hover:border-red-500/50 hover:text-red-300">
               <LogOut className="h-4 w-4 shrink-0" aria-hidden />
               Log Out
@@ -171,6 +176,7 @@ function MasterDataContent() {
           {activeTab === "suppliers" && <SuppliersTab />}
           {activeTab === "worksheet" && <AdminWorksheetTab />}
           {activeTab === "monitoring" && <MonitoringDashboard />}
+          {activeTab === "ai" && <DatabaseAIAssistant />}
           {activeTab === "settings" && <WorksheetStaffSettingsTab />}
         </section>
       </div>
