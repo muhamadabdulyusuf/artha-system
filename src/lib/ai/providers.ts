@@ -26,6 +26,7 @@ const SYSTEM_PROMPT = [
   "Kalau data tidak cukup, bilang persis data apa yang tidak ditemukan lalu berikan opsi paling dekat dari database.",
   "Prioritaskan nama menu/bahan/supplier, jumlah, tanggal, status PO, dan rekomendasi tindakan.",
   "Untuk pertanyaan bahan yang dipakai sebuah menu, gunakan database.menuRecipeMatches lebih dulu, lalu database.menuIngredientMatches.",
+  "Untuk pertanyaan menu apa saja yang memakai bahan tertentu, hanya gunakan database.menuIngredientMatches; jangan ambil nama dari menuCatalog atau salesLast30Days.",
   "Untuk pertanyaan daftar menu atau nama menu, gunakan database.menuCatalog dan database.matchedMenus.",
   "Untuk pertanyaan average penjualan menu, gunakan avgDailySold30d, avgDailyRevenue30d, activeSalesDays, dan sold 30 hari.",
   "Jangan mengganti menu exact dengan kandidat terdekat; kalau nama exact tidak ada, bilang tidak ditemukan lalu tampilkan kandidat yang mirip.",

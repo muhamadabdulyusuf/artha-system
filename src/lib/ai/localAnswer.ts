@@ -20,7 +20,13 @@ function isMenuCatalogQuestion(question: string): boolean {
 }
 
 function isRecipeQuestion(question: string): boolean {
-  return /bahan|ingredient|resep|recipe|pakai|dipakai|menggunakan/i.test(question);
+  return /bahan|ingredient|resep|recipe|pakai|pake|pakek|dipakai|dipake|menggunakan/i.test(question);
+}
+
+function isIngredientUsageQuestion(question: string): boolean {
+  return /apa.*(pakai|pake|pakek|dipakai|dipake|menggunakan)|menu.*(pakai|pake|pakek|dipakai|dipake|menggunakan)|yang.*(pakai|pake|pakek|dipakai|dipake|menggunakan)/i.test(
+    question,
+  );
 }
 
 function isAverageSalesQuestion(question: string): boolean {
@@ -126,6 +132,19 @@ function answerRecipeMatches(recipeRows: AnyRow[], ingredientRows: AnyRow[]): st
   return null;
 }
 
+function answerIngredientUsageMatches(ingredientRows: AnyRow[]): string | null {
+  if (ingredientRows.length === 0) return null;
+  const ingredientNames = Array.from(new Set(ingredientRows.map((row) => text(row.ingredient)).filter(Boolean)));
+  const title = ingredientNames.length === 1 ? ingredientNames[0] : ingredientNames.join(", ");
+  const lines = ingredientRows.slice(0, 30).map((row) => {
+    const qty = numberText(row.qtyPerServing);
+    const unit = text(row.unit);
+    const sold30d = numberText(row.sold30d);
+    return `- ${text(row.menu)} (${text(row.department)}): ${qty} ${unit}/porsi, sold 30 hari ${sold30d} pcs.`;
+  });
+  return [`${title} dipakai di menu ini berdasarkan resep aktif:`, "", ...lines].join("\n");
+}
+
 export function answerFromDatabaseContext(question: string, context: DatabaseAssistantContext): string | null {
   const database = context.database as Record<string, unknown>;
   const menuCatalog = asRows(database.menuCatalog);
@@ -147,6 +166,11 @@ export function answerFromDatabaseContext(question: string, context: DatabaseAss
   }
 
   if (isRecipeQuestion(question)) {
+    if (isIngredientUsageQuestion(question)) {
+      const usageAnswer = answerIngredientUsageMatches(menuIngredientMatches);
+      if (usageAnswer) return usageAnswer;
+    }
+
     const recipeAnswer = answerRecipeMatches(menuRecipeMatches, menuIngredientMatches);
     if (recipeAnswer) return recipeAnswer;
   }

@@ -137,8 +137,15 @@ const STOP_WORDS = new Set([
   "data",
   "menu",
   "bahan",
+  "ingredient",
+  "ingredients",
+  "resep",
+  "recipe",
   "pakai",
+  "pake",
+  "pakek",
   "dipakai",
+  "dipake",
   "menggunakan",
   "hari",
   "terakhir",
@@ -209,7 +216,9 @@ function detectIntents(question: string): QueryIntent[] {
   if (/sales|jual|terjual|sold|revenue|omzet|best|slow|grade|ranking|rank|average|rata/.test(q)) {
     intents.add("sales");
   }
-  if (/menu|resep|recipe|food|beverage|\bbar\b|kitchen|pakai|dipakai|menggunakan/.test(q)) intents.add("menu");
+  if (/menu|resep|recipe|food|beverage|\bbar\b|kitchen|pakai|pake|pakek|dipakai|dipake|menggunakan/.test(q)) {
+    intents.add("menu");
+  }
   if (/supplier|vendor|kontak|phone|\bwa\b|whatsapp/.test(q)) intents.add("supplier");
   if (/ledger|closing|opening|variance|selisih|pemakaian|usage/.test(q)) intents.add("ledger");
   if (/remake|complaint|komplain|issue|rusak|gosong|asin|rambut/.test(q)) intents.add("issue");
@@ -287,7 +296,7 @@ export async function buildDatabaseAssistantContext(
   const wantsPo = intents.includes("po");
   const wantsSales = intents.includes("sales") || intents.includes("menu");
   const wantsSupplier = intents.includes("supplier") || wantsPo;
-  const wantsIngredientUsage = /bahan|ingredient|resep|recipe|pakai|dipakai|menggunakan/.test(q);
+  const wantsIngredientUsage = /bahan|ingredient|resep|recipe|pakai|pake|pakek|dipakai|dipake|menggunakan/.test(q);
   const wantsStockContext = (wantsStock && !wantsIngredientUsage) || /stok|stock|minimum|low|habis|kurang|opname|adjust/.test(q);
   const wantsLedger = intents.includes("ledger") || wantsStockContext;
   const wantsIssue = intents.includes("issue");
@@ -408,6 +417,21 @@ export async function buildDatabaseAssistantContext(
   const exactIngredientNameSet = new Set(
     ingredients.filter((ingredient) => includesPhrase(question, ingredient.name)).map((ingredient) => ingredient.name),
   );
+  const matchedIngredientNameSet = new Set(
+    exactIngredientNameSet.size > 0
+      ? exactIngredientNameSet
+      : wantsIngredientUsage
+        ? ingredients
+            .filter((ingredient) => {
+              const name = normalizeWords(ingredient.name);
+              const strongTerms = terms.filter((term) => term.length >= 4);
+              if (!name || strongTerms.length === 0) return false;
+              if (strongTerms.every((term) => name.includes(term))) return true;
+              return strongTerms.length >= 2 && strongTerms.slice(-1).every((term) => name.includes(term));
+            })
+            .map((ingredient) => ingredient.name)
+        : [],
+  );
 
   const lowStockIngredients = ingredients
     .filter(
@@ -472,6 +496,8 @@ export async function buildDatabaseAssistantContext(
       ? menuIngredientUsageRows.filter((row) => exactMenuNameSet.has(row.menu))
       : exactIngredientNameSet.size > 0
         ? menuIngredientUsageRows.filter((row) => exactIngredientNameSet.has(row.ingredient))
+        : matchedIngredientNameSet.size > 0
+          ? menuIngredientUsageRows.filter((row) => matchedIngredientNameSet.has(row.ingredient))
         : menuIngredientUsageRows.filter((row) => {
             const record = row as unknown as Record<string, unknown>;
             return rowMatchesEveryTerm(record, terms) || rowMatchesTerms(record, terms);
@@ -584,6 +610,8 @@ export async function buildDatabaseAssistantContext(
       matchedIngredients: limitRows(
         exactIngredientNameSet.size > 0
           ? ingredients.filter((row) => exactIngredientNameSet.has(row.name))
+          : matchedIngredientNameSet.size > 0
+            ? ingredients.filter((row) => matchedIngredientNameSet.has(row.name))
           : ingredients.filter((row) => rowMatchesTerms(row as unknown as Record<string, unknown>, terms)),
         wantsStockContext || wantsIngredientUsage ? 12 : 5,
       ).map(compactIngredient),
