@@ -19,12 +19,16 @@ import {
 } from "lucide-react";
 import { canEditStaffData } from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
+import {
+  classifySalesMenuCategory,
+  salesMenuCategoryLabel,
+  type SalesMenuCategory,
+} from "@/lib/menu/salesCategory";
 import { getSupabaseClientOrNull } from "@/lib/supabase/client";
 import type {
   Department,
   IngredientRow,
   DemandEventRow,
-  MenuCategory,
   MenuItemRow,
   RecipeLineForCalc,
   StockLedgerRow,
@@ -121,7 +125,8 @@ type LiveStockRow = {
 type SalesExportRow = {
   session_date: string;
   menu_name: string;
-  category: MenuCategory;
+  department: Department;
+  category: SalesMenuCategory;
   quantity_sold: number;
   unit_price: number;
   total_gross_revenue: number;
@@ -404,10 +409,6 @@ const FINAL_WORKSHEET_STATUSES = new Set(["SUBMITTED", "ADJUSTED", "LOCKED", "PE
 type IngredientWithPrimarySupplier = IngredientRow & {
   supplier?: { id: string; name: string; phone_number: string | null } | null;
 };
-
-function departmentToCategory(department: Department): MenuCategory {
-  return department === "bar" ? "beverage" : "food";
-}
 
 function computeTheoreticalTarget(ledger: Pick<StockLedgerRow, "opening_stock" | "in_qty" | "theoretical_usage">): number {
   return Number(ledger.opening_stock) + Number(ledger.in_qty) - Number(ledger.theoretical_usage);
@@ -874,11 +875,12 @@ async function downloadSalesXlsx(filename: string, rows: SalesExportRow[]): Prom
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Laporan Penjualan");
 
-  sheet.columns = [
-    { header: "Tanggal", key: "date", width: 14 },
-    { header: "Menu", key: "menu", width: 30 },
-    { header: "Kategori", key: "category", width: 14 },
-    { header: "Qty Terjual", key: "quantity", width: 14 },
+	  sheet.columns = [
+	    { header: "Tanggal", key: "date", width: 14 },
+	    { header: "Menu", key: "menu", width: 30 },
+	    { header: "Department", key: "department", width: 14 },
+	    { header: "Kategori Sales", key: "category", width: 18 },
+	    { header: "Qty Terjual", key: "quantity", width: 14 },
     { header: "Harga Satuan", key: "unitPrice", width: 16 },
     { header: "Gross Revenue", key: "revenue", width: 18 },
   ];
@@ -892,10 +894,11 @@ async function downloadSalesXlsx(filename: string, rows: SalesExportRow[]): Prom
 
   for (const row of rows) {
     sheet.addRow({
-      date: row.session_date,
-      menu: row.menu_name,
-      category: row.category,
-      quantity: row.quantity_sold,
+	      date: row.session_date,
+	      menu: row.menu_name,
+	      department: row.department,
+	      category: salesMenuCategoryLabel(row.category),
+	      quantity: row.quantity_sold,
       unitPrice: row.unit_price,
       revenue: row.total_gross_revenue,
     });
@@ -1760,11 +1763,12 @@ export function MonitoringDashboard() {
 
   const filteredSalesRows = useMemo(() => {
     if (!normalizedSearch) return salesExportRows;
-    return salesExportRows.filter(
-      (row) =>
-        row.menu_name.toLowerCase().includes(normalizedSearch) ||
-        row.category.toLowerCase().includes(normalizedSearch)
-    );
+	    return salesExportRows.filter(
+	      (row) =>
+	        row.menu_name.toLowerCase().includes(normalizedSearch) ||
+	        row.department.toLowerCase().includes(normalizedSearch) ||
+	        salesMenuCategoryLabel(row.category).toLowerCase().includes(normalizedSearch)
+	    );
   }, [salesExportRows, normalizedSearch]);
 
   const filteredSalesDemandRows = useMemo(() => {
@@ -2820,18 +2824,19 @@ export function MonitoringDashboard() {
       const qty = Number(line.quantity_sold);
       if (qty <= 0) continue;
 
-      const category = departmentToCategory(menu.department);
-      const unitPrice = Number(menu.price);
-      salesRows.push({
-        session_date: session.business_date,
-        menu_name: menu.menu_name,
-        category,
-        quantity_sold: qty,
+	      const category = classifySalesMenuCategory(menu.menu_name, menu.department);
+	      const unitPrice = Number(menu.price);
+	      salesRows.push({
+	        session_date: session.business_date,
+	        menu_name: menu.menu_name,
+	        department: menu.department,
+	        category,
+	        quantity_sold: qty,
         unit_price: unitPrice,
         total_gross_revenue: qty * unitPrice,
       });
 
-      const targetMap = category === "beverage" ? beverageAgg : foodAgg;
+	      const targetMap = menu.department === "bar" ? beverageAgg : foodAgg;
       const existing = targetMap.get(menu.id);
       if (existing) {
         existing.quantity_sold += qty;
@@ -2907,11 +2912,12 @@ export function MonitoringDashboard() {
                 if (qty <= 0) continue;
 
                 const unitPrice = Number(menu.price);
-                eventSalesRows.push({
-                  session_date: session.business_date,
-                  menu_name: menu.menu_name,
-                  category: departmentToCategory(menu.department),
-                  quantity_sold: qty,
+	                eventSalesRows.push({
+	                  session_date: session.business_date,
+	                  menu_name: menu.menu_name,
+	                  department: menu.department,
+	                  category: classifySalesMenuCategory(menu.menu_name, menu.department),
+	                  quantity_sold: qty,
                   unit_price: unitPrice,
                   total_gross_revenue: qty * unitPrice,
                 });
@@ -2929,12 +2935,12 @@ export function MonitoringDashboard() {
         const baselineEnd = addIsoDays(event.start_date, -1);
         const eventQty = eventSalesRows
           .filter((row) => row.session_date >= event.start_date && row.session_date <= event.end_date)
-          .filter((row) => !event.department || (event.department === "bar" ? row.category === "beverage" : row.category === "food"))
-          .reduce((sum, row) => sum + row.quantity_sold, 0);
-        const baselineQty = eventSalesRows
-          .filter((row) => row.session_date >= baselineStart && row.session_date <= baselineEnd)
-          .filter((row) => !event.department || (event.department === "bar" ? row.category === "beverage" : row.category === "food"))
-          .reduce((sum, row) => sum + row.quantity_sold, 0);
+	          .filter((row) => !event.department || row.department === event.department)
+	          .reduce((sum, row) => sum + row.quantity_sold, 0);
+	        const baselineQty = eventSalesRows
+	          .filter((row) => row.session_date >= baselineStart && row.session_date <= baselineEnd)
+	          .filter((row) => !event.department || row.department === event.department)
+	          .reduce((sum, row) => sum + row.quantity_sold, 0);
         const actualUpliftPct =
           baselineQty > 0 ? ((eventQty - baselineQty) / baselineQty) * 100 : null;
 
@@ -4628,9 +4634,10 @@ export function MonitoringDashboard() {
                 <table className="w-full min-w-[640px] text-left text-sm">
                   <thead className="bg-zinc-950 text-slate-400">
                     <tr>
-                      {!isSingleDayRange && <th className="px-3 py-2 font-medium">Tanggal</th>}
-                      <th className="px-3 py-2 font-medium">Menu</th>
-                      <th className="px-3 py-2 font-medium">Kategori</th>
+	                      {!isSingleDayRange && <th className="px-3 py-2 font-medium">Tanggal</th>}
+	                      <th className="px-3 py-2 font-medium">Menu</th>
+	                      <th className="px-3 py-2 font-medium">Dept</th>
+	                      <th className="px-3 py-2 font-medium">Kategori Sales</th>
                       <th className="px-3 py-2 text-right font-medium">Qty</th>
                       <th className="px-3 py-2 text-right font-medium">Harga</th>
                       <th className="px-3 py-2 text-right font-medium">Revenue</th>
@@ -4645,7 +4652,8 @@ export function MonitoringDashboard() {
                           </td>
                         )}
                         <td className="px-3 py-2 text-slate-100">{row.menu_name}</td>
-                        <td className="px-3 py-2 capitalize text-slate-400">{row.category}</td>
+	                        <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+	                        <td className="px-3 py-2 text-slate-400">{salesMenuCategoryLabel(row.category)}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-slate-300">
                           {formatQtyId(row.quantity_sold)}
                         </td>

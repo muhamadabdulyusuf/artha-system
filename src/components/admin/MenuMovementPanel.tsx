@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowUpDown, BarChart3, Download, Loader2, Search, Sparkles, X } from "lucide-react";
+import {
+  SALES_MENU_CATEGORY_OPTIONS,
+  classifySalesMenuCategory,
+  salesMenuCategoryLabel,
+  salesMenuCategorySortValue,
+  type SalesMenuCategory,
+} from "@/lib/menu/salesCategory";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { Department, MenuItemRow } from "@/lib/types/database";
 import { formatBusinessDateLabel } from "@/lib/utils/dateHelper";
@@ -22,6 +29,7 @@ type MenuMovementRow = {
   id: string;
   name: string;
   department: Department;
+  salesCategory: SalesMenuCategory;
   isActive: boolean;
   unitPrice: number;
   quantitySold: number;
@@ -45,8 +53,9 @@ type MenuMovementRow = {
 type MenuMovementGrade = "A" | "B" | "C" | "D";
 type MovementMetric = "qty" | "revenue";
 type GradeFilter = MenuMovementGrade | "all";
+type CategoryFilter = SalesMenuCategory | "all";
 type ActiveFilter = "all" | "active" | "inactive";
-type SortKey = "rank" | "name" | "sold" | "share" | "week" | "month" | "revenue" | "grade";
+type SortKey = "rank" | "name" | "category" | "sold" | "share" | "week" | "month" | "revenue" | "grade";
 type SortDirection = "asc" | "desc";
 
 const GRADE_LABEL: Record<MenuMovementGrade, string> = {
@@ -77,8 +86,17 @@ const ACTIVE_OPTIONS: { id: ActiveFilter; label: string }[] = [
   { id: "inactive", label: "Inactive" },
 ];
 
+const CATEGORY_OPTIONS: { id: CategoryFilter; label: string }[] = [
+  { id: "all", label: "Semua kategori" },
+  ...SALES_MENU_CATEGORY_OPTIONS.map((category) => ({
+    id: category,
+    label: salesMenuCategoryLabel(category),
+  })),
+];
+
 const SORT_OPTIONS: { id: SortKey; label: string }[] = [
   { id: "rank", label: "Rank" },
+  { id: "category", label: "Kategori" },
   { id: "sold", label: "Sold" },
   { id: "share", label: "Kontribusi" },
   { id: "week", label: "Vs Week" },
@@ -225,6 +243,7 @@ function buildMenuMovementRows({
       id: menu.id,
       name: menu.menu_name,
       department: menu.department,
+      salesCategory: classifySalesMenuCategory(menu.menu_name, menu.department),
       isActive: menu.is_active,
       unitPrice,
       quantitySold,
@@ -246,18 +265,24 @@ function buildMenuMovementRows({
     };
   });
 
-  for (const department of ["bar", "kitchen"] as Department[]) {
-    const categoryRows = rows
-      .filter((row) => row.department === department)
-      .sort((a, b) => {
-        const metricCmp = b.metricValue - a.metricValue;
-        if (metricCmp !== 0) return metricCmp;
-        const revenueCmp = b.revenue - a.revenue;
-        if (revenueCmp !== 0) return revenueCmp;
-        const qtyCmp = b.quantitySold - a.quantitySold;
-        if (qtyCmp !== 0) return qtyCmp;
-        return a.name.localeCompare(b.name);
-      });
+  const rankingGroups = new Map<string, MenuMovementRow[]>();
+  for (const row of rows) {
+    const key = `${row.department}:${row.salesCategory}`;
+    const group = rankingGroups.get(key) ?? [];
+    group.push(row);
+    rankingGroups.set(key, group);
+  }
+
+  for (const categoryRowsRaw of rankingGroups.values()) {
+    const categoryRows = [...categoryRowsRaw].sort((a, b) => {
+      const metricCmp = b.metricValue - a.metricValue;
+      if (metricCmp !== 0) return metricCmp;
+      const revenueCmp = b.revenue - a.revenue;
+      if (revenueCmp !== 0) return revenueCmp;
+      const qtyCmp = b.quantitySold - a.quantitySold;
+      if (qtyCmp !== 0) return qtyCmp;
+      return a.name.localeCompare(b.name);
+    });
     const categoryTotalMetric = categoryRows.reduce((sum, row) => sum + row.metricValue, 0);
     const rankTotal = categoryRows.length;
 
@@ -283,6 +308,8 @@ function buildMenuMovementRows({
   return rows.sort((a, b) => {
     const deptCmp = a.department.localeCompare(b.department);
     if (deptCmp !== 0) return deptCmp;
+    const categoryCmp = salesMenuCategorySortValue(a.salesCategory) - salesMenuCategorySortValue(b.salesCategory);
+    if (categoryCmp !== 0) return categoryCmp;
     return a.rank - b.rank;
   });
 }
@@ -330,6 +357,7 @@ async function loadQtyByMenuIdForRange(
 export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMovementPanelProps) {
   const supabase = getSupabaseClient();
   const [departmentFilter, setDepartmentFilter] = useState<Department | "all">("all");
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [gradeFilter, setGradeFilter] = useState<GradeFilter>("all");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("all");
   const [metric, setMetric] = useState<MovementMetric>("qty");
@@ -398,6 +426,7 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
     const normalizedSearch = searchTerm.trim().toLowerCase();
     return rows.filter((row) => {
       if (departmentFilter !== "all" && row.department !== departmentFilter) return false;
+      if (categoryFilter !== "all" && row.salesCategory !== categoryFilter) return false;
       if (gradeFilter !== "all" && row.grade !== gradeFilter) return false;
       if (activeFilter === "active" && !row.isActive) return false;
       if (activeFilter === "inactive" && row.isActive) return false;
@@ -405,6 +434,7 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
       return [
         row.name,
         departmentLabel(row.department),
+        salesMenuCategoryLabel(row.salesCategory),
         row.grade,
         GRADE_LABEL[row.grade],
         getMenuRecommendation(row),
@@ -413,18 +443,20 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
         .toLowerCase()
         .includes(normalizedSearch);
     });
-  }, [activeFilter, departmentFilter, gradeFilter, rows, searchTerm]);
+  }, [activeFilter, categoryFilter, departmentFilter, gradeFilter, rows, searchTerm]);
 
   const gradeCountRows = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     return rows.filter((row) => {
       if (departmentFilter !== "all" && row.department !== departmentFilter) return false;
+      if (categoryFilter !== "all" && row.salesCategory !== categoryFilter) return false;
       if (activeFilter === "active" && !row.isActive) return false;
       if (activeFilter === "inactive" && row.isActive) return false;
       if (!normalizedSearch) return true;
       return [
         row.name,
         departmentLabel(row.department),
+        salesMenuCategoryLabel(row.salesCategory),
         row.grade,
         GRADE_LABEL[row.grade],
         getMenuRecommendation(row),
@@ -433,12 +465,15 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
         .toLowerCase()
         .includes(normalizedSearch);
     });
-  }, [activeFilter, departmentFilter, rows, searchTerm]);
+  }, [activeFilter, categoryFilter, departmentFilter, rows, searchTerm]);
 
   const rankedRows = useMemo(
     () => {
       const sorted = [...filteredRows].sort((a, b) => {
         if (sortKey === "name") return a.name.localeCompare(b.name);
+        if (sortKey === "category") {
+          return salesMenuCategorySortValue(a.salesCategory) - salesMenuCategorySortValue(b.salesCategory);
+        }
         if (sortKey === "sold") return a.quantitySold - b.quantitySold;
         if (sortKey === "share") return a.sharePercent - b.sharePercent;
         if (sortKey === "week") return compareNullableChange(a.weekChangePercent, b.weekChangePercent);
@@ -448,6 +483,8 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
 
         const deptCmp = a.department.localeCompare(b.department);
         if (deptCmp !== 0) return deptCmp;
+        const categoryCmp = salesMenuCategorySortValue(a.salesCategory) - salesMenuCategorySortValue(b.salesCategory);
+        if (categoryCmp !== 0) return categoryCmp;
         return a.rank - b.rank;
       });
       return sortDirection === "asc" ? sorted : sorted.reverse();
@@ -473,7 +510,11 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
 
   const handleSortKeyChange = (nextSortKey: SortKey) => {
     setSortKey(nextSortKey);
-    setSortDirection(nextSortKey === "rank" || nextSortKey === "name" || nextSortKey === "grade" ? "asc" : "desc");
+    setSortDirection(
+      nextSortKey === "rank" || nextSortKey === "name" || nextSortKey === "category" || nextSortKey === "grade"
+        ? "asc"
+        : "desc",
+    );
   };
 
   const handleExport = async () => {
@@ -491,6 +532,7 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
         { header: "Total Rank", key: "rankTotal", width: 12 },
         { header: "Menu", key: "menu", width: 32 },
         { header: "Department", key: "department", width: 14 },
+        { header: "Sales Category", key: "salesCategory", width: 18 },
         { header: "Status", key: "status", width: 12 },
         { header: "Qty Sold", key: "sold", width: 12 },
         { header: "Unit Price", key: "unitPrice", width: 14 },
@@ -525,6 +567,7 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
           rankTotal: row.rankTotal,
           menu: row.name,
           department: departmentLabel(row.department),
+          salesCategory: salesMenuCategoryLabel(row.salesCategory),
           status: row.isActive ? "Active" : "Inactive",
           sold: row.quantitySold,
           unitPrice: row.unitPrice,
@@ -595,6 +638,9 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
                 {formatDateRange(startDate, endDate)} · compare week {formatDateRange(weekStartDate, weekEndDate)} · month{" "}
                 {formatDateRange(monthStartDate, monthEndDate)}
               </p>
+              <p className="mt-1 text-xs text-zinc-500">
+                Ranking dan grade dihitung di kategori sales masing-masing.
+              </p>
             </div>
           </div>
 
@@ -655,6 +701,17 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
               <option value="all">Semua dept</option>
               <option value="bar">Bar</option>
               <option value="kitchen">Kitchen</option>
+            </select>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
+              className="min-h-10 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-white outline-none focus:border-emerald-400"
+            >
+              {CATEGORY_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
             </select>
             <select
               value={gradeFilter}
@@ -766,7 +823,7 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
                     <tr>
                       <th className="px-3 py-3 font-semibold">Rank</th>
                       <th className="px-3 py-3 font-semibold">Menu</th>
-                      <th className="px-3 py-3 font-semibold">Kategori</th>
+                      <th className="px-3 py-3 font-semibold">Kategori Sales</th>
                       <th className="px-3 py-3 text-right font-semibold">Sold</th>
                       <th className="px-3 py-3 text-right font-semibold">Kontribusi {metric === "qty" ? "Qty" : "Revenue"}</th>
                       <th className="px-3 py-3 text-right font-semibold">Vs Week</th>
@@ -791,7 +848,10 @@ export function MenuMovementPanel({ startDate, endDate, refreshKey }: MenuMoveme
                             </p>
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-zinc-400">{departmentLabel(row.department)}</td>
+                        <td className="px-3 py-3">
+                          <div className="font-medium text-zinc-200">{salesMenuCategoryLabel(row.salesCategory)}</div>
+                          <div className="mt-0.5 text-xs text-zinc-500">{departmentLabel(row.department)}</div>
+                        </td>
                         <td className="px-3 py-3 text-right font-semibold tabular-nums text-zinc-100">
                           {formatQty(row.quantitySold)}
                         </td>

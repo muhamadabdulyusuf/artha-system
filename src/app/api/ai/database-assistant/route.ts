@@ -60,17 +60,27 @@ export async function POST(request: Request) {
       | Awaited<ReturnType<typeof answerWithAiProviders>>
       | { answer: string; provider: "artha-local"; model: "database-context"; attempts: string[] };
 
-    try {
-      aiResult = await answerWithAiProviders({ question, context, history });
-    } catch (providerError) {
-      const fallbackAnswer = answerFromDatabaseContext(question, context);
-      if (!fallbackAnswer) throw providerError;
+    const localAnswer = answerFromDatabaseContext(question, context);
+    if (localAnswer) {
       aiResult = {
-        answer: fallbackAnswer,
+        answer: localAnswer,
         provider: "artha-local",
         model: "database-context",
-        attempts: [providerError instanceof Error ? providerError.message : "Provider AI gagal."],
+        attempts: [],
       };
+    } else {
+      try {
+        aiResult = await answerWithAiProviders({ question, context, history });
+      } catch (providerError) {
+        const fallbackAnswer = answerFromDatabaseContext(question, context);
+        if (!fallbackAnswer) throw providerError;
+        aiResult = {
+          answer: fallbackAnswer,
+          provider: "artha-local",
+          model: "database-context",
+          attempts: [providerError instanceof Error ? providerError.message : "Provider AI gagal."],
+        };
+      }
     }
 
     return Response.json({

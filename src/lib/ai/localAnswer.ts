@@ -27,6 +27,16 @@ function isAverageSalesQuestion(question: string): boolean {
   return /average|rata|jual|sales|terjual|sold|omzet|revenue/i.test(question);
 }
 
+function isLowStockQuestion(question: string): boolean {
+  return /low\s*stock|stok.*(low|kurang|habis|minim)|stock.*(low|kurang|habis|minim)|bahan.*(kurang|habis|minim)/i.test(
+    question,
+  );
+}
+
+function isPurchaseRequestQuestion(question: string): boolean {
+  return /\bpo\b|purchase|order|belanja|datang|arrival|supplier|vendor|belum datang|pending/i.test(question);
+}
+
 function answerMenuCatalog(rows: AnyRow[]): string | null {
   if (rows.length === 0) return null;
   const menuNames = rows.map((row, index) => `${index + 1}. ${text(row.menu)} (${text(row.department)})`);
@@ -43,6 +53,37 @@ function answerAverageSales(rows: AnyRow[]): string | null {
     return `- ${menu}: ${sold} pcs dalam 30 hari, average ${avgSold} pcs/hari, aktif terjual ${activeDays} hari.`;
   });
   return ["Ini average penjualan dari data 30 hari terakhir:", "", ...lines].join("\n");
+}
+
+function answerLowStock(rows: AnyRow[]): string | null {
+  if (rows.length === 0) return "Untuk range data ini, belum ada bahan aktif yang masuk low stock.";
+  const lines = rows.slice(0, 18).map((row) => {
+    const name = text(row.name);
+    const stock = numberText(row.stock);
+    const minimum = numberText(row.minimum);
+    const unit = text(row.unit);
+    const department = text(row.department);
+    return `- ${name} (${department}): stok ${stock} ${unit}, minimum ${minimum} ${unit}.`;
+  });
+  return ["Bahan yang perlu dicek/order:", "", ...lines].join("\n");
+}
+
+function answerPurchaseRequests(openRows: AnyRow[], matchedRows: AnyRow[]): string | null {
+  const rows = matchedRows.length > 0 ? matchedRows : openRows;
+  if (rows.length === 0) return "Belum ada PO/request pembelian terbuka dari data yang kebaca.";
+  const lines = rows.slice(0, 18).map((row) => {
+    const item = text(row.item);
+    const supplier = text(row.supplier) || "supplier belum diisi";
+    const qty = numberText(row.qty);
+    const unit = text(row.unit);
+    const poStatus = text(row.poStatus) || "-";
+    const purchaseStatus = text(row.purchaseStatus) || "-";
+    const eta = text(row.eta);
+    const arrival = text(row.arrival);
+    const dateInfo = arrival ? `arrival ${arrival}` : eta ? `ETA ${eta}` : "ETA belum ada";
+    return `- ${item}: ${qty} ${unit}, ${supplier}, PO ${poStatus}, pembelian ${purchaseStatus}, ${dateInfo}.`;
+  });
+  return ["Ini PO/request pembelian yang relevan:", "", ...lines].join("\n");
 }
 
 function answerRecipeMatches(recipeRows: AnyRow[], ingredientRows: AnyRow[]): string | null {
@@ -91,6 +132,19 @@ export function answerFromDatabaseContext(question: string, context: DatabaseAss
   const menuRecipeMatches = asRows(database.menuRecipeMatches);
   const menuIngredientMatches = asRows(database.menuIngredientMatches);
   const matchedMenus = asRows(database.matchedMenus);
+  const lowStockIngredients = asRows(database.lowStockIngredients);
+  const openPurchaseRequests = asRows(database.openPurchaseRequests);
+  const matchedPurchaseRequests = asRows(database.matchedPurchaseRequests);
+
+  if (isLowStockQuestion(question)) {
+    const stockAnswer = answerLowStock(lowStockIngredients);
+    if (stockAnswer) return stockAnswer;
+  }
+
+  if (isPurchaseRequestQuestion(question)) {
+    const poAnswer = answerPurchaseRequests(openPurchaseRequests, matchedPurchaseRequests);
+    if (poAnswer) return poAnswer;
+  }
 
   if (isRecipeQuestion(question)) {
     const recipeAnswer = answerRecipeMatches(menuRecipeMatches, menuIngredientMatches);
