@@ -41,6 +41,7 @@ import {
   isSupplierWhatsAppPhoneConfigured,
   normalizeWhatsAppPhoneNumber,
 } from "@/lib/purchase-order/whatsapp";
+import { LoadingState } from "@/components/ui/LoadingState";
 import { formatBusinessDateLabel, resolveBusinessDate } from "@/lib/utils/dateHelper";
 import { MenuMovementPanel } from "@/components/admin/MenuMovementPanel";
 import { OpnameApprovalPanel } from "@/components/admin/OpnameApprovalPanel";
@@ -3673,10 +3674,7 @@ export function MonitoringDashboard() {
       ) : null}
 
       {loading ? (
-        <div className="flex items-center justify-center gap-2 py-20 text-slate-500">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Memuat command center…
-        </div>
+        <LoadingState title="Memuat command center" detail="Menggabungkan stok, sales, PO, dan worksheet terbaru." />
       ) : (
         <>
           {activeMonitoringTab === "overview" ? (

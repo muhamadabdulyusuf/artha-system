@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, RefreshCw, Settings2 } from "lucide-react";
+import { StaffAccountsPanel } from "@/components/admin/StaffAccountsPanel";
+import { LoadingState } from "@/components/ui/LoadingState";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { Department, WorksheetStaffSettingRow } from "@/lib/types/database";
 
@@ -125,12 +127,16 @@ export function WorksheetStaffSettingsTab() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-8">
+      <StaffAccountsPanel />
+
+      <div className="h-px bg-zinc-800" />
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2">
             <Settings2 className="h-5 w-5 text-indigo-400" />
-            <h2 className="text-lg font-bold text-zinc-50">Worksheet Staff Settings</h2>
+            <h2 className="text-lg font-bold text-zinc-50">Worksheet Visibility Control</h2>
           </div>
           <p className="max-w-2xl text-sm leading-relaxed text-zinc-400">
             Atur kamar worksheet yang muncul di akun staff tanpa ubah kode. Fitur yang dimatikan
@@ -161,10 +167,7 @@ export function WorksheetStaffSettingsTab() {
       ) : null}
 
       {isLoading ? (
-        <div className="flex items-center justify-center gap-2 py-16 text-zinc-500">
-          <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
-          Memuat setting worksheet staff...
-        </div>
+        <LoadingState title="Memuat setting worksheet" detail="Mengambil akses room untuk Bar dan Kitchen." />
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
           {DEPARTMENTS.map((department) => {

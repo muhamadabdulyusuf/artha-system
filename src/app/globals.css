@@ -17,10 +17,10 @@
 
   input,
   select,
-	  textarea {
-	    @apply text-base;
-	  }
-	}
+  textarea {
+    @apply text-base;
+  }
+}
 
 @keyframes artha-ai-breathe {
   0%,
@@ -53,15 +53,15 @@
   }
 }
 
-	@layer utilities {
+@layer utilities {
   .artha-ai-float-button {
     animation:
       artha-ai-breathe 2.4s ease-in-out infinite,
       artha-ai-ring 2.4s ease-out infinite;
   }
 
-	  html[data-theme="light"] body {
-	    background-color: #f6f7f9;
+  html[data-theme="light"] body {
+    background-color: #f6f7f9;
     color: #18181b;
   }
 

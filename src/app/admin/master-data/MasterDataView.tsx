@@ -99,7 +99,29 @@ function MasterDataContent() {
       </header>
 
       <div className="mx-auto max-w-7xl px-4 py-5">
-        <div className="sticky top-0 z-30 mb-5 flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/95 px-3 py-2 shadow-lg shadow-black/20 backdrop-blur">
+        <nav className="mb-5 hidden gap-2 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/70 p-2 shadow-lg shadow-black/20 backdrop-blur lg:flex">
+          {visibleTabs.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex min-h-11 shrink-0 items-center gap-2 rounded-lg px-4 text-sm font-semibold transition ${
+                  active
+                    ? "bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
+                    : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="sticky top-0 z-30 mb-5 flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/95 px-3 py-2 shadow-lg shadow-black/20 backdrop-blur lg:hidden">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cyan-400 text-zinc-950">
               <ActiveIcon className="h-5 w-5" />
@@ -167,7 +189,7 @@ function MasterDataContent() {
           </div>
         ) : null}
 
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 shadow-xl shadow-black/20 sm:p-6">
+        <section className="pb-8">
           {activeTab === "ingredients" && <IngredientsTab />}
           {activeTab === "menu" && <MenuRecipeTab />}
           {activeTab === "suppliers" && <SuppliersTab />}

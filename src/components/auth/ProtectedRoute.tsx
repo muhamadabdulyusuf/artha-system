@@ -7,6 +7,7 @@ import {
   canAccessOpsRoute,
 } from "@/lib/auth/routeAccess";
 import { getRouteForRole, getStaffSession, type StaffSession } from "@/lib/auth/session";
+import { LoadingState } from "@/components/ui/LoadingState";
 import type { Department, StaffRole } from "@/lib/types/database";
 
 type ProtectedRouteProps = {
@@ -53,9 +54,11 @@ export function ProtectedRoute({
 
   if (!session) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
-        Memuat…
-      </div>
+      <LoadingState
+        fullScreen
+        title="Mengecek sesi"
+        detail="Artha System lagi validasi akses dan role akun."
+      />
     );
   }
 
