@@ -399,6 +399,20 @@ export type DemandEventRow = {
   updated_at: string;
 };
 
+export type AiBusinessMemoryRow = {
+  id: string;
+  title: string;
+  content: string;
+  tags: string[];
+  department: Department | null;
+  importance: number;
+  source: string;
+  created_by_staff_id: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type WorksheetStaffSettingRow = {
   department: Department;
   tab_id: string;
@@ -920,6 +934,30 @@ export type Database = {
           notes?: string;
           source?: string;
           external_id?: string | null;
+        };
+        Relationships: [];
+      };
+      ai_business_memory: {
+        Row: AiBusinessMemoryRow;
+        Insert: {
+          id?: string;
+          title?: string;
+          content: string;
+          tags?: string[];
+          department?: Department | null;
+          importance?: number;
+          source?: string;
+          created_by_staff_id?: string | null;
+          archived_at?: string | null;
+        };
+        Update: {
+          title?: string;
+          content?: string;
+          tags?: string[];
+          department?: Department | null;
+          importance?: number;
+          source?: string;
+          archived_at?: string | null;
         };
         Relationships: [];
       };

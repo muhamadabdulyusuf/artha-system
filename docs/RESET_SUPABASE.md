@@ -5,24 +5,7 @@ Use this only when the current Supabase data may be deleted.
 ## SQL Editor Flow
 
 1. Run `supabase/reset_public_schema.sql`.
-2. Run migrations in numeric order:
-   - `001_initial_schema.sql`
-   - `002_worksheet_out_line.sql`
-   - `003_supplier_po.sql`
-   - `004_supplier_phone_number.sql`
-   - `005_ingredient_minimum_stock.sql`
-   - `006_worksheet_out_line_validation.sql`
-   - `007_worksheet_opname_approval_stock_log.sql`
-   - `008_staff_verify_pin.sql`
-   - `009_staff_role_viewer.sql`
-   - `010_premix_production.sql`
-   - `011_worksheet_opname_line.sql`
-   - `012_ingredient_stock_tracking.sql`
-   - `013_outstock_photo_optional_note.sql`
-   - `014_ingredient_primary_supplier.sql`
-   - `015_worksheet_premix_line.sql`
-   - `016_premix_recipe_yield.sql`
-   - `017_bar_indogrosir_ingredients.sql`
+2. Run every file in `supabase/migrations` in numeric order.
 3. For current prototype app access, run:
    - `supabase/seeds/dev_worksheet_rls.sql`
    - `supabase/seeds/dev_staff.sql`

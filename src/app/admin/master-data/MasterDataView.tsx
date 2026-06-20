@@ -9,6 +9,7 @@ import {
   Package,
   Settings2,
   Shield,
+  ShoppingCart,
   Truck,
   X,
 } from "lucide-react";
@@ -23,18 +24,27 @@ import { IngredientsTab } from "@/components/admin/IngredientsTab";
 import { AdminWorksheetTab } from "@/components/admin/AdminWorksheetTab";
 import { MenuRecipeTab } from "@/components/admin/MenuRecipeTab";
 import { MonitoringDashboard } from "@/components/admin/MonitoringDashboard";
+import { PurchaseRequestTracker } from "@/components/admin/PurchaseRequestTracker";
 import { SuppliersTab } from "@/components/admin/SuppliersTab";
 import { WorksheetStaffSettingsTab } from "@/components/admin/WorksheetStaffSettingsTab";
 
-type TabId = "ingredients" | "menu" | "suppliers" | "worksheet" | "monitoring" | "settings";
+type TabId =
+  | "ingredients"
+  | "menu"
+  | "suppliers"
+  | "purchase_order"
+  | "worksheet"
+  | "monitoring"
+  | "settings";
 
-const TABS: { id: TabId; label: string; icon: typeof Package }[] = [
-  { id: "ingredients", label: "Ingredients", icon: Package },
-  { id: "menu", label: "Menu & Resep", icon: LayoutDashboard },
-  { id: "suppliers", label: "Supplier", icon: Truck },
-  { id: "worksheet", label: "Worksheet", icon: ClipboardList },
-  { id: "monitoring", label: "Monitoring", icon: Shield },
-  { id: "settings", label: "Settings", icon: Settings2 },
+const TABS: { id: TabId; label: string; description: string; icon: typeof Package }[] = [
+  { id: "monitoring", label: "Ringkasan Operasi", description: "PO, stok, complaint, sales, download", icon: LayoutDashboard },
+  { id: "purchase_order", label: "Purchase Order", description: "Purchasing order, supplier, status datang", icon: ShoppingCart },
+  { id: "worksheet", label: "Worksheet Bar & Kitchen", description: "Closing harian Bar dan Kitchen", icon: ClipboardList },
+  { id: "ingredients", label: "Master Bahan & Stok", description: "Nama bahan, unit, harga, minimum stock", icon: Package },
+  { id: "menu", label: "Menu & Resep", description: "Menu jual, harga, dan komposisi", icon: Shield },
+  { id: "suppliers", label: "Supplier & Harga", description: "Kontak supplier dan katalog harga", icon: Truck },
+  { id: "settings", label: "Pengaturan Akses", description: "Tampilan worksheet untuk staff", icon: Settings2 },
 ];
 
 export default function MasterDataView() {
@@ -47,7 +57,7 @@ export default function MasterDataView() {
 
 function MasterDataContent() {
   const session = getStaffSession();
-  const [activeTab, setActiveTab] = useState<TabId>("ingredients");
+  const [activeTab, setActiveTab] = useState<TabId>("monitoring");
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -79,7 +89,7 @@ function MasterDataContent() {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
               Command Center
             </p>
-            <h1 className="mt-1 text-xl font-bold text-white">Stock Control Workspace</h1>
+            <h1 className="mt-1 text-xl font-bold text-white">Artha Operations Dashboard</h1>
             <p className="mt-0.5 text-xs text-zinc-500">
               {session.name} · {roleLabel}
             </p>
@@ -99,28 +109,6 @@ function MasterDataContent() {
       </header>
 
       <div className="mx-auto max-w-7xl px-4 py-5">
-        <nav className="mb-5 hidden gap-2 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/70 p-2 shadow-lg shadow-black/20 backdrop-blur lg:flex">
-          {visibleTabs.map((tab) => {
-            const Icon = tab.icon;
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex min-h-11 shrink-0 items-center gap-2 rounded-lg px-4 text-sm font-semibold transition ${
-                  active
-                    ? "bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
-                    : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </nav>
-
         <div className="sticky top-0 z-30 mb-5 flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/95 px-3 py-2 shadow-lg shadow-black/20 backdrop-blur lg:hidden">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-cyan-400 text-zinc-950">
@@ -180,7 +168,12 @@ function MasterDataContent() {
                       }`}
                     >
                       <Icon className="h-4 w-4 shrink-0" />
-                      {tab.label}
+                      <span className="min-w-0">
+                        <span className="block truncate">{tab.label}</span>
+                        <span className={`block truncate text-[11px] ${active ? "text-zinc-800" : "text-zinc-500"}`}>
+                          {tab.description}
+                        </span>
+                      </span>
                     </button>
                   );
                 })}
@@ -189,14 +182,50 @@ function MasterDataContent() {
           </div>
         ) : null}
 
-        <section className="pb-8">
-          {activeTab === "ingredients" && <IngredientsTab />}
-          {activeTab === "menu" && <MenuRecipeTab />}
-          {activeTab === "suppliers" && <SuppliersTab />}
-          {activeTab === "worksheet" && <AdminWorksheetTab />}
-          {activeTab === "monitoring" && <MonitoringDashboard />}
-          {activeTab === "settings" && <WorksheetStaffSettingsTab />}
-        </section>
+        <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
+          <aside className="sticky top-5 hidden rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 shadow-lg shadow-black/20 backdrop-blur lg:block">
+            <div className="mb-3 border-b border-zinc-800 px-2 pb-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Workspace</p>
+              <p className="mt-1 truncate text-sm font-semibold text-zinc-100">{activeTabMeta.label}</p>
+            </div>
+            <nav className="space-y-2" aria-label="Admin workspace">
+              {visibleTabs.map((tab) => {
+                const Icon = tab.icon;
+                const active = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex min-h-12 w-full items-center gap-3 rounded-lg border px-3 text-left text-sm font-semibold transition ${
+                      active
+                        ? "border-cyan-300 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
+                        : "border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0">
+                      <span className="block truncate">{tab.label}</span>
+                      <span className={`block truncate text-[11px] ${active ? "text-zinc-800" : "text-zinc-500"}`}>
+                        {tab.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </nav>
+          </aside>
+
+          <section className="min-w-0 pb-8">
+            {activeTab === "ingredients" && <IngredientsTab />}
+            {activeTab === "menu" && <MenuRecipeTab />}
+            {activeTab === "suppliers" && <SuppliersTab />}
+            {activeTab === "purchase_order" && <PurchaseRequestTracker />}
+            {activeTab === "worksheet" && <AdminWorksheetTab />}
+            {activeTab === "monitoring" && <MonitoringDashboard />}
+            {activeTab === "settings" && <WorksheetStaffSettingsTab />}
+          </section>
+        </div>
       </div>
     </div>
   );

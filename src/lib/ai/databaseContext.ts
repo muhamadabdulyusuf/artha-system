@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveBusinessDate } from "@/lib/utils/dateHelper";
-import type { Database, Department, MenuItemRow, WorksheetSessionRow } from "@/lib/types/database";
+import type { AiBusinessMemoryRow, Database, Department, MenuItemRow, WorksheetSessionRow } from "@/lib/types/database";
 
 type DbClient = SupabaseClient<Database>;
 
@@ -67,6 +67,75 @@ type MenuRecipeMatch = {
   }[];
 };
 
+type ReorderRecommendation = {
+  ingredient: string;
+  department: Department;
+  stock: number;
+  minimum: number;
+  unit: string;
+  suggestedQty: number;
+  estimatedCost: number;
+  supplier: string;
+};
+
+type MenuMovementSummary = {
+  menu: string;
+  department: Department;
+  sold30d: number;
+  avgDailySold30d: number;
+  revenue30d: number;
+};
+
+type SupplierCoverageRisk = {
+  ingredient: string;
+  department: Department;
+  stock: number;
+  minimum: number;
+  unit: string;
+  reason: string;
+};
+
+type PurchaseArrivalRisk = {
+  item: string;
+  supplier: string;
+  qty: number;
+  unit: string;
+  purchaseStatus: string;
+  eta: string | null;
+  risk: "overdue" | "no_eta" | "waiting";
+};
+
+type DataQualityWarning = {
+  area: string;
+  item: string;
+  detail: string;
+};
+
+type BusinessMemorySummary = Pick<
+  AiBusinessMemoryRow,
+  "id" | "title" | "content" | "tags" | "department" | "importance" | "created_at"
+>;
+
+export type OperationsSummary = {
+  stockHealth: {
+    activeTrackedIngredients: number;
+    lowStockCount: number;
+    noPrimarySupplierCount: number;
+    zeroMinimumStockCount: number;
+    openPurchaseCount: number;
+    overduePurchaseCount: number;
+    activeMenuCount: number;
+    activeMenuWithoutRecipeCount: number;
+    businessMemoryCount: number;
+  };
+  reorderRecommendations: ReorderRecommendation[];
+  fastMovingMenus: MenuMovementSummary[];
+  slowMovingMenus: MenuMovementSummary[];
+  supplierCoverageRisks: SupplierCoverageRisk[];
+  purchaseArrivalRisks: PurchaseArrivalRisk[];
+  dataQualityWarnings: DataQualityWarning[];
+};
+
 type QueryIntent =
   | "stock"
   | "po"
@@ -105,6 +174,9 @@ export type DatabaseAssistantContext = {
     pendingOpname: unknown[];
     recentIssues: unknown[];
     activeDemandEvents: unknown[];
+    businessMemories: unknown[];
+    matchedBusinessMemories: unknown[];
+    operationsSummary: OperationsSummary;
   };
 };
 
@@ -301,6 +373,7 @@ export async function buildDatabaseAssistantContext(
   const wantsLedger = intents.includes("ledger") || wantsStockContext;
   const wantsIssue = intents.includes("issue");
   const wantsEvent = intents.includes("event");
+  const wantsMemory = /catatan|memori|memory|ingat|konteks|aturan|preferensi|info bisnis/.test(q);
   const wantsMenuCatalog = /daftar|list|semua|catalog|katalog|menu apa|apa aja.*menu|menu.*apa aja/.test(q);
 
   const [
@@ -315,6 +388,7 @@ export async function buildDatabaseAssistantContext(
     opnameResult,
     issueResult,
     eventResult,
+    memoryResult,
   ] = await Promise.all([
     supabase
       .from("ingredient")
@@ -370,6 +444,13 @@ export async function buildDatabaseAssistantContext(
       .gte("end_date", last30Start)
       .order("start_date", { ascending: false })
       .limit(80),
+    supabase
+      .from("ai_business_memory")
+      .select("id, title, content, tags, department, importance, created_at")
+      .is("archived_at", null)
+      .order("importance", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(120),
   ]);
 
   const ingredients = ((ingredientResult.data ?? []) as IngredientContextRow[]).map((row) => ({
@@ -405,6 +486,7 @@ export async function buildDatabaseAssistantContext(
   const pendingOpname = opnameResult.data ?? [];
   const issueRows = issueResult.data ?? [];
   const demandEvents = eventResult.data ?? [];
+  const businessMemories = (memoryResult.data ?? []) as BusinessMemorySummary[];
   const ingredientNameById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient.name]));
   const ingredientById = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
   const menuById = new Map(menus.map((menu) => [menu.id, menu]));
@@ -575,11 +657,151 @@ export async function buildDatabaseAssistantContext(
     reason: row.reason,
     note: String(row.note ?? "").slice(0, 80),
   });
+  const compactMemory = (row: BusinessMemorySummary) => ({
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    tags: row.tags,
+    department: row.department,
+    importance: row.importance,
+    createdAt: row.created_at,
+  });
+  const matchedBusinessMemories = businessMemories.filter((row) => {
+    const record = row as unknown as Record<string, unknown>;
+    return rowMatchesEveryTerm(record, terms) || rowMatchesTerms(record, terms);
+  });
 
   const openPurchaseRequests = purchaseRequests.filter((row) => {
     const status = normalize((row as { purchase_status?: string }).purchase_status);
     return status !== "arrived" && status !== "cancelled";
   });
+  const supplierNameById = new Map(
+    suppliers.map((supplier) => [
+      String((supplier as { id?: string }).id ?? ""),
+      String((supplier as { name?: string }).name ?? ""),
+    ]),
+  );
+  const activeTrackedIngredients = ingredients.filter((row) => row.is_active && row.is_stock_tracked);
+  const activeRecipeMenuIds = new Set(recipeVersions.map((version) => version.menu_item_id));
+  const activeMenus = menus.filter((menu) => menu.is_active);
+  const activeMenusWithoutRecipe = activeMenus.filter((menu) => !activeRecipeMenuIds.has(menu.id));
+  const ingredientWithoutPrimarySupplier = activeTrackedIngredients.filter((ingredient) => !ingredient.primary_supplier_id);
+  const zeroMinimumStockIngredients = activeTrackedIngredients.filter(
+    (ingredient) => Number(ingredient.minimum_stock ?? 0) <= 0,
+  );
+  const zeroPriceIngredients = activeTrackedIngredients.filter(
+    (ingredient) => Number(ingredient.default_unit_price ?? 0) <= 0,
+  );
+  const purchaseArrivalRisks: PurchaseArrivalRisk[] = openPurchaseRequests
+    .map((row) => {
+      const purchase = row as Record<string, unknown>;
+      const eta = purchase.estimated_arrival_date ? String(purchase.estimated_arrival_date) : null;
+      const risk: PurchaseArrivalRisk["risk"] = eta ? (eta < businessDate ? "overdue" : "waiting") : "no_eta";
+      return {
+        item: String(purchase.item_name ?? ""),
+        supplier: String(purchase.supplier_name ?? "") || "Supplier belum diisi",
+        qty: Number(purchase.qty ?? 0),
+        unit: String(purchase.unit ?? ""),
+        purchaseStatus: String(purchase.purchase_status ?? ""),
+        eta,
+        risk,
+      };
+    })
+    .filter((row) => row.item)
+    .sort((a, b) => {
+      const riskRank: Record<PurchaseArrivalRisk["risk"], number> = { overdue: 0, no_eta: 1, waiting: 2 };
+      const riskCmp = riskRank[a.risk] - riskRank[b.risk];
+      if (riskCmp !== 0) return riskCmp;
+      return (a.eta ?? "9999-12-31").localeCompare(b.eta ?? "9999-12-31");
+    })
+    .slice(0, 10);
+  const reorderRecommendations: ReorderRecommendation[] = lowStockIngredients
+    .map((ingredient) => {
+      const stock = Number(ingredient.current_stock ?? 0);
+      const minimum = Number(ingredient.minimum_stock ?? 0);
+      const suggestedQty = Math.max(minimum - stock, minimum * 0.5, 1);
+      const unitPrice = Number(ingredient.default_unit_price ?? 0);
+      return {
+        ingredient: ingredient.name,
+        department: ingredient.department,
+        stock,
+        minimum,
+        unit: ingredient.unit,
+        suggestedQty: Number(suggestedQty.toFixed(2)),
+        estimatedCost: Math.round(suggestedQty * unitPrice),
+        supplier: ingredient.primary_supplier_id
+          ? supplierNameById.get(ingredient.primary_supplier_id) || "Supplier belum kebaca"
+          : "Belum ada primary supplier",
+      };
+    })
+    .sort((a, b) => {
+      const aGap = a.minimum > 0 ? a.stock / a.minimum : 1;
+      const bGap = b.minimum > 0 ? b.stock / b.minimum : 1;
+      return aGap - bGap;
+    })
+    .slice(0, 12);
+  const compactMovement = (row: MenuSalesRow): MenuMovementSummary => ({
+    menu: row.menu_name,
+    department: row.department,
+    sold30d: row.quantity_sold,
+    avgDailySold30d: Number(row.average_daily_sold_30d.toFixed(2)),
+    revenue30d: row.revenue,
+  });
+  const supplierCoverageRisks: SupplierCoverageRisk[] = ingredientWithoutPrimarySupplier
+    .map((ingredient) => ({
+      ingredient: ingredient.name,
+      department: ingredient.department,
+      stock: ingredient.current_stock,
+      minimum: ingredient.minimum_stock,
+      unit: ingredient.unit,
+      reason: "Belum ada primary supplier",
+    }))
+    .sort((a, b) => {
+      const lowA = a.minimum > 0 && a.stock <= a.minimum ? 0 : 1;
+      const lowB = b.minimum > 0 && b.stock <= b.minimum ? 0 : 1;
+      return lowA - lowB || a.ingredient.localeCompare(b.ingredient);
+    })
+    .slice(0, 10);
+  const dataQualityWarnings: DataQualityWarning[] = [
+    ...activeMenusWithoutRecipe.slice(0, 8).map((menu) => ({
+      area: "Menu & Resep",
+      item: menu.menu_name,
+      detail: "Menu aktif belum punya recipe version aktif.",
+    })),
+    ...zeroMinimumStockIngredients.slice(0, 8).map((ingredient) => ({
+      area: "Inventory",
+      item: ingredient.name,
+      detail: "Minimum stock masih 0, AI tidak bisa menilai low stock dengan akurat.",
+    })),
+    ...zeroPriceIngredients.slice(0, 8).map((ingredient) => ({
+      area: "COGS",
+      item: ingredient.name,
+      detail: "Default unit price masih 0, estimasi belanja dan margin belum presisi.",
+    })),
+  ].slice(0, 16);
+  const operationsSummary: OperationsSummary = {
+    stockHealth: {
+      activeTrackedIngredients: activeTrackedIngredients.length,
+      lowStockCount: lowStockIngredients.length,
+      noPrimarySupplierCount: ingredientWithoutPrimarySupplier.length,
+      zeroMinimumStockCount: zeroMinimumStockIngredients.length,
+      openPurchaseCount: openPurchaseRequests.length,
+      overduePurchaseCount: purchaseArrivalRisks.filter((row) => row.risk === "overdue").length,
+      activeMenuCount: activeMenus.length,
+      activeMenuWithoutRecipeCount: activeMenusWithoutRecipe.length,
+      businessMemoryCount: businessMemories.length,
+    },
+    reorderRecommendations,
+    fastMovingMenus: salesRows.filter((row) => row.quantity_sold > 0).slice(0, 8).map(compactMovement),
+    slowMovingMenus: salesRows
+      .filter((row) => row.is_active && row.quantity_sold === 0)
+      .sort((a, b) => a.menu_name.localeCompare(b.menu_name))
+      .slice(0, 8)
+      .map(compactMovement),
+    supplierCoverageRisks,
+    purchaseArrivalRisks,
+    dataQualityWarnings,
+  };
 
   return {
     generatedAt: new Date().toISOString(),
@@ -603,6 +825,7 @@ export async function buildDatabaseAssistantContext(
         pendingOpnameRows: pendingOpname.length,
         menuIssueRows: issueRows.length,
         demandEvents: demandEvents.length,
+        businessMemories: businessMemories.length,
         activeRecipeVersions: recipeVersions.length,
         recipeLines: recipeLines.length,
       },
@@ -652,6 +875,12 @@ export async function buildDatabaseAssistantContext(
         compactIssue(row as Record<string, unknown>),
       ),
       activeDemandEvents: limitRows(demandEvents, wantsEvent ? 25 : 5),
+      businessMemories: limitRows(businessMemories, wantsMemory ? 20 : 6).map(compactMemory),
+      matchedBusinessMemories: limitRows(
+        matchedBusinessMemories.length > 0 ? matchedBusinessMemories : wantsMemory ? businessMemories : [],
+        wantsMemory ? 20 : 6,
+      ).map(compactMemory),
+      operationsSummary,
     },
   };
 }

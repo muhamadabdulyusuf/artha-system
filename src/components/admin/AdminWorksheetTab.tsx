@@ -1,28 +1,27 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Building2, ClipboardList, Loader2, Save, ShoppingCart } from "lucide-react";
-import { PurchaseRequestTracker } from "@/components/admin/PurchaseRequestTracker";
+import { Building2, ClipboardList, Loader2, Save } from "lucide-react";
 import { WorksheetClosing, type WorksheetClosingHandle } from "@/components/staff/WorksheetClosing";
 import { TypoConfirmModal } from "@/components/worksheet/TypoConfirmModal";
 import type { TypoGuardPreviewEntry } from "@/lib/worksheet/typoGuard";
 import type { Department } from "@/lib/types/database";
 
-type AdminWorksheetWorkspace = "po" | Department;
+type AdminWorksheetWorkspace = Department;
 
 const WORKSPACES: {
   id: AdminWorksheetWorkspace;
   label: string;
   title: string;
-  icon: typeof ShoppingCart;
+  description: string;
+  icon: typeof Building2;
 }[] = [
-  { id: "po", label: "PO", title: "PO Tracker", icon: ShoppingCart },
-  { id: "bar", label: "Bar", title: "Worksheet Bar", icon: Building2 },
-  { id: "kitchen", label: "Kitchen", title: "Worksheet Kitchen", icon: ClipboardList },
+  { id: "bar", label: "Worksheet Bar", title: "Worksheet Bar", description: "Receive, out stock, sales menu Bar", icon: Building2 },
+  { id: "kitchen", label: "Worksheet Kitchen", title: "Worksheet Kitchen", description: "Receive, out stock, sales menu Kitchen", icon: ClipboardList },
 ];
 
 export function AdminWorksheetTab() {
-  const [activeWorkspace, setActiveWorkspace] = useState<AdminWorksheetWorkspace>("po");
+  const [activeWorkspace, setActiveWorkspace] = useState<AdminWorksheetWorkspace>("bar");
   const [isSavingAllDepartments, setIsSavingAllDepartments] = useState(false);
   const [saveNotice, setSaveNotice] = useState<{ message: string; variant: "success" | "error" } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -31,7 +30,6 @@ export function AdminWorksheetTab() {
   const kitchenWorksheetRef = useRef<WorksheetClosingHandle>(null);
   const selected = WORKSPACES.find((item) => item.id === activeWorkspace) ?? WORKSPACES[0];
   const SelectedIcon = selected.icon;
-  const department = activeWorkspace === "po" ? null : activeWorkspace;
 
   const buildCombinedPreviewEntries = () => {
     if (!barWorksheetRef.current || !kitchenWorksheetRef.current) {
@@ -97,24 +95,22 @@ export function AdminWorksheetTab() {
           </div>
         </div>
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          {department ? (
-            <button
-              type="button"
-              disabled={isSavingAllDepartments}
-              onClick={openSaveAllPreview}
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isSavingAllDepartments ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              <span>{isSavingAllDepartments ? "Menyimpan…" : "Simpan Bar + Kitchen"}</span>
-            </button>
-          ) : null}
+        <div className="flex flex-col gap-2 sm:min-w-[220px]">
+          <button
+            type="button"
+            disabled={isSavingAllDepartments}
+            onClick={openSaveAllPreview}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSavingAllDepartments ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            <span>{isSavingAllDepartments ? "Menyimpan…" : "Simpan Bar + Kitchen"}</span>
+          </button>
 
-          <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1">
+          <div className="grid gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1">
             {WORKSPACES.map((item) => {
               const Icon = item.icon;
               const active = item.id === activeWorkspace;
@@ -126,14 +122,19 @@ export function AdminWorksheetTab() {
                     setActiveWorkspace(item.id);
                     setSaveNotice(null);
                   }}
-                  className={`flex min-h-10 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-semibold transition sm:gap-2 sm:px-3 sm:text-sm ${
+                  className={`flex min-h-10 items-center justify-start gap-2 rounded-md px-3 text-sm font-semibold transition ${
                     active
                       ? "bg-emerald-400 text-zinc-950"
                       : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
                   }`}
                 >
                   <Icon className="h-4 w-4" />
-                  <span>{item.label}</span>
+                  <span className="min-w-0 text-left">
+                    <span className="block truncate">{item.label}</span>
+                    <span className={`block truncate text-[11px] ${active ? "text-zinc-800" : "text-zinc-500"}`}>
+                      {item.description}
+                    </span>
+                  </span>
                 </button>
               );
             })}
@@ -164,22 +165,18 @@ export function AdminWorksheetTab() {
         }}
       />
 
-      {activeWorkspace === "po" ? <PurchaseRequestTracker /> : null}
-
-      {department ? (
-        <div className="space-y-4">
-          <div className={activeWorkspace === "bar" ? "" : "hidden"}>
-            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
-              <WorksheetClosing ref={barWorksheetRef} department="bar" title="Worksheet Bar" embedded />
-            </div>
-          </div>
-          <div className={activeWorkspace === "kitchen" ? "" : "hidden"}>
-            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
-              <WorksheetClosing ref={kitchenWorksheetRef} department="kitchen" title="Worksheet Kitchen" embedded />
-            </div>
+      <div className="space-y-4">
+        <div className={activeWorkspace === "bar" ? "" : "hidden"}>
+          <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
+            <WorksheetClosing ref={barWorksheetRef} department="bar" title="Worksheet Bar" embedded />
           </div>
         </div>
-      ) : null}
+        <div className={activeWorkspace === "kitchen" ? "" : "hidden"}>
+          <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/20">
+            <WorksheetClosing ref={kitchenWorksheetRef} department="kitchen" title="Worksheet Kitchen" embedded />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

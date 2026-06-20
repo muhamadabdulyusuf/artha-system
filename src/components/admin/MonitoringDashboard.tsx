@@ -8,11 +8,14 @@ import {
   Download,
   Loader2,
   Lock,
+  MessageSquareWarning,
   Package,
   RefreshCw,
   Search,
   Send,
+  ShieldCheck,
   ShoppingCart,
+  Sparkles,
   TrendingDown,
   TrendingUp,
   X,
@@ -196,6 +199,46 @@ type RunwayEntry = {
   urgency: "safe" | "warning" | "critical";
 };
 
+type FoundationIssueSeverity = "critical" | "warning" | "info";
+
+type FoundationIssue = {
+  id: string;
+  area: "Master Data" | "Resep" | "Supplier" | "Inventory" | "Purchasing" | "Sales";
+  severity: FoundationIssueSeverity;
+  title: string;
+  detail: string;
+  count: number;
+  actionLabel: string;
+};
+
+type FoundationAuditInput = {
+  ingredients: IngredientWithPrimarySupplier[];
+  activeMenus: MenuItemRow[];
+  activeRecipeMenuIds: Set<string>;
+  suppliers: SupplierRow[];
+  liveRows: LiveStockRow[];
+  demandRows: SalesDemandRow[];
+};
+
+type ComplaintSummary = {
+  recordCount: number;
+  totalQty: number;
+  evidenceCount: number;
+  barQty: number;
+  kitchenQty: number;
+  topMenu: { name: string; qty: number } | null;
+  topReason: { label: string; qty: number } | null;
+};
+
+type PoExecutiveSummary = {
+  draftLines: number;
+  draftAmount: number;
+  autoReplenishmentLines: number;
+  supplierReadyCount: number;
+  unassignedLines: number;
+  topSupplier: { name: string; lines: number } | null;
+};
+
 type DemandScenario = "normal" | "weekend_holiday" | "promo_kol";
 
 type SalesDemandRow = {
@@ -211,6 +254,75 @@ type SalesDemandRow = {
   peakDailyUsage: number;
   recommendedOrderQty: number;
   supplierName: string;
+};
+
+type AiAnalyzePriority = "high" | "medium" | "low";
+type AiAnalyzeRiskLevel = "high" | "medium" | "low";
+type AiAnalyzeClassification = "fast_moving" | "low_moving";
+
+type AiAnalyzeContextRow = {
+  product_id: string;
+  product_name: string;
+  department: Department;
+  unit: string;
+  current_stock: number;
+  minimum_stock: number;
+  stock_status: "low_stock" | "ok";
+  daily_usage_7d: Record<string, number>;
+  total_usage_7d: number;
+  average_daily_usage: number;
+  peak_daily_usage: number;
+  recommended_order_qty: number;
+  supplier_name: string;
+  demand_scenario: DemandScenario;
+  demand_multiplier: number;
+  coverage_days: number;
+  business_date_range: {
+    start_date: string;
+    end_date: string;
+    usage_start_date: string;
+    usage_end_date: string;
+  };
+};
+
+type AiAnalyzeResult = {
+  summary: {
+    total_products: number;
+    fast_moving_count: number;
+    low_moving_count: number;
+    critical_stock_count: number;
+    [key: string]: unknown;
+  };
+  purchase_orders: {
+    product_id: string | number | null;
+    product_name: string;
+    recommended_qty: number;
+    priority: AiAnalyzePriority;
+    reason: string;
+    [key: string]: unknown;
+  }[];
+  inventory_control: {
+    product_id: string | number | null;
+    product_name: string;
+    current_stock: number | null;
+    recommended_action: string;
+    risk_level: AiAnalyzeRiskLevel;
+    [key: string]: unknown;
+  }[];
+  product_classification: {
+    product_id: string | number | null;
+    product_name: string;
+    classification: AiAnalyzeClassification;
+    reason: string;
+    [key: string]: unknown;
+  }[];
+};
+
+type AiAnalyzeErrorBody = {
+  error?: {
+    code?: string;
+    message?: string;
+  };
 };
 
 type CogsAlert = {
@@ -375,14 +487,16 @@ type PremixComponentRow = {
 
 type MonitoringTabId = "overview" | "demand" | "inventory" | "sales" | "control" | "export";
 
-const MONITORING_TABS: { id: MonitoringTabId; label: string; icon: typeof Package }[] = [
-  { id: "overview", label: "Overview", icon: BarChart3 },
-  { id: "demand", label: "Demand & Order", icon: ShoppingCart },
-  { id: "inventory", label: "Inventory", icon: Package },
-  { id: "sales", label: "Sales", icon: TrendingUp },
-  { id: "control", label: "Control", icon: AlertTriangle },
-  { id: "export", label: "Export", icon: Download },
+const MONITORING_TABS: { id: MonitoringTabId; label: string; description: string; icon: typeof Package }[] = [
+  { id: "overview", label: "Ringkasan Dashboard", description: "Prioritas, fondasi, PO, complaint", icon: BarChart3 },
+  { id: "demand", label: "Rencana PO", description: "Demand, event, draft order supplier", icon: ShoppingCart },
+  { id: "inventory", label: "Stok & Ledger", description: "Live stock, receive audit, ledger", icon: Package },
+  { id: "sales", label: "Penjualan Menu", description: "Menu movement dan revenue", icon: TrendingUp },
+  { id: "control", label: "Complaint Tamu", description: "Komplain pelanggan, catatan, bukti foto", icon: AlertTriangle },
+  { id: "export", label: "Download Laporan", description: "XLSX stok, sales, demand, complaint", icon: Download },
 ];
+
+const CUSTOMER_COMPLAINT_REASON = "guest_complaint";
 
 const MENU_ISSUE_REASON_LABEL: Record<string, string> = {
   too_salty: "Terlalu asin",
@@ -403,6 +517,29 @@ const DEMAND_EVENT_TYPE_LABEL: Record<string, string> = {
   private_event: "Private Event",
   school_holiday: "Libur Sekolah",
   other: "Lainnya",
+};
+
+const AI_ANALYZE_PRIORITY_LABEL: Record<AiAnalyzePriority, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
+const AI_ANALYZE_RISK_LABEL: Record<AiAnalyzeRiskLevel, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
+const AI_ANALYZE_CLASSIFICATION_LABEL: Record<AiAnalyzeClassification, string> = {
+  fast_moving: "Fast moving",
+  low_moving: "Low moving",
+};
+
+const FOUNDATION_SEVERITY_LABEL: Record<FoundationIssueSeverity, string> = {
+  critical: "Kritis",
+  warning: "Waspada",
+  info: "Info",
 };
 
 const FINAL_WORKSHEET_STATUSES = new Set(["SUBMITTED", "ADJUSTED", "LOCKED", "PENDING_APPROVAL_ADMIN"]);
@@ -426,6 +563,136 @@ function isSpillageExceeded(ledger: StockLedgerRow): boolean {
   const absWaste = Math.abs(wasteQty);
   const threshold = Math.max(theoretical * SPILLAGE_RATIO_THRESHOLD, 1);
   return absWaste > threshold;
+}
+
+function summarizeNames(names: string[], limit = 3): string {
+  const visible = names.slice(0, limit).join(", ");
+  const rest = names.length - limit;
+  return rest > 0 ? `${visible} +${rest} lainnya` : visible;
+}
+
+function buildFoundationIssues(input: FoundationAuditInput): FoundationIssue[] {
+  const trackedIngredients = input.ingredients.filter((ingredient) => ingredient.is_stock_tracked);
+  const lowStockIngredientIds = new Set(
+    input.liveRows
+      .filter((row) => row.status === "LOW STOCK")
+      .map((row) => row.ingredientId)
+  );
+  const issues: FoundationIssue[] = [];
+
+  const negativeLiveStock = input.liveRows.filter((row) => row.liveStock < 0);
+  if (negativeLiveStock.length > 0) {
+    issues.push({
+      id: "negative-live-stock",
+      area: "Inventory",
+      severity: "critical",
+      title: "Live Stock Negatif",
+      detail: summarizeNames(negativeLiveStock.map((row) => row.ingredientName)),
+      count: negativeLiveStock.length,
+      actionLabel: "Audit receive/opname/out stock",
+    });
+  }
+
+  const ingredientsWithoutSupplier = trackedIngredients.filter((ingredient) => !ingredient.primary_supplier_id);
+  if (ingredientsWithoutSupplier.length > 0) {
+    const hasLowStock = ingredientsWithoutSupplier.some((ingredient) => lowStockIngredientIds.has(ingredient.id));
+    issues.push({
+      id: "missing-primary-supplier",
+      area: "Supplier",
+      severity: hasLowStock ? "critical" : "warning",
+      title: "Primary Supplier Kosong",
+      detail: summarizeNames(ingredientsWithoutSupplier.map((ingredient) => ingredient.name)),
+      count: ingredientsWithoutSupplier.length,
+      actionLabel: "Lengkapi supplier utama",
+    });
+  }
+
+  const zeroMinimumStock = trackedIngredients.filter((ingredient) => Number(ingredient.minimum_stock ?? 0) <= 0);
+  if (zeroMinimumStock.length > 0) {
+    issues.push({
+      id: "zero-minimum-stock",
+      area: "Inventory",
+      severity: "warning",
+      title: "Minimum Stock Belum Diset",
+      detail: summarizeNames(zeroMinimumStock.map((ingredient) => ingredient.name)),
+      count: zeroMinimumStock.length,
+      actionLabel: "Set minimum stok",
+    });
+  }
+
+  const zeroUnitPrice = trackedIngredients.filter((ingredient) => Number(ingredient.default_unit_price ?? 0) <= 0);
+  if (zeroUnitPrice.length > 0) {
+    issues.push({
+      id: "zero-unit-price",
+      area: "Master Data",
+      severity: "warning",
+      title: "Harga Dasar Kosong",
+      detail: summarizeNames(zeroUnitPrice.map((ingredient) => ingredient.name)),
+      count: zeroUnitPrice.length,
+      actionLabel: "Isi default unit price",
+    });
+  }
+
+  const activeMenusWithoutRecipe = input.activeMenus.filter((menu) => !input.activeRecipeMenuIds.has(menu.id));
+  if (activeMenusWithoutRecipe.length > 0) {
+    issues.push({
+      id: "active-menu-without-recipe",
+      area: "Resep",
+      severity: "critical",
+      title: "Menu Aktif Tanpa Resep",
+      detail: summarizeNames(activeMenusWithoutRecipe.map((menu) => menu.menu_name)),
+      count: activeMenusWithoutRecipe.length,
+      actionLabel: "Buat recipe version aktif",
+    });
+  }
+
+  const activeMenusWithoutPrice = input.activeMenus.filter((menu) => Number(menu.price ?? 0) <= 0);
+  if (activeMenusWithoutPrice.length > 0) {
+    issues.push({
+      id: "active-menu-zero-price",
+      area: "Sales",
+      severity: "warning",
+      title: "Harga Menu Kosong",
+      detail: summarizeNames(activeMenusWithoutPrice.map((menu) => menu.menu_name)),
+      count: activeMenusWithoutPrice.length,
+      actionLabel: "Lengkapi harga jual",
+    });
+  }
+
+  const suppliersWithoutPhone = input.suppliers.filter(
+    (supplier) => !isSupplierWhatsAppPhoneConfigured(supplier.phone_number)
+  );
+  if (suppliersWithoutPhone.length > 0) {
+    issues.push({
+      id: "supplier-phone-missing",
+      area: "Supplier",
+      severity: "warning",
+      title: "WhatsApp Supplier Belum Siap",
+      detail: summarizeNames(suppliersWithoutPhone.map((supplier) => supplier.name)),
+      count: suppliersWithoutPhone.length,
+      actionLabel: "Lengkapi nomor supplier",
+    });
+  }
+
+  const demandWithoutSupplier = input.demandRows.filter(
+    (row) => row.recommendedOrderQty > 0 && !row.supplierName
+  );
+  if (demandWithoutSupplier.length > 0) {
+    issues.push({
+      id: "demand-po-without-supplier",
+      area: "Purchasing",
+      severity: "critical",
+      title: "Rekomendasi PO Tanpa Supplier",
+      detail: summarizeNames(demandWithoutSupplier.map((row) => row.ingredientName)),
+      count: demandWithoutSupplier.length,
+      actionLabel: "Hubungkan supplier ke bahan",
+    });
+  }
+
+  return issues.sort((a, b) => {
+    const severityRank: Record<FoundationIssueSeverity, number> = { critical: 0, warning: 1, info: 2 };
+    return severityRank[a.severity] - severityRank[b.severity] || b.count - a.count;
+  });
 }
 
 function getWibWeekdayIndex(now: Date = new Date()): number {
@@ -907,6 +1174,68 @@ async function downloadSalesXlsx(filename: string, rows: SalesExportRow[]): Prom
 
   sheet.getColumn("unitPrice").numFmt = '"Rp" #,##0';
   sheet.getColumn("revenue").numFmt = '"Rp" #,##0';
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+async function downloadComplaintXlsx(filename: string, rows: MenuIssueReportRow[]): Promise<void> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Complaint Tamu");
+
+  sheet.columns = [
+    { header: "Tanggal", key: "date", width: 14 },
+    { header: "Dept", key: "department", width: 12 },
+    { header: "Menu", key: "menu", width: 30 },
+    { header: "Qty Complaint", key: "quantity", width: 16 },
+    { header: "Alasan", key: "reason", width: 20 },
+    { header: "Catatan Complaint", key: "note", width: 42 },
+    { header: "Jumlah Foto", key: "photoCount", width: 14 },
+    { header: "Link Foto", key: "photos", width: 48 },
+    { header: "Waktu Input", key: "createdAt", width: 24 },
+  ];
+
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const row of rows) {
+    const photoUrls = splitStoredPhotoUrls(row.photoUrl);
+    const excelRow = sheet.addRow({
+      date: row.businessDate,
+      department: row.department,
+      menu: row.menuName,
+      quantity: row.quantity,
+      reason: row.reasonLabel,
+      note: row.note || "-",
+      photoCount: photoUrls.length,
+      photos: photoUrls.join("\n"),
+      createdAt: new Date(row.createdAt).toLocaleString("id-ID"),
+    });
+    excelRow.alignment = { vertical: "top", wrapText: true };
+  }
+
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: sheet.columnCount },
+  };
+  sheet.getColumn("quantity").numFmt = "#,##0.##";
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], {
@@ -1667,6 +1996,7 @@ export function MonitoringDashboard() {
   const [runwaySource, setRunwaySource] = useState("");
   const [cogsAlerts, setCogsAlerts] = useState<CogsAlert[]>([]);
   const [hasSpillageAlert, setHasSpillageAlert] = useState(false);
+  const [foundationBaseIssues, setFoundationBaseIssues] = useState<FoundationIssue[]>([]);
 
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [selectedSupplierId, setSelectedSupplierId] = useState("");
@@ -1684,6 +2014,9 @@ export function MonitoringDashboard() {
   const [poSubmitting, setPoSubmitting] = useState(false);
   const [poSuccess, setPoSuccess] = useState<string | null>(null);
   const [poError, setPoError] = useState<string | null>(null);
+  const [aiAnalyzeLoading, setAiAnalyzeLoading] = useState(false);
+  const [aiAnalyzeResult, setAiAnalyzeResult] = useState<AiAnalyzeResult | null>(null);
+  const [aiAnalyzeError, setAiAnalyzeError] = useState<string | null>(null);
 
   const dateRangeInvalid = startDate > endDate;
 
@@ -1792,16 +2125,21 @@ export function MonitoringDashboard() {
     );
   }, [normalizedSearch, receiveAuditRows]);
 
-  const filteredMenuIssueRows = useMemo(() => {
-    if (!normalizedSearch) return menuIssueRows;
-    return menuIssueRows.filter(
+  const complaintOnlyRows = useMemo(
+    () => menuIssueRows.filter((row) => row.reason === CUSTOMER_COMPLAINT_REASON),
+    [menuIssueRows]
+  );
+
+  const filteredComplaintRows = useMemo(() => {
+    if (!normalizedSearch) return complaintOnlyRows;
+    return complaintOnlyRows.filter(
       (row) =>
         row.menuName.toLowerCase().includes(normalizedSearch) ||
         row.department.toLowerCase().includes(normalizedSearch) ||
         row.reasonLabel.toLowerCase().includes(normalizedSearch) ||
         row.note.toLowerCase().includes(normalizedSearch)
     );
-  }, [menuIssueRows, normalizedSearch]);
+  }, [complaintOnlyRows, normalizedSearch]);
 
   const filteredDemandEvents = useMemo(() => {
     if (!normalizedSearch) return demandEvents;
@@ -1835,6 +2173,35 @@ export function MonitoringDashboard() {
     [coverageDays, demandMultiplier, filteredSalesDemandRows]
   );
 
+  const aiAnalyzeDataContext = useMemo<AiAnalyzeContextRow[]>(
+    () =>
+      demandPlanningRows.slice(0, 80).map((row) => ({
+        product_id: row.ingredientId,
+        product_name: row.ingredientName,
+        department: row.department,
+        unit: row.unit,
+        current_stock: row.currentStock,
+        minimum_stock: row.minimumStock,
+        stock_status: row.currentStock <= row.minimumStock ? "low_stock" : "ok",
+        daily_usage_7d: row.dailyUsage,
+        total_usage_7d: row.totalUsage,
+        average_daily_usage: row.averageDailyUsage,
+        peak_daily_usage: row.peakDailyUsage,
+        recommended_order_qty: row.recommendedOrderQty,
+        supplier_name: row.supplierName,
+        demand_scenario: demandScenario,
+        demand_multiplier: demandMultiplier,
+        coverage_days: coverageDays,
+        business_date_range: {
+          start_date: startDate,
+          end_date: endDate,
+          usage_start_date: demandDateKeys[0],
+          usage_end_date: demandDateKeys[demandDateKeys.length - 1],
+        },
+      })),
+    [coverageDays, demandDateKeys, demandMultiplier, demandPlanningRows, demandScenario, endDate, startDate]
+  );
+
   const filteredTopBeverages = useMemo(() => {
     if (!normalizedSearch) return topBeverages;
     return topBeverages.filter((item) => item.menu_name.toLowerCase().includes(normalizedSearch));
@@ -1844,6 +2211,52 @@ export function MonitoringDashboard() {
     if (!normalizedSearch) return topFoods;
     return topFoods.filter((item) => item.menu_name.toLowerCase().includes(normalizedSearch));
   }, [topFoods, normalizedSearch]);
+
+  const foundationIssues = useMemo(() => {
+    const demandWithoutSupplier = demandPlanningRows.filter(
+      (row) => row.recommendedOrderQty > 0 && !row.supplierName
+    );
+    const demandIssue: FoundationIssue | null =
+      demandWithoutSupplier.length > 0
+        ? {
+            id: "demand-po-without-supplier",
+            area: "Purchasing",
+            severity: "critical",
+            title: "Rekomendasi PO Tanpa Supplier",
+            detail: summarizeNames(demandWithoutSupplier.map((row) => row.ingredientName)),
+            count: demandWithoutSupplier.length,
+            actionLabel: "Hubungkan supplier ke bahan",
+          }
+        : null;
+    const allIssues = demandIssue ? [...foundationBaseIssues, demandIssue] : [...foundationBaseIssues];
+    return allIssues.sort((a, b) => {
+      const severityRank: Record<FoundationIssueSeverity, number> = { critical: 0, warning: 1, info: 2 };
+      return severityRank[a.severity] - severityRank[b.severity] || b.count - a.count;
+    });
+  }, [demandPlanningRows, foundationBaseIssues]);
+
+  const foundationIssueCounts = useMemo(
+    () =>
+      foundationIssues.reduce(
+        (counts, issue) => {
+          counts[issue.severity] += issue.count;
+          return counts;
+        },
+        { critical: 0, warning: 0, info: 0 } satisfies Record<FoundationIssueSeverity, number>
+      ),
+    [foundationIssues]
+  );
+
+  const foundationReadinessScore = useMemo(() => {
+    const penalty =
+      foundationIssueCounts.critical * 12 +
+      foundationIssueCounts.warning * 5 +
+      foundationIssueCounts.info * 2;
+    return Math.max(0, Math.min(100, 100 - penalty));
+  }, [foundationIssueCounts]);
+
+  const foundationReadinessTone: FoundationIssueSeverity =
+    foundationReadinessScore >= 85 ? "info" : foundationReadinessScore >= 65 ? "warning" : "critical";
 
   const ledgerTableRows: LedgerTableRow[] = useMemo(
     () =>
@@ -1880,12 +2293,12 @@ export function MonitoringDashboard() {
       });
     }
 
-    if (menuIssueRows.length > 0) {
-      const totalIssueQty = menuIssueRows.reduce((sum, row) => sum + row.quantity, 0);
+    if (complaintOnlyRows.length > 0) {
+      const totalIssueQty = complaintOnlyRows.reduce((sum, row) => sum + row.quantity, 0);
       items.push({
         tone: "warning",
-        title: "Review remake / complaint",
-        detail: `${formatQtyId(totalIssueQty)} porsi tercatat dalam rentang ${dateRangeLabel}.`,
+        title: "Review complaint tamu",
+        detail: `${formatQtyId(totalIssueQty)} porsi complaint tercatat dalam rentang ${dateRangeLabel}.`,
       });
     }
 
@@ -1909,12 +2322,12 @@ export function MonitoringDashboard() {
       items.push({
         tone: "info",
         title: "Operasional terlihat aman",
-        detail: "Belum ada prioritas kritis dari stok, remake, spillage, atau COGS.",
+        detail: "Belum ada prioritas kritis dari stok, complaint, spillage, atau COGS.",
       });
     }
 
     return items.slice(0, 5);
-  }, [cogsAlerts.length, dateRangeLabel, hasSpillageAlert, lowStockInventoryRows, menuIssueRows, runwayEntries]);
+  }, [cogsAlerts.length, complaintOnlyRows, dateRangeLabel, hasSpillageAlert, lowStockInventoryRows, runwayEntries]);
 
   const lowStockOrderGroups = useMemo<LowStockOrderGroup[]>(() => {
     const grouped = new Map<string, LowStockOrderGroup>();
@@ -2008,6 +2421,56 @@ export function MonitoringDashboard() {
     () => selectedSupplierLowStockGroups.reduce((sum, group) => sum + group.lines.length, 0),
     [selectedSupplierLowStockGroups]
   );
+
+  const complaintSummary = useMemo<ComplaintSummary>(() => {
+    const menuQty = new Map<string, number>();
+    const reasonQty = new Map<string, number>();
+    let totalQty = 0;
+    let evidenceCount = 0;
+    let barQty = 0;
+    let kitchenQty = 0;
+
+    for (const row of complaintOnlyRows) {
+      totalQty += row.quantity;
+      if (row.department === "bar") barQty += row.quantity;
+      if (row.department === "kitchen") kitchenQty += row.quantity;
+      if (splitStoredPhotoUrls(row.photoUrl).length > 0) evidenceCount += 1;
+      menuQty.set(row.menuName, (menuQty.get(row.menuName) ?? 0) + row.quantity);
+      reasonQty.set(row.reasonLabel, (reasonQty.get(row.reasonLabel) ?? 0) + row.quantity);
+    }
+
+    const topMenuEntry = Array.from(menuQty.entries()).sort((a, b) => b[1] - a[1])[0] ?? null;
+    const topReasonEntry = Array.from(reasonQty.entries()).sort((a, b) => b[1] - a[1])[0] ?? null;
+
+    return {
+      recordCount: menuIssueRows.length,
+      totalQty,
+      evidenceCount,
+      barQty,
+      kitchenQty,
+      topMenu: topMenuEntry ? { name: topMenuEntry[0], qty: topMenuEntry[1] } : null,
+      topReason: topReasonEntry ? { label: topReasonEntry[0], qty: topReasonEntry[1] } : null,
+    };
+  }, [complaintOnlyRows]);
+
+  const poExecutiveSummary = useMemo<PoExecutiveSummary>(() => {
+    const autoReplenishmentLines = lowStockOrderGroups
+      .filter((group) => group.supplierId !== "unassigned")
+      .reduce((sum, group) => sum + group.lines.length, 0);
+    const supplierReadyCount = supplierPoCards.filter((card) => card.lineCount > 0).length;
+    const topSupplierCard = supplierPoCards.find((card) => card.lineCount > 0) ?? null;
+
+    return {
+      draftLines: poLines.length,
+      draftAmount: poTotalAmount,
+      autoReplenishmentLines,
+      supplierReadyCount,
+      unassignedLines: unassignedLowStockGroup?.lines.length ?? 0,
+      topSupplier: topSupplierCard
+        ? { name: topSupplierCard.supplier.name, lines: topSupplierCard.lineCount }
+        : null,
+    };
+  }, [lowStockOrderGroups, poLines.length, poTotalAmount, supplierPoCards, unassignedLowStockGroup]);
 
   const barLedgerRows = useMemo(
     () => ledgerTableRows.filter((row) => row.department === "bar"),
@@ -3027,19 +3490,44 @@ export function MonitoringDashboard() {
       setCogsAlerts(alerts.slice(0, 6));
     }
 
-    const { data: supplierRows, error: supErr } = await supabase
-      .from("supplier")
-      .select(
-        "id, name, category, pic_name, min_order_amount, phone_number, link_url, is_active, created_at, updated_at"
-      )
-      .eq("is_active", true)
-      .order("name");
+    const [supplierResult, activeMenuResult, activeRecipeResult] = await Promise.all([
+      supabase
+        .from("supplier")
+        .select(
+          "id, name, category, pic_name, min_order_amount, phone_number, link_url, is_active, created_at, updated_at"
+        )
+        .eq("is_active", true)
+        .order("name"),
+      supabase
+        .from("menu_item")
+        .select("id, menu_name, department, price, is_active, created_at, updated_at")
+        .eq("is_active", true)
+        .order("menu_name"),
+      supabase
+        .from("menu_recipe_version")
+        .select("menu_item_id")
+        .eq("is_active", true),
+    ]);
 
-    if (supErr) {
-      setSuppliers([]);
-    } else {
-      setSuppliers(supplierRows ?? []);
-    }
+    const activeSuppliers = (supplierResult.error ? [] : supplierResult.data ?? []) as SupplierRow[];
+    const activeMenus = (activeMenuResult.error ? [] : activeMenuResult.data ?? []) as MenuItemRow[];
+    const activeRecipeMenuIds = new Set(
+      ((activeRecipeResult.error ? [] : activeRecipeResult.data ?? []) as { menu_item_id: string }[]).map(
+        (row) => row.menu_item_id
+      )
+    );
+
+    setSuppliers(activeSuppliers);
+    setFoundationBaseIssues(
+      buildFoundationIssues({
+        ingredients: (ingredients ?? []) as IngredientWithPrimarySupplier[],
+        activeMenus,
+        activeRecipeMenuIds,
+        suppliers: activeSuppliers,
+        liveRows,
+        demandRows: [],
+      })
+    );
 
     setHasLoadedOnce(true);
     setLoading(false);
@@ -3066,6 +3554,11 @@ export function MonitoringDashboard() {
       setCoverageDays(4);
     }
   }, []);
+
+  useEffect(() => {
+    setAiAnalyzeResult(null);
+    setAiAnalyzeError(null);
+  }, [aiAnalyzeDataContext]);
 
   const resolveRecommendedPoQuantity = useCallback(
     (ingredientId: string): number => {
@@ -3130,9 +3623,66 @@ export function MonitoringDashboard() {
     });
   };
 
+  const handleRunAiAnalyze = async () => {
+    if (aiAnalyzeLoading) return;
+
+    if (aiAnalyzeDataContext.length === 0) {
+      setAiAnalyzeResult(null);
+      setAiAnalyzeError("Belum ada data demand planning untuk dianalisis.");
+      return;
+    }
+
+    setAiAnalyzeLoading(true);
+    setAiAnalyzeError(null);
+
+    try {
+      const response = await fetch("/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataContext: aiAnalyzeDataContext }),
+      });
+      const data = (await response.json()) as AiAnalyzeResult | AiAnalyzeErrorBody;
+      const providerError = "error" in data ? data.error : undefined;
+
+      if (!response.ok || providerError) {
+        throw new Error(providerError?.message || `AI analyze gagal dengan status ${response.status}.`);
+      }
+
+      setAiAnalyzeResult(data as AiAnalyzeResult);
+    } catch (err) {
+      setAiAnalyzeResult(null);
+      setAiAnalyzeError(err instanceof Error ? err.message : "AI analyze gagal diproses.");
+    } finally {
+      setAiAnalyzeLoading(false);
+    }
+  };
+
   const handleExportSales = async () => {
     const rows = normalizedSearch ? filteredSalesRows : salesExportRows;
     await downloadSalesXlsx(`laporan-penjualan-${csvDateSuffix}.xlsx`, rows);
+  };
+
+  const handleExportComplaint = async () => {
+    const rows = normalizedSearch ? filteredComplaintRows : complaintOnlyRows;
+    await downloadComplaintXlsx(`laporan-complaint-tamu-${csvDateSuffix}.xlsx`, rows);
+  };
+
+  const exportPackFileCount = [
+    inventorySummaryRows.length > 0,
+    ledgerExportRows.length > 0,
+    salesExportRows.length > 0,
+    demandPlanningRows.length > 0,
+    complaintOnlyRows.length > 0,
+  ].filter(Boolean).length;
+  const exportPackDisabled = exportPackFileCount === 0;
+
+  const handleExportOperationalPack = async () => {
+    if (exportPackDisabled) return;
+    if (inventorySummaryRows.length > 0) await handleExportInventorySummary();
+    if (ledgerExportRows.length > 0) await handleExportInventory();
+    if (salesExportRows.length > 0) await handleExportSales();
+    if (demandPlanningRows.length > 0) await handleExportDemandPlanning();
+    if (complaintOnlyRows.length > 0) await handleExportComplaint();
   };
 
   const handleStartDateChange = (value: string) => {
@@ -3193,6 +3743,65 @@ export function MonitoringDashboard() {
     setPoLines(recommendedLines);
     setPoError(null);
     setPoSuccess(`${recommendedLines.length} bahan dari Demand Planning masuk ke Draft PO.`);
+  };
+
+  const handleApplyAiPoToDraft = () => {
+    if (!aiAnalyzeResult || aiAnalyzeResult.purchase_orders.length === 0) {
+      setPoError("Belum ada rekomendasi PO dari AI.");
+      return;
+    }
+
+    if (!selectedSupplierId || !selectedSupplier || supplierCatalog.length === 0) {
+      setPoError("Pilih supplier yang punya katalog bahan terlebih dahulu.");
+      return;
+    }
+
+    const catalogByIngredientId = new Map(
+      supplierCatalog.map((item) => [item.ingredient.id, item])
+    );
+    const catalogByIngredientName = new Map(
+      supplierCatalog.map((item) => [item.ingredient.name.trim().toLowerCase(), item])
+    );
+    const nextLinesByIngredientId = new Map(poLines.map((line) => [line.ingredientId, line]));
+    const unmatchedNames: string[] = [];
+    let appliedCount = 0;
+
+    for (const item of aiAnalyzeResult.purchase_orders) {
+      const recommendedQty = Math.max(0, Number(item.recommended_qty) || 0);
+      if (recommendedQty <= 0) continue;
+
+      const idMatch =
+        typeof item.product_id === "string" ? catalogByIngredientId.get(item.product_id) : undefined;
+      const nameMatch = catalogByIngredientName.get(item.product_name.trim().toLowerCase());
+      const catalogItem = idMatch ?? nameMatch;
+
+      if (!catalogItem) {
+        unmatchedNames.push(item.product_name);
+        continue;
+      }
+
+      nextLinesByIngredientId.set(catalogItem.ingredient.id, {
+        ingredientId: catalogItem.ingredient.id,
+        ingredientName: catalogItem.ingredient.name,
+        unit: catalogItem.ingredient.unit,
+        quantity: formatInitialPoLineQuantity(recommendedQty),
+        unitPrice: Number(catalogItem.unit_price),
+      });
+      appliedCount += 1;
+    }
+
+    if (appliedCount === 0) {
+      setPoError(`Rekomendasi AI belum cocok dengan katalog ${selectedSupplier.name}.`);
+      return;
+    }
+
+    setPoLines(Array.from(nextLinesByIngredientId.values()));
+    setPoSuccess(`${appliedCount} rekomendasi AI masuk ke Draft PO ${selectedSupplier.name}.`);
+    setPoError(
+      unmatchedNames.length > 0
+        ? `${unmatchedNames.length} bahan AI belum ada di katalog ${selectedSupplier.name}.`
+        : null
+    );
   };
 
   const handleEventFormChange = (patch: Partial<DemandEventForm>) => {
@@ -3558,33 +4167,45 @@ export function MonitoringDashboard() {
   };
 
   return (
-    <div className="space-y-6">
-      <nav
-        className="sticky top-0 z-20 -mx-1 flex gap-2 overflow-x-auto border-b border-zinc-800 bg-zinc-900/95 px-1 pb-3 pt-1 backdrop-blur"
-        aria-label="Monitoring tabs"
-      >
-        {MONITORING_TABS.map((tab) => {
-          const Icon = tab.icon;
-          const active = activeMonitoringTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveMonitoringTab(tab.id)}
-              className={`flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition sm:px-4 ${
-                active
-                  ? "border-cyan-300 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
-                  : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-100"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {tab.label}
-            </button>
-          );
-        })}
-      </nav>
+    <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
+      <aside className="sticky top-5 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 shadow-lg shadow-black/20 backdrop-blur">
+        <div className="mb-3 border-b border-zinc-800 px-2 pb-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Dashboard</p>
+          <p className="mt-1 truncate text-sm font-semibold text-zinc-100">
+            {MONITORING_TABS.find((tab) => tab.id === activeMonitoringTab)?.label ?? "Monitoring"}
+          </p>
+        </div>
+        <nav className="space-y-2" aria-label="Monitoring tabs">
+          {MONITORING_TABS.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeMonitoringTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveMonitoringTab(tab.id)}
+                className={`flex min-h-12 w-full items-center gap-3 rounded-lg border px-3 text-left text-sm font-semibold transition ${
+                  active
+                    ? "border-cyan-300 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
+                    : "border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100"
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block truncate">{tab.label}</span>
+                  <span className={`block truncate text-[11px] ${active ? "text-zinc-800" : "text-zinc-500"}`}>
+                    {tab.description}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
 
-      {activeMonitoringTab === "control" ? (
+      <div className="min-w-0 space-y-6">
+
+      {activeMonitoringTab === "inventory" ? (
       <section className="grid gap-6 lg:grid-cols-2">
         <WorksheetEditRequestPanel
           supabase={supabase}
@@ -3703,8 +4324,254 @@ export function MonitoringDashboard() {
             </section>
           ) : null}
 
+          {activeMonitoringTab === "overview" ? (
+            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${
+                      foundationReadinessTone === "critical"
+                        ? "border-red-500/40 bg-red-500/10 text-red-200"
+                        : foundationReadinessTone === "warning"
+                          ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+                          : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                    }`}
+                  >
+                    <ShieldCheck className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-slate-100">Fondasi Operasional</h3>
+                    <p className="text-xs text-slate-500">
+                      Inventory, resep, supplier, purchasing, dan sales readiness.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 gap-2 sm:min-w-[420px]">
+                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                    <p className="text-xs text-slate-500">Score</p>
+                    <p
+                      className={`mt-1 text-lg font-semibold tabular-nums ${
+                        foundationReadinessTone === "critical"
+                          ? "text-red-200"
+                          : foundationReadinessTone === "warning"
+                            ? "text-amber-100"
+                            : "text-emerald-200"
+                      }`}
+                    >
+                      {foundationReadinessScore}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2">
+                    <p className="text-xs text-red-200/70">Kritis</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-red-200">
+                      {formatQtyId(foundationIssueCounts.critical)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2">
+                    <p className="text-xs text-amber-100/70">Waspada</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                      {formatQtyId(foundationIssueCounts.warning)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-700 bg-zinc-950/70 px-3 py-2">
+                    <p className="text-xs text-slate-500">Issue</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                      {formatQtyId(foundationIssues.length)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {foundationIssues.length === 0 ? (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 text-sm text-emerald-200">
+                  Fondasi data utama sudah siap untuk inventory, purchasing, AI, dan fase POS berikutnya.
+                </div>
+              ) : (
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {foundationIssues.slice(0, 6).map((issue) => (
+                    <div
+                      key={issue.id}
+                      className={`rounded-lg border px-3 py-2.5 ${
+                        issue.severity === "critical"
+                          ? "border-red-500/30 bg-red-500/10"
+                          : issue.severity === "warning"
+                            ? "border-amber-500/30 bg-amber-500/10"
+                            : "border-slate-700 bg-zinc-950/70"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-100">{issue.title}</p>
+                          <p className="mt-1 text-xs leading-snug text-slate-400">{issue.detail}</p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            issue.severity === "critical"
+                              ? "bg-red-500/15 text-red-200"
+                              : issue.severity === "warning"
+                                ? "bg-amber-500/15 text-amber-100"
+                                : "bg-slate-500/15 text-slate-300"
+                          }`}
+                        >
+                          {FOUNDATION_SEVERITY_LABEL[issue.severity]} · {issue.count}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span>{issue.area}</span>
+                        <span className="text-slate-700">/</span>
+                        <span className="text-slate-300">{issue.actionLabel}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {activeMonitoringTab === "overview" ? (
+            <section className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-xl border border-emerald-500/25 bg-zinc-900/70 p-4 shadow-xl shadow-black/10">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-400/30 bg-emerald-400/10 text-emerald-200">
+                      <ShoppingCart className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold text-slate-100">Purchase Order Command</h3>
+                      <p className="text-xs text-slate-500">
+                        {poExecutiveSummary.supplierReadyCount} supplier siap · {poExecutiveSummary.autoReplenishmentLines} line urgent
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveMonitoringTab("demand")}
+                    className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20"
+                  >
+                    <ShoppingCart className="h-3.5 w-3.5" aria-hidden="true" />
+                    Demand
+                  </button>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                    <p className="text-xs text-slate-500">Draft</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                      {formatQtyId(poExecutiveSummary.draftLines)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2">
+                    <p className="text-xs text-emerald-200/70">Auto PO</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-emerald-200">
+                      {formatQtyId(poExecutiveSummary.autoReplenishmentLines)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2">
+                    <p className="text-xs text-amber-100/70">Unassigned</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                      {formatQtyId(poExecutiveSummary.unassignedLines)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                    <p className="text-xs text-slate-500">Value</p>
+                    <p className="mt-1 truncate text-sm font-semibold tabular-nums text-slate-100">
+                      {formatRupiah(poExecutiveSummary.draftAmount)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-lg border border-slate-800 bg-zinc-950/60 px-3 py-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs text-slate-500">Supplier prioritas</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                        {poExecutiveSummary.topSupplier?.name ?? "Belum ada supplier urgent"}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold tabular-nums text-emerald-200">
+                      {formatQtyId(poExecutiveSummary.topSupplier?.lines ?? 0)} bahan
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-red-500/25 bg-zinc-900/70 p-4 shadow-xl shadow-black/10">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-red-400/30 bg-red-400/10 text-red-200">
+                      <MessageSquareWarning className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold text-slate-100">Complaint Quality Board</h3>
+                      <p className="text-xs text-slate-500">
+                        {complaintSummary.recordCount} catatan · {complaintSummary.evidenceCount} evidence foto
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveMonitoringTab("control")}
+                    className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200 hover:bg-red-500/20"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                    Complaint
+                  </button>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2">
+                    <p className="text-xs text-red-200/70">Qty</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-red-200">
+                      {formatQtyId(complaintSummary.totalQty)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                    <p className="text-xs text-slate-500">Bar</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                      {formatQtyId(complaintSummary.barQty)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                    <p className="text-xs text-slate-500">Kitchen</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                      {formatQtyId(complaintSummary.kitchenQty)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2">
+                    <p className="text-xs text-amber-100/70">Evidence</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                      {formatQtyId(complaintSummary.evidenceCount)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-800 bg-zinc-950/60 px-3 py-2.5">
+                    <p className="text-xs text-slate-500">Menu paling sering</p>
+                    <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                      {complaintSummary.topMenu?.name ?? "Belum ada complaint"}
+                    </p>
+                    <p className="mt-1 text-xs tabular-nums text-red-200">
+                      {formatQtyId(complaintSummary.topMenu?.qty ?? 0)} qty
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-zinc-950/60 px-3 py-2.5">
+                    <p className="text-xs text-slate-500">Alasan dominan</p>
+                    <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                      {complaintSummary.topReason?.label ?? "Belum ada alasan"}
+                    </p>
+                    <p className="mt-1 text-xs tabular-nums text-amber-100">
+                      {formatQtyId(complaintSummary.topReason?.qty ?? 0)} qty
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
           {activeMonitoringTab === "overview" || activeMonitoringTab === "control" ? (
             <>
+          {activeMonitoringTab === "overview" ? (
           <section className="grid gap-3 sm:grid-cols-3">
             <StatusIndicator
               label="Spillage Alert"
@@ -3750,8 +4617,9 @@ export function MonitoringDashboard() {
               }
             />
           </section>
+          ) : null}
 
-          {cogsAlerts.length > 0 && (
+          {activeMonitoringTab === "overview" && cogsAlerts.length > 0 && (
             <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
               <div className="mb-3 flex items-center gap-2 text-amber-200">
                 <TrendingUp className="h-4 w-4" />
@@ -3774,7 +4642,7 @@ export function MonitoringDashboard() {
             </section>
           )}
 
-          {runwayEntries.length > 0 && (
+          {activeMonitoringTab === "overview" && runwayEntries.length > 0 && (
             <section className="rounded-xl border border-slate-800 bg-zinc-900/50 p-4">
               <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2">
@@ -3815,14 +4683,30 @@ export function MonitoringDashboard() {
           )}
           {activeMonitoringTab === "control" ? (
             <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-300" />
-                  <h3 className="text-sm font-semibold text-slate-200">Remake / Complaint Report</h3>
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-200">Complaint Tamu Report</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Hanya baris dengan alasan Complaint tamu.
+                    </p>
+                  </div>
                 </div>
-                <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
-                  {filteredMenuIssueRows.length} catatan
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                    {filteredComplaintRows.length} catatan
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleExportComplaint()}
+                    disabled={filteredComplaintRows.length === 0}
+                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    XLSX Complaint
+                  </button>
+                </div>
               </div>
               <div className="overflow-x-auto rounded-lg border border-slate-800">
                 <table className="w-full min-w-[860px] text-left text-sm">
@@ -3838,14 +4722,14 @@ export function MonitoringDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80">
-                    {filteredMenuIssueRows.length === 0 ? (
+                    {filteredComplaintRows.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
-                          Belum ada remake / complaint dalam rentang ini.
+                          Belum ada complaint tamu dalam rentang ini.
                         </td>
                       </tr>
                     ) : (
-                      filteredMenuIssueRows.slice(0, 40).map((row) => {
+                      filteredComplaintRows.slice(0, 40).map((row) => {
                         const photoUrls = splitStoredPhotoUrls(row.photoUrl);
                         return (
                           <tr key={row.id} className="hover:bg-zinc-950/50">
@@ -3917,6 +4801,205 @@ export function MonitoringDashboard() {
               }
             />
           </section>
+          ) : null}
+
+          {activeMonitoringTab === "overview" || activeMonitoringTab === "demand" ? (
+            <section className="rounded-xl border border-cyan-500/30 bg-zinc-900/60 p-4">
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
+                    <Sparkles className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-slate-100">AI Inventory Intelligence</h3>
+                    <p className="text-xs text-slate-500">
+                      {aiAnalyzeDataContext.length} bahan - {DEMAND_SCENARIO_LABEL[demandScenario]} - coverage{" "}
+                      {coverageDays} hari
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleRunAiAnalyze()}
+                  disabled={aiAnalyzeLoading || aiAnalyzeDataContext.length === 0}
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {aiAnalyzeLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {aiAnalyzeLoading ? "Menganalisis..." : "Analisis AI"}
+                </button>
+              </div>
+
+              {aiAnalyzeError ? (
+                <p className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                  {aiAnalyzeError}
+                </p>
+              ) : null}
+
+              {aiAnalyzeResult ? (
+                <div aria-live="polite">
+                  <div className="mb-4 grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
+                      <p className="text-xs text-slate-500">Produk</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                        {formatQtyId(aiAnalyzeResult.summary.total_products)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+                      <p className="text-xs text-emerald-200/70">Fast moving</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-emerald-200">
+                        {formatQtyId(aiAnalyzeResult.summary.fast_moving_count)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                      <p className="text-xs text-amber-100/70">Low moving</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                        {formatQtyId(aiAnalyzeResult.summary.low_moving_count)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
+                      <p className="text-xs text-red-200/70">Stok kritis</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-red-200">
+                        {formatQtyId(aiAnalyzeResult.summary.critical_stock_count)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-3">
+                    <div className="min-w-0">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold text-slate-100">PO Prioritas</h4>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+                            {aiAnalyzeResult.purchase_orders.length}
+                          </span>
+                          {activeMonitoringTab === "demand" && canEdit ? (
+                            <button
+                              type="button"
+                              onClick={handleApplyAiPoToDraft}
+                              disabled={
+                                thursdayOrderClosed ||
+                                !selectedSupplierId ||
+                                supplierCatalog.length === 0 ||
+                                aiAnalyzeResult.purchase_orders.length === 0
+                              }
+                              className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <ShoppingCart className="h-3.5 w-3.5" aria-hidden="true" />
+                              Ke Draft
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-zinc-950/60">
+                        {aiAnalyzeResult.purchase_orders.length === 0 ? (
+                          <p className="px-3 py-4 text-sm text-slate-500">Belum ada rekomendasi PO.</p>
+                        ) : (
+                          aiAnalyzeResult.purchase_orders.slice(0, 5).map((item, index) => (
+                            <div key={`${item.product_id ?? item.product_name}-${index}`} className="px-3 py-2.5">
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="min-w-0 text-sm font-medium text-slate-100">{item.product_name}</p>
+                                <span
+                                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                    item.priority === "high"
+                                      ? "bg-red-500/15 text-red-200"
+                                      : item.priority === "medium"
+                                        ? "bg-amber-500/15 text-amber-100"
+                                        : "bg-slate-500/15 text-slate-300"
+                                  }`}
+                                >
+                                  {AI_ANALYZE_PRIORITY_LABEL[item.priority]}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-emerald-200">
+                                Qty {formatQtyId(item.recommended_qty)}
+                              </p>
+                              <p className="mt-1 text-xs leading-snug text-slate-400">{item.reason}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold text-slate-100">Kontrol Inventory</h4>
+                        <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+                          {aiAnalyzeResult.inventory_control.length}
+                        </span>
+                      </div>
+                      <div className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-zinc-950/60">
+                        {aiAnalyzeResult.inventory_control.length === 0 ? (
+                          <p className="px-3 py-4 text-sm text-slate-500">Belum ada risiko inventory.</p>
+                        ) : (
+                          aiAnalyzeResult.inventory_control.slice(0, 5).map((item, index) => (
+                            <div key={`${item.product_id ?? item.product_name}-${index}`} className="px-3 py-2.5">
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="min-w-0 text-sm font-medium text-slate-100">{item.product_name}</p>
+                                <span
+                                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                    item.risk_level === "high"
+                                      ? "bg-red-500/15 text-red-200"
+                                      : item.risk_level === "medium"
+                                        ? "bg-amber-500/15 text-amber-100"
+                                        : "bg-emerald-500/15 text-emerald-200"
+                                  }`}
+                                >
+                                  {AI_ANALYZE_RISK_LABEL[item.risk_level]}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-slate-500">
+                                Stok {item.current_stock === null ? "-" : formatQtyId(item.current_stock)}
+                              </p>
+                              <p className="mt-1 text-xs leading-snug text-slate-400">{item.recommended_action}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold text-slate-100">Movement Produk</h4>
+                        <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+                          {aiAnalyzeResult.product_classification.length}
+                        </span>
+                      </div>
+                      <div className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-zinc-950/60">
+                        {aiAnalyzeResult.product_classification.length === 0 ? (
+                          <p className="px-3 py-4 text-sm text-slate-500">Belum ada klasifikasi movement.</p>
+                        ) : (
+                          aiAnalyzeResult.product_classification.slice(0, 5).map((item, index) => (
+                            <div key={`${item.product_id ?? item.product_name}-${index}`} className="px-3 py-2.5">
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="min-w-0 text-sm font-medium text-slate-100">{item.product_name}</p>
+                                <span
+                                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                    item.classification === "fast_moving"
+                                      ? "bg-emerald-500/15 text-emerald-200"
+                                      : "bg-amber-500/15 text-amber-100"
+                                  }`}
+                                >
+                                  {AI_ANALYZE_CLASSIFICATION_LABEL[item.classification]}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs leading-snug text-slate-400">{item.reason}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-slate-700 bg-zinc-950/50 px-3 py-4 text-sm text-slate-500">
+                  Siap membaca demand planning {dateRangeLabel}.
+                </div>
+              )}
+            </section>
           ) : null}
 
           {activeMonitoringTab === "demand" ? (
@@ -4392,49 +5475,113 @@ export function MonitoringDashboard() {
 
           {activeMonitoringTab === "export" ? (
             <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
-              <div className="mb-4">
-                <h3 className="text-base font-semibold text-slate-100">Export Center</h3>
-                <p className="text-xs text-slate-500">
-                  Download data operasional sesuai rentang tanggal dan filter pencarian aktif.
-                </p>
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
+                    <Download className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-slate-100">Download Center</h3>
+                    <p className="text-xs text-slate-500">
+                      {dateRangeLabel} · {normalizedSearch ? "filter aktif" : "semua data"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleExportOperationalPack()}
+                  disabled={exportPackDisabled}
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download className="h-4 w-4" aria-hidden="true" />
+                  Download Paket ({exportPackFileCount})
+                </button>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleExportInventorySummary()}
-                  disabled={inventorySummaryRows.length === 0}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-emerald-500/50 bg-emerald-600/15 px-4 text-sm font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Download className="h-4 w-4" />
-                  Download XLSX: Rekap Stok
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleExportInventory()}
-                  disabled={ledgerExportRows.length === 0}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Download className="h-4 w-4" />
-                  Download XLSX: Detail Ledger
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleExportSales()}
-                  disabled={salesExportRows.length === 0}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Download className="h-4 w-4" />
-                  Download XLSX: Penjualan
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleExportDemandPlanning()}
-                  disabled={demandPlanningRows.length === 0}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-4 text-sm font-medium text-slate-200 hover:border-indigo-500/50 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Download className="h-4 w-4" />
-                  Download XLSX: Demand
-                </button>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                {[
+                  {
+                    title: "Rekap Stok",
+                    detail: "Current stock, live stock, minimum stock, supplier",
+                    rows: inventorySummaryRows.length,
+                    accent: "emerald",
+                    disabled: inventorySummaryRows.length === 0,
+                    onClick: handleExportInventorySummary,
+                  },
+                  {
+                    title: "Detail Ledger",
+                    detail: "Opening, IN, theoretical usage, adjustment, closing",
+                    rows: ledgerExportRows.length,
+                    accent: "cyan",
+                    disabled: ledgerExportRows.length === 0,
+                    onClick: handleExportInventory,
+                  },
+                  {
+                    title: "Penjualan",
+                    detail: "Menu sold, category, unit price, revenue",
+                    rows: salesExportRows.length,
+                    accent: "indigo",
+                    disabled: salesExportRows.length === 0,
+                    onClick: handleExportSales,
+                  },
+                  {
+                    title: "Demand Planning",
+                    detail: "7-day usage, avg, peak, rekomendasi order",
+                    rows: demandPlanningRows.length,
+                    accent: "amber",
+                    disabled: demandPlanningRows.length === 0,
+                    onClick: handleExportDemandPlanning,
+                  },
+                  {
+                    title: "Complaint Tamu",
+                    detail: "Complaint pelanggan, catatan, bukti foto",
+                    rows: complaintOnlyRows.length,
+                    accent: "red",
+                    disabled: complaintOnlyRows.length === 0,
+                    onClick: handleExportComplaint,
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.title}
+                    className="rounded-lg border border-slate-800 bg-zinc-950/65 px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-100">{item.title}</p>
+                        <p className="mt-1 text-xs leading-snug text-slate-500">{item.detail}</p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${
+                          item.disabled
+                            ? "bg-slate-500/10 text-slate-500"
+                            : item.accent === "emerald"
+                              ? "bg-emerald-500/15 text-emerald-200"
+                              : item.accent === "cyan"
+                                ? "bg-cyan-500/15 text-cyan-200"
+                              : item.accent === "indigo"
+                                  ? "bg-indigo-500/15 text-indigo-200"
+                                  : item.accent === "amber"
+                                    ? "bg-amber-500/15 text-amber-100"
+                                    : "bg-red-500/15 text-red-200"
+                        }`}
+                      >
+                        {formatQtyId(item.rows)} row
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="text-xs text-slate-500">{item.disabled ? "Belum ada data" : "Siap download"}</span>
+                      <button
+                        type="button"
+                        onClick={() => void item.onClick()}
+                        disabled={item.disabled}
+                        className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-slate-700 bg-zinc-900 px-3 text-xs font-semibold text-slate-200 hover:border-cyan-400/50 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                        XLSX
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </section>
           ) : null}
@@ -4670,6 +5817,7 @@ export function MonitoringDashboard() {
           )}
         </>
       )}
+    </div>
     </div>
   );
 }

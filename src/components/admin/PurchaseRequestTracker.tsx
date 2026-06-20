@@ -442,17 +442,24 @@ export function PurchaseRequestTracker() {
   const dashboardMetrics = useMemo(() => {
     const openRows = rows.filter((row) => row.purchase_status !== "Arrived" && row.purchase_status !== "Cancelled");
     const overdueRows = rows.filter(isOverdue);
+    const received = monitoringCount(rows, "received");
+    const fulfilmentRate = rows.length > 0 ? Math.round((received / rows.length) * 100) : 100;
     return {
       needOrder: monitoringCount(rows, "need_order"),
       ordered: monitoringCount(rows, "ordered"),
       process: monitoringCount(rows, "process"),
-      received: monitoringCount(rows, "received"),
+      received,
       cancelled: monitoringCount(rows, "cancelled"),
       overdue: overdueRows.length,
+      approvalPending: rows.filter((row) => row.po_status === "Pending").length,
+      rejected: rows.filter((row) => row.po_status === "Rejected" || row.purchase_status === "Cancelled").length,
+      openCount: openRows.length,
       openEstimatedTotal: openRows.reduce((sum, row) => sum + Number(row.total_price ?? 0), 0),
       receivedValue: rows
         .filter((row) => row.purchase_status === "Arrived")
         .reduce((sum, row) => sum + Number(row.total_price ?? 0), 0),
+      fulfilmentRate,
+      topOverdueRows: overdueRows.slice(0, 3),
     };
   }, [rows]);
 
@@ -708,24 +715,38 @@ export function PurchaseRequestTracker() {
     <section className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 shadow-xl shadow-black/20">
       <div className="flex flex-col gap-3 border-b border-zinc-800 pb-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10 shadow-lg shadow-emerald-950/20">
             <ShoppingCart className="h-5 w-5 text-emerald-300" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-base font-semibold text-zinc-100">Purchase Order Control</h3>
+            <h3 className="text-base font-semibold text-zinc-100">Procurement Command Center</h3>
             <p className="mt-0.5 truncate text-sm text-zinc-500">
-              {rows.length} request · open value {formatRupiah(dashboardMetrics.openEstimatedTotal)}
+              {rows.length} request · {dashboardMetrics.openCount} open · {formatRupiah(dashboardMetrics.openEstimatedTotal)}
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void loadData()}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-900"
-        >
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs font-semibold tabular-nums text-emerald-200">
+            Fulfillment {dashboardMetrics.fulfilmentRate}%
+          </span>
+          <span
+            className={`rounded-lg border px-3 py-2 text-xs font-semibold tabular-nums ${
+              dashboardMetrics.overdue > 0
+                ? "border-red-500/30 bg-red-500/10 text-red-200"
+                : "border-zinc-800 bg-zinc-900/60 text-zinc-300"
+            }`}
+          >
+            Overdue {dashboardMetrics.overdue}
+          </span>
+          <button
+            type="button"
+            onClick={() => void loadData()}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-900"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -796,6 +817,85 @@ export function PurchaseRequestTracker() {
           <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.received}</p>
           <p className="mt-1 text-xs text-zinc-500">{formatRupiah(dashboardMetrics.receivedValue)} masuk stok</p>
         </button>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/35 p-3">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-zinc-100">Procurement Pulse</p>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              Pending approval {dashboardMetrics.approvalPending} · rejected/cancelled {dashboardMetrics.rejected}
+            </p>
+          </div>
+          <span className="rounded-full border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs font-semibold tabular-nums text-zinc-300">
+            {formatRupiah(dashboardMetrics.receivedValue)} received
+          </span>
+        </div>
+
+        <div className="grid gap-2 md:grid-cols-4">
+          {[
+            {
+              label: "Request",
+              value: dashboardMetrics.needOrder,
+              tone: "text-red-200",
+              bar: "bg-red-400",
+              icon: AlertTriangle,
+            },
+            {
+              label: "Ordered",
+              value: dashboardMetrics.ordered,
+              tone: "text-indigo-200",
+              bar: "bg-indigo-400",
+              icon: ShoppingCart,
+            },
+            {
+              label: "Process",
+              value: dashboardMetrics.process,
+              tone: "text-sky-200",
+              bar: "bg-sky-400",
+              icon: Truck,
+            },
+            {
+              label: "Received",
+              value: dashboardMetrics.received,
+              tone: "text-emerald-200",
+              bar: "bg-emerald-400",
+              icon: ClipboardCheck,
+            },
+          ].map((step) => {
+            const StepIcon = step.icon;
+            const width = rows.length > 0 ? Math.max(8, Math.round((step.value / rows.length) * 100)) : 8;
+            return (
+              <div key={step.label} className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <StepIcon className={`h-4 w-4 shrink-0 ${step.tone}`} />
+                    <span className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                      {step.label}
+                    </span>
+                  </div>
+                  <span className={`text-sm font-bold tabular-nums ${step.tone}`}>{step.value}</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                  <div className={`h-full rounded-full ${step.bar}`} style={{ width: `${width}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {dashboardMetrics.topOverdueRows.length > 0 ? (
+          <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-red-100">
+              <AlertTriangle className="h-4 w-4" />
+              {dashboardMetrics.topOverdueRows.map((row) => (
+                <span key={row.id} className="rounded-md bg-red-950/40 px-2 py-1">
+                  {row.item_name} · ETA {formatDate(row.estimated_arrival_date)}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
