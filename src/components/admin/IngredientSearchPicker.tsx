@@ -143,7 +143,7 @@ export function IngredientSearchPicker({
   return (
     <div className="relative" ref={containerRef}>
       <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
         <input
           type="text"
           role="combobox"
@@ -163,7 +163,7 @@ export function IngredientSearchPicker({
             setIsOpen(true);
             if (value) onChange("");
           }}
-          className="min-h-11 w-full rounded-lg border border-zinc-600 bg-zinc-950 py-2.5 pl-10 pr-16 text-white placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-h-11 w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-16 text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
         />
         <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1">
           {value ? (
@@ -171,13 +171,13 @@ export function IngredientSearchPicker({
               type="button"
               disabled={disabled}
               onClick={clearSelection}
-              className="rounded p-1 text-zinc-400 hover:text-zinc-200"
+              className="rounded p-1 text-slate-600 hover:text-slate-700"
               aria-label="Hapus pilihan bahan"
             >
               <X className="h-4 w-4" />
             </button>
           ) : null}
-          <ChevronDown className="h-4 w-4 text-zinc-500" aria-hidden />
+          <ChevronDown className="h-4 w-4 text-slate-600" aria-hidden />
         </div>
       </div>
 
@@ -185,15 +185,15 @@ export function IngredientSearchPicker({
         <ul
           id={listboxId}
           role="listbox"
-          className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border border-zinc-600 bg-zinc-950 py-1 shadow-xl shadow-black/40"
+          className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] scrollbar-thin"
         >
           {isLoading ? (
-            <li className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400">
+            <li className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600">
               <Loader2 className="h-4 w-4 animate-spin" />
               Mencari di Supabase…
             </li>
           ) : filteredOptions.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-zinc-500">
+            <li className="px-3 py-2 text-sm text-slate-600">
               {query.trim() ? `Tidak ada bahan "${query.trim()}".` : "Ketik untuk mencari bahan baku."}
             </li>
           ) : (
@@ -203,12 +203,12 @@ export function IngredientSearchPicker({
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => pickOption(option)}
-                  className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-indigo-600/20 ${
-                    option.id === value ? "bg-indigo-600/15 text-indigo-200" : "text-zinc-200"
+                  className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-teal-50 ${
+                    option.id === value ? "bg-teal-50 text-teal-700" : "text-slate-700"
                   }`}
                 >
                   <span>{option.name}</span>
-                  <span className="text-xs text-zinc-500">{option.unit}</span>
+                  <span className="text-xs text-slate-600">{option.unit}</span>
                 </button>
               </li>
             ))

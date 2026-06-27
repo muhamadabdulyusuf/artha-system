@@ -30,7 +30,7 @@ type FormDepartment = Ingredient["department"];
 type DeptFilter = "all" | FormDepartment;
 
 const SEARCH_INPUT_CLASS =
-  "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
+  "min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-500";
 
 const TABLE_COL_COUNT = 10;
 
@@ -221,8 +221,8 @@ export function IngredientsTab() {
               onClick={() => setDeptFilter(d)}
               className={`min-h-10 rounded-full px-4 text-sm font-medium transition ${
                 deptFilter === d
-                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/30"
-                  : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
+                  ? "bg-teal-600 text-white shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
+                  : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
             >
               {d === "all" ? "Semua" : d === "bar" ? "Bar" : "Kitchen"}
@@ -232,7 +232,7 @@ export function IngredientsTab() {
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 lg:max-w-xl lg:flex-1 lg:justify-end">
           <div className="relative min-w-0 flex-1 sm:max-w-xs lg:max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
             <input
               type="search"
               value={searchTerm}
@@ -247,7 +247,7 @@ export function IngredientsTab() {
               <button
                 type="button"
                 onClick={() => setSearchTerm("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 transition hover:text-zinc-200"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-600 transition hover:text-slate-700"
                 aria-label="Hapus pencarian"
               >
                 <X className="h-4 w-4" />
@@ -259,7 +259,7 @@ export function IngredientsTab() {
             <button
               type="button"
               onClick={openCreateModal}
-              className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-500"
+              className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-teal-600 px-4 font-semibold text-white transition hover:bg-teal-600"
             >
               <Plus className="h-4 w-4" />
               Tambah Bahan Baku
@@ -269,37 +269,37 @@ export function IngredientsTab() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center gap-2 py-16 text-zinc-500">
-          <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+        <div className="flex items-center justify-center gap-2 py-16 text-slate-600">
+          <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
           Memuat bahan baku dari Supabase…
         </div>
       ) : ingredients.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-zinc-700 py-16 text-center text-sm text-zinc-500">
+        <p className="rounded-xl border border-dashed border-slate-200 py-16 text-center text-sm text-slate-600">
           Belum ada bahan baku. Klik &quot;Tambah Bahan Baku&quot; untuk mulai.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-zinc-700">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <table className="w-full min-w-[520px] text-left text-sm">
-            <thead className="bg-zinc-800 text-zinc-400">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
               <tr>
-                <th className="w-14 px-4 py-3 font-medium">No</th>
-                <th className="px-4 py-3 font-medium">Nama Bahan</th>
-                <th className="px-4 py-3 font-medium">Satuan Stok</th>
-                <th className="px-4 py-3 font-medium">Receive</th>
-                <th className="px-4 py-3 font-medium">Harga</th>
-                <th className="px-4 py-3 font-medium">Jenis</th>
-                <th className="px-4 py-3 font-medium">Tracking</th>
-                <th className="px-4 py-3 font-medium">Supplier</th>
-                <th className="px-4 py-3 font-medium">Departemen</th>
-                <th className="px-4 py-3 text-right font-medium">Aksi</th>
+                <th className="w-14 px-4 py-3.5 font-semibold">No</th>
+                <th className="px-4 py-3.5 font-semibold">Nama Bahan</th>
+                <th className="px-4 py-3.5 font-semibold">Satuan Stok</th>
+                <th className="px-4 py-3.5 font-semibold">Receive</th>
+                <th className="px-4 py-3.5 font-semibold">Harga</th>
+                <th className="px-4 py-3.5 font-semibold">Jenis</th>
+                <th className="px-4 py-3.5 font-semibold">Tracking</th>
+                <th className="px-4 py-3.5 font-semibold">Supplier</th>
+                <th className="px-4 py-3.5 font-semibold">Departemen</th>
+                <th className="px-4 py-3.5 text-right font-semibold">Aksi</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-700/80">
+            <tbody className="divide-y divide-slate-100 bg-white">
               {filteredIngredients.length === 0 ? (
                 <tr>
                   <td
                     colSpan={TABLE_COL_COUNT}
-                    className="px-4 py-12 text-center text-sm text-zinc-500"
+                    className="px-4 py-12 text-center text-sm text-slate-600"
                   >
                     {emptyTableMessage}
                   </td>
@@ -308,36 +308,36 @@ export function IngredientsTab() {
                 filteredIngredients.map((item, index) => (
                   <tr
                     key={item.id}
-                    className={`bg-zinc-900/40 ${!item.is_active ? "opacity-50" : ""}`}
+                    className={`bg-white transition-colors hover:bg-slate-50/80 ${!item.is_active ? "opacity-50" : ""}`}
                   >
-                    <td className="px-4 py-3 tabular-nums text-zinc-500">{index + 1}</td>
-                    <td className="px-4 py-3 font-medium text-white">{item.name}</td>
-                    <td className="px-4 py-3 text-zinc-300">{item.unit}</td>
-                    <td className="px-4 py-3 text-zinc-300">
+                    <td className="px-4 py-3 font-medium tabular-nums text-slate-900">{index + 1}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">{item.name}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">{item.unit}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
                       {item.purchase_unit ? (
                         <span>
                           1 {item.purchase_unit} = {item.purchase_to_stock_factor} {item.unit}
                         </span>
                       ) : (
-                        <span className="text-zinc-600">Sama</span>
+                        <span className="text-slate-600">Sama</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 tabular-nums text-zinc-300">
+                    <td className="px-4 py-3 font-semibold tabular-nums text-slate-900">
                       {item.default_unit_price > 0 ? (
                         <span>
                           {formatRupiah(item.default_unit_price)} /{" "}
                           {item.purchase_unit || item.unit}
                         </span>
                       ) : (
-                        <span className="text-zinc-600">Belum ada</span>
+                        <span className="text-slate-600">Belum ada</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-block rounded-full px-2 py-0.5 text-xs capitalize ${
                           item.kind === "premix"
-                            ? "bg-amber-500/20 text-amber-300"
-                            : "bg-emerald-500/15 text-emerald-300"
+                            ? "bg-amber-500/20 text-amber-900"
+                            : "bg-teal-50 text-teal-700"
                         }`}
                       >
                         {item.kind}
@@ -347,21 +347,21 @@ export function IngredientsTab() {
                       <span
                         className={`inline-block rounded-full px-2 py-0.5 text-xs ${
                           item.is_stock_tracked
-                            ? "bg-sky-500/15 text-sky-300"
-                            : "bg-zinc-700 text-zinc-300"
+                            ? "border border-sky-200 bg-sky-50 text-sky-700"
+                            : "bg-slate-100 text-slate-700"
                         }`}
                       >
                         {item.is_stock_tracked ? "Stok" : "Non-stok"}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-zinc-300">
+                    <td className="px-4 py-3 font-medium text-slate-900">
                       {item.supplier_name ? (
                         item.supplier_name
                       ) : (
-                        <span className="text-zinc-600">Belum ada</span>
+                        <span className="text-slate-600">Belum ada</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-zinc-300">{departmentLabel(item.department)}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">{departmentLabel(item.department)}</td>
                     <td className="px-4 py-3">
                       {canEdit ? (
                         <div className="flex justify-end gap-2">
@@ -370,7 +370,7 @@ export function IngredientsTab() {
                               <button
                                 type="button"
                                 onClick={() => openEditModal(item)}
-                                className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10"
+                                className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-teal-700 ring-1 ring-slate-200 transition hover:bg-teal-50"
                                 aria-label={`Edit ${item.name}`}
                               >
                                 <Edit className="h-4 w-4" />
@@ -378,7 +378,7 @@ export function IngredientsTab() {
                               <button
                                 type="button"
                                 onClick={() => void handleDeactivate(item)}
-                                className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-red-400 ring-1 ring-zinc-600 transition hover:bg-red-500/10"
+                                className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-red-700 ring-1 ring-slate-200 transition hover:bg-red-500/10"
                                 aria-label={`Nonaktifkan ${item.name}`}
                               >
                                 <Trash2 className="h-4 w-4" />
@@ -388,7 +388,7 @@ export function IngredientsTab() {
                             <button
                               type="button"
                               onClick={() => void handleActivate(item)}
-                              className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-emerald-400 ring-1 ring-zinc-600 transition hover:bg-emerald-500/10"
+                              className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-teal-700 ring-1 ring-slate-200 transition hover:bg-teal-50"
                               aria-label={`Aktifkan ${item.name}`}
                             >
                               <RotateCcw className="h-4 w-4" />
@@ -396,7 +396,7 @@ export function IngredientsTab() {
                           )}
                         </div>
                       ) : (
-                        <span className="block text-right text-xs text-zinc-500">—</span>
+                        <span className="block text-right text-xs text-slate-600">—</span>
                       )}
                     </td>
                   </tr>

@@ -20,13 +20,13 @@ type RecipeComponentPickerProps = {
 function KindBadge({ kind }: { kind: IngredientKind }) {
   if (kind === "premix") {
     return (
-      <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300 ring-1 ring-amber-500/30">
+      <span className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
         Premix
       </span>
     );
   }
   return (
-    <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 ring-1 ring-emerald-500/25">
+    <span className="shrink-0 rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700">
       Raw
     </span>
   );
@@ -172,7 +172,7 @@ export function RecipeComponentPicker({
   return (
     <div className="relative" ref={containerRef}>
       <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
         <input
           type="text"
           role="combobox"
@@ -192,7 +192,7 @@ export function RecipeComponentPicker({
             setIsOpen(true);
             if (value) onChange("");
           }}
-          className="min-h-11 w-full rounded-lg border border-zinc-600 bg-zinc-950 py-2.5 pl-10 pr-24 text-white placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-h-11 w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-24 text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
         />
         <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1">
           {value && selectedOption ? <KindBadge kind={selectedOption.kind} /> : null}
@@ -201,13 +201,13 @@ export function RecipeComponentPicker({
               type="button"
               disabled={disabled}
               onClick={clearSelection}
-              className="rounded p-1 text-zinc-400 hover:text-zinc-200"
+              className="rounded p-1 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
               aria-label="Hapus pilihan"
             >
               <X className="h-4 w-4" />
             </button>
           ) : null}
-          <ChevronDown className="h-4 w-4 text-zinc-500" aria-hidden />
+          <ChevronDown className="h-4 w-4 text-slate-600" aria-hidden />
         </div>
       </div>
 
@@ -215,15 +215,15 @@ export function RecipeComponentPicker({
         <ul
           id={listboxId}
           role="listbox"
-          className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-zinc-600 bg-zinc-950 py-1 shadow-xl shadow-black/40"
+          className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-[0_8px_24px_rgba(15,23,42,0.12)] scrollbar-thin"
         >
           {isLoading ? (
-            <li className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-400">
+            <li className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600">
               <Loader2 className="h-4 w-4 animate-spin" />
               Mencari…
             </li>
           ) : filteredOptions.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-zinc-500">
+            <li className="px-3 py-2 text-sm text-slate-600">
               {query.trim() ? `Tidak ada bahan "${query.trim()}".` : "Ketik untuk mencari bahan."}
             </li>
           ) : (
@@ -233,19 +233,19 @@ export function RecipeComponentPicker({
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => pickOption(option)}
-                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition hover:bg-indigo-600/20 ${
-                    option.id === value ? "bg-indigo-600/15 text-indigo-200" : "text-zinc-200"
+                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50 ${
+                    option.id === value ? "bg-teal-50 text-teal-700" : "text-slate-800"
                   }`}
                 >
                     <span className="min-w-0 truncate">{option.name}</span>
                   <div className="flex shrink-0 items-center gap-2">
                     <KindBadge kind={option.kind} />
                     {showDepartment ? (
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                      <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
                         {option.department}
                       </span>
                     ) : null}
-                    <span className="text-xs text-zinc-500">{option.unit}</span>
+                    <span className="text-xs text-slate-600">{option.unit}</span>
                   </div>
                 </button>
               </li>

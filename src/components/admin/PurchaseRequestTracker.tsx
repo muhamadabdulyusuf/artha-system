@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Clock3,
   ExternalLink,
+  FileDown,
   ListFilter,
   Loader2,
   PackageCheck,
@@ -21,6 +22,7 @@ import {
   ShoppingCart,
   Trash2,
   Truck,
+  Upload,
   UserRound,
   X,
 } from "lucide-react";
@@ -40,7 +42,28 @@ import type {
 } from "@/lib/types/database";
 
 type PurchaseRequestUpdate = Database["public"]["Tables"]["purchase_request_tracker"]["Update"];
+type PurchaseRequestInsert = Database["public"]["Tables"]["purchase_request_tracker"]["Insert"];
 type MonitoringView = "all" | "need_order" | "ordered" | "process" | "received" | "cancelled";
+
+type ExcelCellValue =
+  | string
+  | number
+  | boolean
+  | Date
+  | null
+  | undefined
+  | {
+      text?: string;
+      result?: unknown;
+      hyperlink?: string;
+      richText?: { text?: string }[];
+    };
+
+type PoImportRow = PurchaseRequestInsert & {
+  item_name: string;
+  qty: number;
+  unit: string;
+};
 
 type TrackerForm = {
   request_date: string;
@@ -100,18 +123,30 @@ const MONITORING_VIEWS: {
 ];
 
 const STATUS_STYLE: Record<PurchaseRequestStatus, string> = {
-  "Belum Dibeli": "border-red-500/40 bg-red-500/10 text-red-200",
-  "On Progress": "border-amber-500/40 bg-amber-500/10 text-amber-100",
-  Purchased: "border-indigo-500/40 bg-indigo-500/10 text-indigo-100",
-  Shipped: "border-sky-500/40 bg-sky-500/10 text-sky-100",
-  Arrived: "border-emerald-500/40 bg-emerald-500/10 text-emerald-100",
-  Cancelled: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300",
+  "Belum Dibeli": "border-red-500/40 bg-red-500/10 text-red-700",
+  "On Progress": "border-amber-500/40 bg-amber-500/10 text-amber-900",
+  Purchased: "border-teal-200 bg-teal-50 text-teal-700",
+  Shipped: "border-sky-500/40 bg-sky-500/10 text-sky-700",
+  Arrived: "border-teal-200 bg-teal-50 text-teal-700",
+  Cancelled: "border-slate-200 bg-slate-100 text-slate-700",
 };
 
 const FIELD_CLASS =
-  "mt-1 min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-60";
-const LABEL_CLASS = "text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500";
-const PANEL_CLASS = "rounded-lg border border-zinc-800 bg-zinc-900/35 p-3";
+  "mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:cursor-not-allowed disabled:opacity-60";
+const LABEL_CLASS = "text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-600";
+const PANEL_CLASS = "rounded-lg border border-slate-200 bg-white p-3";
+const PO_IMPORT_SHEET_NAME = "PO Import";
+const PO_IMPORT_OPTION_SHEET_NAME = "Pilihan";
+const PO_IMPORT_HEADERS = [
+  "Tanggal PO",
+  "Nama Barang",
+  "Qty",
+  "Satuan",
+  "Harga Satuan",
+  "Supplier",
+  "ETA",
+  "Catatan",
+] as const;
 
 function SearchablePicker({
   label,
@@ -168,34 +203,34 @@ function SearchablePicker({
         className={`${FIELD_CLASS} flex min-h-12 items-center justify-between gap-2 py-2 text-left`}
       >
         <span className="min-w-0">
-          <span className={`block truncate font-semibold ${selectedOption ? "text-zinc-100" : "text-zinc-500"}`}>
+          <span className={`block truncate font-semibold ${selectedOption ? "text-slate-900" : "text-slate-600"}`}>
             {selectedOption?.title ?? emptyLabel}
           </span>
-          <span className="block truncate text-[11px] text-zinc-500">
+          <span className="block truncate text-[11px] text-slate-600">
             {selectedOption?.subtitle ?? placeholder}
           </span>
         </span>
         <ChevronDown
-          className={`h-4 w-4 shrink-0 text-zinc-500 transition ${isOpen ? "rotate-180" : ""}`}
+          className={`h-4 w-4 shrink-0 text-slate-600 transition ${isOpen ? "rotate-180" : ""}`}
         />
       </button>
 
       {isOpen ? (
-        <div className="absolute left-0 right-0 z-30 mt-2 rounded-lg border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/40">
+        <div className="absolute left-0 right-0 z-30 mt-2 rounded-lg border border-slate-200 bg-white p-2 shadow-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
             <input
               autoFocus
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={placeholder}
-              className="min-h-10 w-full rounded-lg border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-9 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30"
+              className="min-h-10 w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-9 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-100"
             />
             {query ? (
               <button
                 type="button"
                 onClick={() => setQuery("")}
-                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-100"
+                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
                 aria-label="Bersihkan pencarian"
               >
                 <X className="h-3.5 w-3.5" />
@@ -203,14 +238,14 @@ function SearchablePicker({
             ) : null}
           </div>
 
-          <div className="mt-2 max-h-56 overflow-y-auto pr-1" role="listbox">
+          <div className="mt-2 max-h-56 overflow-y-auto pr-1 scrollbar-thin" role="listbox">
             <button
               type="button"
               onClick={() => handleSelect("")}
               className={`mb-1 flex min-h-10 w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
                 value === ""
-                  ? "bg-emerald-400 text-zinc-950"
-                  : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+                  ? "bg-teal-600 text-white"
+                  : "text-slate-700 hover:bg-slate-50/80 hover:text-slate-900"
               }`}
               role="option"
               aria-selected={value === ""}
@@ -227,15 +262,15 @@ function SearchablePicker({
                   onClick={() => handleSelect(option.id)}
                   className={`mb-1 flex min-h-12 w-full flex-col justify-center rounded-lg px-3 py-2 text-left transition ${
                     active
-                      ? "bg-emerald-400 text-zinc-950"
-                      : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+                      ? "bg-teal-600 text-white"
+                      : "text-slate-700 hover:bg-slate-50/80 hover:text-slate-900"
                   }`}
                   role="option"
                   aria-selected={active}
                 >
                   <span className="truncate text-sm font-semibold">{option.title}</span>
                   {option.subtitle ? (
-                    <span className={`truncate text-xs ${active ? "text-zinc-800" : "text-zinc-500"}`}>
+                    <span className={`truncate text-xs ${active ? "text-slate-900" : "text-slate-600"}`}>
                       {option.subtitle}
                     </span>
                   ) : null}
@@ -244,7 +279,7 @@ function SearchablePicker({
             })}
 
             {filteredOptions.length === 0 ? (
-              <p className="px-3 py-4 text-center text-sm text-zinc-500">Data tidak ditemukan.</p>
+              <p className="px-3 py-4 text-center text-sm text-slate-600">Data tidak ditemukan.</p>
             ) : null}
           </div>
         </div>
@@ -267,6 +302,245 @@ function parseNumber(value: string): number {
   const normalized = value.replace(/\./g, "").replace(",", ".").trim();
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeLookup(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function cellValueToText(value: ExcelCellValue): string {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim();
+  }
+  if (Array.isArray(value.richText)) {
+    return value.richText.map((part) => part.text ?? "").join("").trim();
+  }
+  if (value.result !== undefined) {
+    return cellValueToText(value.result as ExcelCellValue);
+  }
+  return (value.text ?? value.hyperlink ?? "").trim();
+}
+
+function parseImportNumber(value: ExcelCellValue): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  return parseNumber(cellValueToText(value));
+}
+
+function excelSerialDateToIso(serial: number): string | null {
+  if (!Number.isFinite(serial) || serial <= 0) return null;
+  const date = new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86_400_000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function parseImportDate(value: ExcelCellValue): { value: string | null; invalid: boolean } {
+  if (value === null || value === undefined || cellValueToText(value) === "") {
+    return { value: null, invalid: false };
+  }
+  if (value instanceof Date) {
+    return { value: value.toISOString().slice(0, 10), invalid: Number.isNaN(value.getTime()) };
+  }
+  if (typeof value === "number") {
+    const iso = excelSerialDateToIso(value);
+    return { value: iso, invalid: iso === null };
+  }
+
+  const text = cellValueToText(value);
+  if (isValidIsoDate(text)) return { value: text, invalid: false };
+
+  const dmyMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmyMatch) {
+    const [, rawDay, rawMonth, rawYear] = dmyMatch;
+    const day = rawDay.padStart(2, "0");
+    const month = rawMonth.padStart(2, "0");
+    const iso = `${rawYear}-${month}-${day}`;
+    return { value: iso, invalid: !isValidIsoDate(iso) };
+  }
+
+  return { value: null, invalid: true };
+}
+
+function addIsoDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function buildPoImportDateOptions(): string[] {
+  const today = todayIso();
+  return Array.from({ length: 121 }, (_, index) => addIsoDays(today, index));
+}
+
+async function downloadPoImportTemplate(
+  ingredients: IngredientRow[],
+  suppliers: SupplierRow[]
+): Promise<void> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(PO_IMPORT_SHEET_NAME);
+  const dateOptions = buildPoImportDateOptions();
+
+  sheet.columns = [
+    { header: "Tanggal PO", key: "requestDate", width: 16 },
+    { header: "Nama Barang", key: "itemName", width: 32 },
+    { header: "Qty", key: "qty", width: 12 },
+    { header: "Satuan", key: "unit", width: 14 },
+    { header: "Harga Satuan", key: "unitPrice", width: 16 },
+    { header: "Supplier", key: "supplier", width: 28 },
+    { header: "ETA", key: "eta", width: 16 },
+    { header: "Catatan", key: "note", width: 36 },
+  ];
+
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (let rowNumber = 2; rowNumber <= 101; rowNumber += 1) {
+    sheet.getCell(`A${rowNumber}`).numFmt = "yyyy-mm-dd";
+    sheet.getCell(`A${rowNumber}`).dataValidation = {
+      type: "list",
+      allowBlank: true,
+      formulae: [`'${PO_IMPORT_OPTION_SHEET_NAME}'!$A$2:$A$${dateOptions.length + 1}`],
+    };
+    if (ingredients.length > 0) {
+      sheet.getCell(`B${rowNumber}`).dataValidation = {
+        type: "list",
+        allowBlank: false,
+        formulae: [`'${PO_IMPORT_OPTION_SHEET_NAME}'!$B$2:$B$${ingredients.length + 1}`],
+      };
+    }
+    if (suppliers.length > 0) {
+      sheet.getCell(`F${rowNumber}`).dataValidation = {
+        type: "list",
+        allowBlank: true,
+        formulae: [`'${PO_IMPORT_OPTION_SHEET_NAME}'!$C$2:$C$${suppliers.length + 1}`],
+      };
+    }
+    sheet.getCell(`G${rowNumber}`).numFmt = "yyyy-mm-dd";
+    sheet.getCell(`G${rowNumber}`).dataValidation = {
+      type: "list",
+      allowBlank: true,
+      formulae: [`'${PO_IMPORT_OPTION_SHEET_NAME}'!$A$2:$A$${dateOptions.length + 1}`],
+    };
+  }
+
+  const optionSheet = workbook.addWorksheet(PO_IMPORT_OPTION_SHEET_NAME);
+  optionSheet.columns = [
+    { header: "Tanggal", key: "date", width: 16 },
+    { header: "Nama Barang", key: "ingredient", width: 32 },
+    { header: "Supplier", key: "supplier", width: 30 },
+  ];
+  const optionRowCount = Math.max(dateOptions.length, ingredients.length, suppliers.length);
+  for (let index = 0; index < optionRowCount; index += 1) {
+    optionSheet.addRow({
+      date: dateOptions[index] ?? "",
+      ingredient: ingredients[index]?.name ?? "",
+      supplier: suppliers[index]?.name ?? "",
+    });
+  }
+  optionSheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  optionSheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+
+  const guide = workbook.addWorksheet("Panduan");
+  guide.columns = [
+    { header: "Kolom", key: "column", width: 24 },
+    { header: "Isi", key: "description", width: 82 },
+  ];
+  guide.addRows([
+    { column: "Tanggal PO", description: "Pilih dari dropdown tanggal yang sudah disediakan. Kalau kosong, sistem pakai tanggal hari ini." },
+    { column: "Nama Barang", description: "Wajib. Pilih dari dropdown master bahan, atau ketik manual kalau barang belum ada di master." },
+    { column: "Qty", description: "Wajib lebih dari 0." },
+    { column: "Satuan", description: "Wajib untuk item manual. Kalau ingredient match, boleh kosong dan sistem pakai purchase unit." },
+    { column: "Harga Satuan", description: "Isi harga per satuan beli. Kalau kosong dan bahan match, sistem pakai default unit price." },
+    { column: "Supplier", description: "Opsional. Pilih dari dropdown supplier agar contact/link otomatis terisi dari master." },
+    { column: "ETA", description: "Opsional. Pilih dari dropdown tanggal datang." },
+    { column: "Catatan", description: "Opsional." },
+  ]);
+  guide.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  guide.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+
+  const ingredientSheet = workbook.addWorksheet("Referensi Bahan");
+  ingredientSheet.columns = [
+    { header: "Ingredient ID", key: "id", width: 38 },
+    { header: "Nama Barang", key: "name", width: 32 },
+    { header: "Department", key: "department", width: 12 },
+    { header: "Purchase Unit", key: "purchaseUnit", width: 14 },
+    { header: "Stock Unit", key: "stockUnit", width: 12 },
+    { header: "Harga Default", key: "price", width: 16 },
+  ];
+  ingredientSheet.addRows(
+    ingredients.map((ingredient) => ({
+      id: ingredient.id,
+      name: ingredient.name,
+      department: ingredient.department,
+      purchaseUnit: ingredient.purchase_unit || ingredient.unit,
+      stockUnit: ingredient.unit,
+      price: Number(ingredient.default_unit_price ?? 0),
+    }))
+  );
+  ingredientSheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  ingredientSheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+
+  const supplierSheet = workbook.addWorksheet("Referensi Supplier");
+  supplierSheet.columns = [
+    { header: "Supplier ID", key: "id", width: 38 },
+    { header: "Supplier", key: "name", width: 30 },
+    { header: "Contact Supplier", key: "phone", width: 20 },
+    { header: "Kategori", key: "category", width: 18 },
+    { header: "Link / Toko", key: "link", width: 36 },
+  ];
+  supplierSheet.addRows(
+    suppliers.map((supplier) => ({
+      id: supplier.id,
+      name: supplier.name,
+      phone: supplier.phone_number && supplier.phone_number !== "62" ? supplier.phone_number : "",
+      category: supplier.category || "General",
+      link: supplier.link_url || "",
+    }))
+  );
+  supplierSheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  supplierSheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `template-import-po-${todayIso()}.xlsx`;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
 }
 
 function newForm(): TrackerForm {
@@ -358,6 +632,7 @@ function trackerRowToForm(row: PurchaseRequestTrackerRow): TrackerForm {
 export function PurchaseRequestTracker() {
   const supabase = getSupabaseClient();
   const canEdit = canEditStaffData(getStaffSession()?.role);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const [rows, setRows] = useState<PurchaseRequestTrackerRow[]>([]);
   const [ingredients, setIngredients] = useState<IngredientRow[]>([]);
@@ -369,6 +644,7 @@ export function PurchaseRequestTracker() {
   const [isSaving, setIsSaving] = useState(false);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [deletingRowId, setDeletingRowId] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -529,6 +805,155 @@ export function PurchaseRequestTracker() {
       supplier_contact: supplier?.phone_number && supplier.phone_number !== "62" ? supplier.phone_number : "",
       purchase_link: supplier?.link_url || prev.purchase_link,
     }));
+  };
+
+  const handleDownloadImportTemplate = async () => {
+    setError(null);
+    setSuccess(null);
+    try {
+      await downloadPoImportTemplate(ingredients, suppliers);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal membuat template import PO.");
+    }
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) return;
+
+    if (!canEdit) {
+      setError("Akun ini tidak punya akses import PO.");
+      event.target.value = "";
+      return;
+    }
+
+    setIsImporting(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const staff = getStaffSession();
+      const ExcelJS = await import("exceljs");
+      const workbook = new ExcelJS.Workbook();
+      const buffer = await file.arrayBuffer();
+      await workbook.xlsx.load(buffer);
+
+      const sheet = workbook.getWorksheet(PO_IMPORT_SHEET_NAME) ?? workbook.worksheets[0];
+      if (!sheet) {
+        throw new Error("Workbook tidak punya sheet import.");
+      }
+
+      const ingredientByName = new Map<string, IngredientRow>();
+      for (const ingredient of ingredients) {
+        const key = normalizeLookup(ingredient.name);
+        if (!ingredientByName.has(key)) ingredientByName.set(key, ingredient);
+      }
+
+      const supplierByName = new Map<string, SupplierRow>();
+      for (const supplier of suppliers) {
+        const key = normalizeLookup(supplier.name);
+        if (!supplierByName.has(key)) supplierByName.set(key, supplier);
+      }
+
+      const importRows: PoImportRow[] = [];
+      const importErrors: string[] = [];
+
+      for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
+        const row = sheet.getRow(rowNumber);
+        const cellValues = PO_IMPORT_HEADERS.map((_, index) => row.getCell(index + 1).value as ExcelCellValue);
+        const hasContent = cellValues.some((value) => cellValueToText(value).length > 0);
+        if (!hasContent) continue;
+
+        const [
+          requestDateCell,
+          itemNameCell,
+          qtyCell,
+          unitCell,
+          unitPriceCell,
+          supplierNameCell,
+          etaCell,
+          noteCell,
+        ] = cellValues;
+
+        const rowErrors: string[] = [];
+        const rawItemName = cellValueToText(itemNameCell);
+        const ingredient =
+          ingredientByName.get(normalizeLookup(rawItemName)) ??
+          null;
+
+        const rawSupplierName = cellValueToText(supplierNameCell);
+        const supplier =
+          supplierByName.get(normalizeLookup(rawSupplierName)) ??
+          null;
+
+        const requestDate = parseImportDate(requestDateCell);
+        if (requestDate.invalid) rowErrors.push("Tanggal PO tidak valid.");
+
+        const etaDate = parseImportDate(etaCell);
+        if (etaDate.invalid) rowErrors.push("ETA tidak valid.");
+
+        const itemName = rawItemName || ingredient?.name || "";
+        if (!itemName.trim()) rowErrors.push("Nama Barang wajib diisi.");
+
+        const qty = parseImportNumber(qtyCell);
+        if (qty <= 0) rowErrors.push("Qty harus lebih dari 0.");
+
+        const unit = cellValueToText(unitCell) || ingredient?.purchase_unit || ingredient?.unit || "";
+        if (!unit.trim()) rowErrors.push("Satuan wajib diisi.");
+
+        const rawUnitPriceText = cellValueToText(unitPriceCell);
+        const unitPrice = rawUnitPriceText
+          ? parseImportNumber(unitPriceCell)
+          : Number(ingredient?.default_unit_price ?? 0);
+        if (unitPrice < 0) rowErrors.push("Harga Satuan tidak boleh negatif.");
+
+        if (rowErrors.length > 0) {
+          importErrors.push(`Baris ${rowNumber}: ${rowErrors.join(" ")}`);
+          continue;
+        }
+
+        importRows.push({
+          request_date: requestDate.value ?? todayIso(),
+          ingredient_id: ingredient?.id ?? null,
+          item_name: itemName.trim(),
+          department: ingredient?.department ?? "general",
+          qty,
+          unit: unit.trim(),
+          supplier_id: supplier?.id ?? null,
+          supplier_name: rawSupplierName || supplier?.name || "",
+          supplier_contact:
+            supplier?.phone_number && supplier.phone_number !== "62" ? supplier.phone_number : "",
+          unit_price: unitPrice,
+          purchase_method: "Offline",
+          purchase_link: supplier?.link_url || "",
+          estimated_arrival_date: etaDate.value,
+          note: cellValueToText(noteCell),
+          pic_request_staff_id: staff?.id ?? null,
+          pic_request_name: staff?.name ?? "",
+        });
+      }
+
+      if (importErrors.length > 0) {
+        setError(["Import PO dibatalkan. Perbaiki data berikut:", ...importErrors.slice(0, 8)].join("\n"));
+        return;
+      }
+
+      if (importRows.length === 0) {
+        setError("Tidak ada baris PO yang bisa diimport. Isi data mulai baris 2 di sheet PO Import.");
+        return;
+      }
+
+      const { error: insertError } = await supabase.from("purchase_request_tracker").insert(importRows);
+      if (insertError) throw insertError;
+
+      setSuccess(`${importRows.length} PO berhasil diimport dari template.`);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal import template PO.");
+    } finally {
+      setIsImporting(false);
+      event.target.value = "";
+    }
   };
 
   const handleSaveForm = async () => {
@@ -712,36 +1137,60 @@ export function PurchaseRequestTracker() {
   };
 
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 shadow-xl shadow-black/20">
-      <div className="flex flex-col gap-3 border-b border-zinc-800 pb-3 lg:flex-row lg:items-center lg:justify-between">
+    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+      <div className="flex flex-col gap-3 border-b border-slate-200 pb-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-emerald-400/25 bg-emerald-400/10 shadow-lg shadow-emerald-950/20">
-            <ShoppingCart className="h-5 w-5 text-emerald-300" />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 shadow-lg shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+            <ShoppingCart className="h-5 w-5 text-teal-700" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-base font-semibold text-zinc-100">Procurement Command Center</h3>
-            <p className="mt-0.5 truncate text-sm text-zinc-500">
+            <h3 className="text-base font-semibold text-slate-900">Procurement Command Center</h3>
+            <p className="mt-0.5 truncate text-sm text-slate-600">
               {rows.length} request · {dashboardMetrics.openCount} open · {formatRupiah(dashboardMetrics.openEstimatedTotal)}
             </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs font-semibold tabular-nums text-emerald-200">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={(event) => void handleImportFile(event)}
+          />
+          <span className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-semibold tabular-nums text-teal-700">
             Fulfillment {dashboardMetrics.fulfilmentRate}%
           </span>
           <span
             className={`rounded-lg border px-3 py-2 text-xs font-semibold tabular-nums ${
               dashboardMetrics.overdue > 0
-                ? "border-red-500/30 bg-red-500/10 text-red-200"
-                : "border-zinc-800 bg-zinc-900/60 text-zinc-300"
+                ? "border-red-500/30 bg-red-500/10 text-red-700"
+                : "border-slate-200 bg-white text-slate-700"
             }`}
           >
             Overdue {dashboardMetrics.overdue}
           </span>
           <button
             type="button"
+            onClick={() => void handleDownloadImportTemplate()}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-sky-500/35 bg-sky-500/10 px-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-500/20"
+          >
+            <FileDown className="h-4 w-4" />
+            Template PO
+          </button>
+          <button
+            type="button"
+            disabled={!canEdit || isImporting}
+            onClick={() => importInputRef.current?.click()}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 text-sm font-semibold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {isImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            {isImporting ? "Importing..." : "Upload Import"}
+          </button>
+          <button
+            type="button"
             onClick={() => void loadData()}
-            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-900"
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50/80"
           >
             <RefreshCw className="h-4 w-4" />
             Refresh
@@ -749,22 +1198,22 @@ export function PurchaseRequestTracker() {
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 md:gap-6">
         <button
           type="button"
           onClick={() => setActiveView("need_order")}
           className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
             activeView === "need_order"
               ? "border-red-400 bg-red-500/15"
-              : "border-zinc-800 bg-zinc-900/35 hover:border-red-500/50"
+              : "border-slate-200 bg-white hover:border-red-500/50"
           }`}
         >
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-red-200">Perlu Order</span>
-            <AlertTriangle className="h-4 w-4 text-red-300" />
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-red-700">Perlu Order</span>
+            <AlertTriangle className="h-4 w-4 text-red-700" />
           </div>
-          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.needOrder}</p>
-          <p className="mt-1 text-xs text-zinc-500">Belum dibeli atau approval pending</p>
+          <p className="mt-3 text-2xl font-bold text-slate-900">{dashboardMetrics.needOrder}</p>
+          <p className="mt-1 text-xs text-slate-600">Belum dibeli atau approval pending</p>
         </button>
 
         <button
@@ -772,16 +1221,16 @@ export function PurchaseRequestTracker() {
           onClick={() => setActiveView("ordered")}
           className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
             activeView === "ordered"
-              ? "border-indigo-400 bg-indigo-500/15"
-              : "border-zinc-800 bg-zinc-900/35 hover:border-indigo-500/50"
+              ? "border-teal-300 bg-teal-50"
+              : "border-slate-200 bg-white hover:border-teal-200"
           }`}
         >
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-indigo-200">Sudah Order</span>
-            <ShoppingCart className="h-4 w-4 text-indigo-300" />
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">Sudah Order</span>
+            <ShoppingCart className="h-4 w-4 text-teal-700" />
           </div>
-          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.ordered}</p>
-          <p className="mt-1 text-xs text-zinc-500">Status Purchased</p>
+          <p className="mt-3 text-2xl font-bold text-slate-900">{dashboardMetrics.ordered}</p>
+          <p className="mt-1 text-xs text-slate-600">Status Purchased</p>
         </button>
 
         <button
@@ -789,16 +1238,16 @@ export function PurchaseRequestTracker() {
           onClick={() => setActiveView("process")}
           className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
             activeView === "process"
-              ? "border-sky-400 bg-sky-500/15"
-              : "border-zinc-800 bg-zinc-900/35 hover:border-sky-500/50"
+              ? "border-sky-200 bg-sky-50"
+              : "border-slate-200 bg-white hover:border-sky-200"
           }`}
         >
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-200">On Process</span>
-            <Clock3 className="h-4 w-4 text-sky-300" />
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">On Process</span>
+            <Clock3 className="h-4 w-4 text-sky-700" />
           </div>
-          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.process}</p>
-          <p className="mt-1 text-xs text-zinc-500">{dashboardMetrics.overdue} lewat ETA</p>
+          <p className="mt-3 text-2xl font-bold text-slate-900">{dashboardMetrics.process}</p>
+          <p className="mt-1 text-xs text-slate-600">{dashboardMetrics.overdue} lewat ETA</p>
         </button>
 
         <button
@@ -806,28 +1255,28 @@ export function PurchaseRequestTracker() {
           onClick={() => setActiveView("received")}
           className={`min-h-24 rounded-lg border px-4 py-3 text-left transition ${
             activeView === "received"
-              ? "border-emerald-400 bg-emerald-500/15"
-              : "border-zinc-800 bg-zinc-900/35 hover:border-emerald-500/50"
+              ? "border-emerald-400 bg-teal-50"
+              : "border-slate-200 bg-white hover:border-teal-200"
           }`}
         >
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-200">Diterima</span>
-            <ClipboardCheck className="h-4 w-4 text-emerald-300" />
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-teal-700">Diterima</span>
+            <ClipboardCheck className="h-4 w-4 text-teal-700" />
           </div>
-          <p className="mt-3 text-2xl font-bold text-zinc-50">{dashboardMetrics.received}</p>
-          <p className="mt-1 text-xs text-zinc-500">{formatRupiah(dashboardMetrics.receivedValue)} masuk stok</p>
+          <p className="mt-3 text-2xl font-bold text-slate-900">{dashboardMetrics.received}</p>
+          <p className="mt-1 text-xs text-slate-600">{formatRupiah(dashboardMetrics.receivedValue)} masuk stok</p>
         </button>
       </div>
 
-      <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/35 p-3">
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-semibold text-zinc-100">Procurement Pulse</p>
-            <p className="mt-0.5 text-xs text-zinc-500">
+            <p className="text-sm font-semibold text-slate-900">Procurement Pulse</p>
+            <p className="mt-0.5 text-xs text-slate-600">
               Pending approval {dashboardMetrics.approvalPending} · rejected/cancelled {dashboardMetrics.rejected}
             </p>
           </div>
-          <span className="rounded-full border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs font-semibold tabular-nums text-zinc-300">
+          <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold tabular-nums text-slate-900">
             {formatRupiah(dashboardMetrics.receivedValue)} received
           </span>
         </div>
@@ -837,46 +1286,46 @@ export function PurchaseRequestTracker() {
             {
               label: "Request",
               value: dashboardMetrics.needOrder,
-              tone: "text-red-200",
+              tone: "text-red-700",
               bar: "bg-red-400",
               icon: AlertTriangle,
             },
             {
               label: "Ordered",
               value: dashboardMetrics.ordered,
-              tone: "text-indigo-200",
-              bar: "bg-indigo-400",
+              tone: "text-teal-700",
+              bar: "bg-teal-600",
               icon: ShoppingCart,
             },
             {
               label: "Process",
               value: dashboardMetrics.process,
-              tone: "text-sky-200",
+              tone: "text-sky-700",
               bar: "bg-sky-400",
               icon: Truck,
             },
             {
               label: "Received",
               value: dashboardMetrics.received,
-              tone: "text-emerald-200",
-              bar: "bg-emerald-400",
+              tone: "text-teal-700",
+              bar: "bg-teal-600",
               icon: ClipboardCheck,
             },
           ].map((step) => {
             const StepIcon = step.icon;
             const width = rows.length > 0 ? Math.max(8, Math.round((step.value / rows.length) * 100)) : 8;
             return (
-              <div key={step.label} className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2.5">
+              <div key={step.label} className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
                     <StepIcon className={`h-4 w-4 shrink-0 ${step.tone}`} />
-                    <span className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                    <span className="truncate text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
                       {step.label}
                     </span>
                   </div>
                   <span className={`text-sm font-bold tabular-nums ${step.tone}`}>{step.value}</span>
                 </div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-50">
                   <div className={`h-full rounded-full ${step.bar}`} style={{ width: `${width}%` }} />
                 </div>
               </div>
@@ -886,10 +1335,10 @@ export function PurchaseRequestTracker() {
 
         {dashboardMetrics.topOverdueRows.length > 0 ? (
           <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-red-100">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-red-700">
               <AlertTriangle className="h-4 w-4" />
               {dashboardMetrics.topOverdueRows.map((row) => (
-                <span key={row.id} className="rounded-md bg-red-950/40 px-2 py-1">
+                <span key={row.id} className="rounded-md bg-red-50 px-2 py-1">
                   {row.item_name} · ETA {formatDate(row.estimated_arrival_date)}
                 </span>
               ))}
@@ -898,14 +1347,14 @@ export function PurchaseRequestTracker() {
         ) : null}
       </div>
 
-      <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
-        <div id="po-request-form" className={PANEL_CLASS}>
-          <div className="mb-3 flex flex-col gap-2 border-b border-zinc-800 pb-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div id="po-request-form" className={`${PANEL_CLASS} lg:col-span-8`}>
+          <div className="mb-3 flex flex-col gap-2 border-b border-slate-200 pb-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-sm font-semibold text-zinc-100">
+              <p className="text-sm font-semibold text-slate-900">
                 {isEditing ? "Edit Request" : "Request Baru"}
               </p>
-              <p className="mt-0.5 text-xs text-zinc-500">
+              <p className="mt-0.5 text-xs text-slate-600">
                 Total estimasi {formatRupiah(estimatedTotal)}
               </p>
             </div>
@@ -915,7 +1364,7 @@ export function PurchaseRequestTracker() {
                   type="button"
                   disabled={isSaving}
                   onClick={resetForm}
-                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-900 disabled:opacity-50"
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50/80 disabled:opacity-50"
                 >
                   <X className="h-4 w-4" />
                   Batal
@@ -925,7 +1374,7 @@ export function PurchaseRequestTracker() {
                 type="button"
                 disabled={isSaving || !canEdit}
                 onClick={() => void handleSaveForm()}
-                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-bold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 {isEditing ? "Update" : "Simpan"}
@@ -1111,7 +1560,7 @@ export function PurchaseRequestTracker() {
 
         </div>
 
-        <aside className="space-y-3">
+        <aside className="space-y-3 lg:col-span-4">
           <div className={PANEL_CLASS}>
             <div className="grid grid-cols-2 gap-2">
               {PURCHASE_STATUSES.map((status) => (
@@ -1127,20 +1576,20 @@ export function PurchaseRequestTracker() {
 
           <div className={PANEL_CLASS}>
             <div className="mb-2 flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold text-zinc-100">Supplier</p>
-              <p className="text-xs text-zinc-500">{suppliers.length} aktif</p>
+              <p className="text-sm font-semibold text-slate-900">Supplier</p>
+              <p className="text-xs text-slate-600">{suppliers.length} aktif</p>
             </div>
             <div className="space-y-2">
               {suppliers.slice(0, 5).map((supplier) => (
-                <div key={supplier.id} className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                <div key={supplier.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-zinc-100">{supplier.name}</p>
-                      <p className="mt-0.5 truncate text-xs text-zinc-500">
+                      <p className="truncate text-sm font-semibold text-slate-900">{supplier.name}</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-600">
                         {supplier.category || "General"} · PIC {supplier.pic_name || "-"}
                       </p>
                     </div>
-                    <p className="shrink-0 text-xs text-zinc-500">
+                    <p className="shrink-0 text-xs text-slate-600">
                       {supplier.phone_number && supplier.phone_number !== "62"
                         ? supplier.phone_number
                         : "-"}
@@ -1149,7 +1598,7 @@ export function PurchaseRequestTracker() {
                 </div>
               ))}
               {suppliers.length === 0 ? (
-                <p className="text-sm text-zinc-500">Belum ada supplier aktif.</p>
+                <p className="text-sm text-slate-600">Belum ada supplier aktif.</p>
               ) : null}
             </div>
           </div>
@@ -1157,26 +1606,27 @@ export function PurchaseRequestTracker() {
       </div>
 
       {error ? (
-        <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+        <div className="mt-3 whitespace-pre-line rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700">
           {error}
         </div>
       ) : null}
       {success ? (
-        <div className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
+        <div className="mt-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-700">
           {success}
         </div>
       ) : null}
 
-      <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/30">
-        <div className="flex flex-col gap-3 border-b border-zinc-800 p-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="mt-4 flex h-[calc(100vh-6rem)] flex-col rounded-lg border border-slate-200 bg-white">
+        <div className="shrink-0 border-b border-slate-200 bg-white p-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-sm font-semibold text-zinc-100">Monitoring PO</p>
-            <p className="mt-0.5 text-xs text-zinc-500">
+            <p className="text-sm font-semibold text-slate-900">Monitoring PO</p>
+            <p className="mt-0.5 text-xs text-slate-600">
               {filteredRows.length} request · {MONITORING_VIEWS.find((view) => view.id === activeView)?.description}
             </p>
           </div>
           <div className="flex w-full flex-col gap-2 lg:w-auto lg:min-w-[520px]">
-            <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1 sm:grid-cols-6">
+            <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-white p-1 sm:grid-cols-6">
               {MONITORING_VIEWS.map((view) => {
                 const ViewIcon = view.icon;
                 const active = activeView === view.id;
@@ -1187,13 +1637,13 @@ export function PurchaseRequestTracker() {
                     onClick={() => setActiveView(view.id)}
                     className={`flex min-h-9 items-center justify-center gap-1.5 rounded-md px-2 text-[11px] font-semibold transition ${
                       active
-                        ? "bg-emerald-400 text-zinc-950"
-                        : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                        ? "bg-teal-600 text-white"
+                        : "text-slate-600 hover:bg-slate-50/80 hover:text-slate-900"
                     }`}
                   >
                     <ViewIcon className="h-3.5 w-3.5" />
                     <span className="truncate">{view.label}</span>
-                    <span className={active ? "text-zinc-800" : "text-zinc-600"}>
+                    <span className={active ? "text-slate-900" : "text-slate-600"}>
                       {monitoringCount(rows, view.id)}
                     </span>
                   </button>
@@ -1201,26 +1651,27 @@ export function PurchaseRequestTracker() {
               })}
             </div>
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Cari barang, supplier, status, PIC..."
-                className="min-h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none transition focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30"
+                className="min-h-10 w-full rounded-lg border border-slate-200 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-100"
               />
             </div>
+          </div>
           </div>
         </div>
 
         {isLoading ? (
-          <div className="flex items-center justify-center gap-2 px-3 py-10 text-sm text-zinc-500">
+          <div className="flex flex-1 items-center justify-center gap-2 px-3 py-10 text-sm text-slate-600">
             <Loader2 className="h-5 w-5 animate-spin" />
             Memuat PO tracker...
           </div>
         ) : filteredRows.length === 0 ? (
-              <p className="px-3 py-10 text-center text-sm text-zinc-500">Belum ada request.</p>
+              <p className="flex flex-1 items-center justify-center px-3 py-10 text-center text-sm text-slate-600">Belum ada request.</p>
         ) : (
-          <div className="divide-y divide-zinc-800">
+          <div className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto scrollbar-thin">
             {filteredRows.map((row, index) => {
               const rowLocked = isLockedPurchaseRow(row);
               const isDeleting = deletingRowId === row.id;
@@ -1229,23 +1680,23 @@ export function PurchaseRequestTracker() {
               return (
                 <article
                   key={row.id}
-                  className="grid gap-3 px-3 py-3 text-sm text-zinc-300 lg:grid-cols-[minmax(240px,1.25fr)_minmax(180px,.85fr)_minmax(220px,1fr)_minmax(190px,.8fr)] lg:items-start"
+                  className="grid grid-cols-1 gap-4 px-3 py-3 text-sm text-slate-700 lg:grid-cols-12 lg:items-start"
                 >
-                <div className="min-w-0">
+                <div className="min-w-0 lg:col-span-4">
                   <div className="flex items-start gap-3">
-                    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950 text-xs font-semibold text-zinc-500">
+                    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-xs font-semibold text-slate-900">
                       {index + 1}
                     </span>
 	                    <div className="min-w-0">
-	                      <h4 className="truncate text-sm font-semibold text-zinc-100">{row.item_name}</h4>
-	                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-	                        <span className="rounded-md bg-zinc-950 px-2 py-0.5 capitalize">
+	                      <h4 className="truncate text-sm font-semibold text-slate-900">{row.item_name}</h4>
+	                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+	                        <span className="rounded-md bg-white px-2 py-0.5 capitalize">
 	                          {departmentLabel(row.department)}
 	                        </span>
-	                        <span>{formatDate(row.request_date)}</span>
-	                        <span>{row.ingredient_id ? "Stok master" : "Manual"}</span>
+	                        <span className="font-medium text-slate-900">{formatDate(row.request_date)}</span>
+	                        <span className="font-medium text-slate-900">{row.ingredient_id ? "Stok master" : "Manual"}</span>
                           {overdue ? (
-                            <span className="rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 font-semibold text-red-200">
+                            <span className="rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 font-semibold text-red-700">
                               Lewat ETA
                             </span>
                           ) : null}
@@ -1255,7 +1706,7 @@ export function PurchaseRequestTracker() {
                             type="button"
                             disabled={!canEdit || rowLocked}
                             onClick={() => handleStartEdit(row)}
-                            className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Pencil className="h-3.5 w-3.5" />
                             Edit
@@ -1264,7 +1715,7 @@ export function PurchaseRequestTracker() {
                             type="button"
                             disabled={!canEdit || rowLocked || isDeleting}
                             onClick={() => void handleDeleteRow(row)}
-                            className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-red-500/40 px-2.5 text-xs font-semibold text-red-200 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-red-500/40 px-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             {isDeleting ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1278,21 +1729,21 @@ export function PurchaseRequestTracker() {
 	                  </div>
 	                </div>
 
-                <div className="grid gap-2 sm:grid-cols-2 lg:block">
+                <div className="grid gap-2 sm:grid-cols-2 lg:col-span-2 lg:block">
                   <div className="flex items-center gap-2">
-                    <Truck className="h-4 w-4 shrink-0 text-zinc-500" />
+                    <Truck className="h-4 w-4 shrink-0 text-slate-600" />
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-zinc-100">{row.supplier_name || "-"}</p>
-                      <p className="truncate text-xs text-zinc-500">{row.supplier_contact || "No contact"}</p>
+                      <p className="truncate font-medium text-slate-900">{row.supplier_name || "-"}</p>
+                      <p className="truncate text-xs text-slate-600">{row.supplier_contact || "No contact"}</p>
                     </div>
                   </div>
-                  <div className="mt-0 text-xs text-zinc-500 lg:mt-2">
+                  <div className="mt-0 text-xs font-medium text-slate-900 lg:mt-2">
                     {row.purchase_link && row.purchase_link.startsWith("http") ? (
                       <a
                         href={row.purchase_link}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-sky-300"
+                        className="inline-flex items-center gap-1 text-sky-700 hover:text-sky-800"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                         {row.purchase_method}
@@ -1303,7 +1754,7 @@ export function PurchaseRequestTracker() {
                   </div>
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 sm:grid-cols-2 lg:col-span-3">
                   <label>
                     <span className={LABEL_CLASS}>Status PO</span>
                     <select
@@ -1346,7 +1797,7 @@ export function PurchaseRequestTracker() {
                     <span className={LABEL_CLASS}>Adjustment Tanggal</span>
                     <div className="mt-1 grid gap-2 sm:grid-cols-3">
                       <label>
-                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-600">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">
                           Request
                         </span>
                         <input
@@ -1362,7 +1813,7 @@ export function PurchaseRequestTracker() {
                         />
                       </label>
                       <label>
-                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-600">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">
                           ETA
                         </span>
                         <input
@@ -1378,7 +1829,7 @@ export function PurchaseRequestTracker() {
                         />
                       </label>
                       <label>
-                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-600">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-600">
                           Datang
                         </span>
                         <input
@@ -1402,7 +1853,7 @@ export function PurchaseRequestTracker() {
                         type="button"
                         disabled={!canEdit || rowLocked || row.po_status === "Approved"}
                         onClick={() => void updateRow(row, { po_status: "Approved" })}
-                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/35 px-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-teal-200 px-2 text-xs font-semibold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <CheckCircle2 className="h-3.5 w-3.5" />
                         Approve
@@ -1416,7 +1867,7 @@ export function PurchaseRequestTracker() {
                             purchase_status: "Purchased",
                           })
                         }
-                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-indigo-500/35 px-2 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-teal-200 px-2 text-xs font-semibold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <ShoppingCart className="h-3.5 w-3.5" />
                         Ordered
@@ -1430,7 +1881,7 @@ export function PurchaseRequestTracker() {
                             purchase_status: "Shipped",
                           })
                         }
-                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-sky-500/35 px-2 text-xs font-semibold text-sky-200 transition hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-sky-500/35 px-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Truck className="h-3.5 w-3.5" />
                         Shipped
@@ -1444,7 +1895,7 @@ export function PurchaseRequestTracker() {
                             purchase_status: "Arrived",
                           })
                         }
-                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/35 px-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-teal-200 px-2 text-xs font-semibold text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <PackageCheck className="h-3.5 w-3.5" />
                         Terima
@@ -1453,28 +1904,28 @@ export function PurchaseRequestTracker() {
                   </div>
                 </div>
 
-                <div className="grid gap-2">
+                <div className="grid gap-2 lg:col-span-3">
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
-                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-600">
                         <PackageCheck className="h-3.5 w-3.5" />
                         Qty
                       </div>
-                      <p className="mt-1 font-semibold text-zinc-100">
+                      <p className="mt-1 font-semibold text-slate-900">
                         {Number(row.qty).toLocaleString("id-ID")} {row.unit}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
-                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-600">
                         <CircleDollarSign className="h-3.5 w-3.5" />
                         Total
                       </div>
-                      <p className="mt-1 font-semibold text-zinc-100">
+                      <p className="mt-1 font-semibold text-slate-900">
                         {formatRupiah(Number(row.total_price))}
                       </p>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-zinc-500">
+                  <div className="grid grid-cols-2 gap-2 text-xs font-medium text-slate-900">
                     <div className="flex items-center gap-1.5">
                       <CalendarDays className="h-3.5 w-3.5" />
                       ETA {formatDate(row.estimated_arrival_date)}
@@ -1485,12 +1936,12 @@ export function PurchaseRequestTracker() {
                     </div>
                   </div>
                   {row.stock_applied_at ? (
-                    <div className="inline-flex w-fit items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-100">
+                    <div className="inline-flex w-fit items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2 py-1 text-xs text-teal-700">
                       <CheckCircle2 className="h-3.5 w-3.5" />
                       Stok +{Number(row.stock_applied_qty).toLocaleString("id-ID")}
                     </div>
                   ) : null}
-                  {row.note ? <p className="text-xs leading-relaxed text-zinc-500">{row.note}</p> : null}
+                  {row.note ? <p className="text-xs leading-relaxed text-slate-600">{row.note}</p> : null}
                 </div>
                 </article>
               );

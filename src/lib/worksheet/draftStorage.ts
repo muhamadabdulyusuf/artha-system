@@ -1,5 +1,7 @@
 import type { Department } from "@/lib/types/database";
 
+type DraftLossResponsibilityScope = "general" | "unknown" | "staff";
+
 export type WorksheetDraftPayload = {
   lines: Record<
     string,
@@ -9,12 +11,27 @@ export type WorksheetDraftPayload = {
       closingStock: string;
       outQty: string;
       outNote: string;
+      outflowType?: "operational" | "spoil";
+      outResponsibilityScope?: DraftLossResponsibilityScope;
+      outResponsibleStaffId?: string;
       outPhotoUrl?: string;
       outPhotoPublicId?: string;
     }
   >;
   soldItems: Record<string, string>;
   premixQuantities?: Record<string, string>;
+  menuIssues?: Record<
+    string,
+    {
+      quantity: string;
+      reason: string;
+      note: string;
+      lossResponsibilityScope?: DraftLossResponsibilityScope;
+      responsibleStaffId?: string;
+      photoUrl?: string;
+      photoPublicId?: string;
+    }
+  >;
   activeTab: "receive" | "outstock" | "opname" | "premix" | "issue" | "sold";
   savedAt: string;
 };

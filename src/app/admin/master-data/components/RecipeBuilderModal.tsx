@@ -206,20 +206,20 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
       title={`Kelola Resep — ${menu.menu_name}`}
       onClose={onClose}
     >
-      <p className="mb-4 text-sm text-zinc-400">
-        Departemen <span className="font-medium capitalize text-indigo-300">{menu.department}</span>
+      <p className="mb-4 text-sm text-slate-600">
+        Departemen <span className="font-medium capitalize text-teal-700">{menu.department}</span>
         {" · "}
         Hanya bahan {menu.department} yang bisa dipilih.
       </p>
 
       {error && (
-        <p className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center gap-2 py-12 text-zinc-400">
+        <div className="flex items-center justify-center gap-2 py-12 text-slate-500">
           <Loader2 className="h-5 w-5 animate-spin" />
           Memuat resep…
         </div>
@@ -228,14 +228,14 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
           {rows.map((row, index) => (
             <div
               key={row.clientKey}
-              className="grid gap-2 rounded-lg border border-zinc-700 bg-zinc-900/80 p-3 sm:grid-cols-[1fr_120px_40px]"
+              className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 shadow-[0_2px_8px_rgba(0,0,0,0.04)] sm:grid-cols-[1fr_120px_40px]"
             >
               <label className="block sm:col-span-1">
-                <span className="mb-1 block text-xs text-zinc-500">Bahan #{index + 1}</span>
+                <span className="mb-1 block text-xs text-slate-500">Bahan #{index + 1}</span>
                 <select
                   value={row.ingredient_id}
                   onChange={(e) => updateRow(row.clientKey, { ingredient_id: e.target.value })}
-                  className="min-h-11 w-full rounded-lg border border-zinc-600 bg-zinc-950 px-3 text-white"
+                  className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-slate-900 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                 >
                   <option value="">— Pilih bahan —</option>
                   {ingredients.map((ing) => (
@@ -246,21 +246,21 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
                 </select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs text-zinc-500">Qty / porsi</span>
+                <span className="mb-1 block text-xs text-slate-500">Qty / porsi</span>
                 <input
                   inputMode="decimal"
                   value={row.quantity_per_serving}
                   onChange={(e) =>
                     updateRow(row.clientKey, { quantity_per_serving: e.target.value })
                   }
-                  className="min-h-11 w-full rounded-lg border border-zinc-600 bg-zinc-950 px-3 tabular-nums text-white"
+                  className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 tabular-nums text-slate-900 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                   placeholder="0"
                 />
               </label>
               <button
                 type="button"
                 onClick={() => removeRow(row.clientKey)}
-                className="mt-6 flex h-11 items-center justify-center rounded-lg text-red-400 hover:bg-red-500/10"
+                className="mt-6 flex h-11 items-center justify-center rounded-lg text-red-600 transition-colors hover:bg-red-50 hover:text-red-700"
                 aria-label="Hapus baris"
               >
                 <Trash2 className="h-5 w-5" />
@@ -271,7 +271,7 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
           <button
             type="button"
             onClick={addRow}
-            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-600 text-sm text-zinc-300 hover:border-indigo-500 hover:text-indigo-300"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white text-sm font-medium text-slate-700 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
           >
             <Plus className="h-4 w-4" />
             Tambah Bahan
@@ -281,7 +281,7 @@ export function RecipeBuilderModal({ menu, onClose, onSaved }: RecipeBuilderModa
             type="button"
             disabled={saving}
             onClick={() => void handleSave()}
-            className="mt-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+            className="mt-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 font-medium text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
             {saving ? "Menyimpan…" : "Simpan Resep"}

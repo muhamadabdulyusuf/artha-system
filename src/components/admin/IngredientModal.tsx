@@ -99,10 +99,10 @@ const DEPARTMENTS: { value: IngredientDepartment; label: string }[] = [
 ];
 
 const SELECT_CLASS =
-  "min-h-12 w-full rounded-xl border border-zinc-600 bg-zinc-950 px-4 text-white focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40";
+  "min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-100";
 
 const INPUT_CLASS =
-  "min-h-12 w-full rounded-xl border border-zinc-600 bg-zinc-950 px-4 text-white placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40";
+  "min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-100";
 
 const EMPTY_FORM: FormData = {
   name: "",
@@ -308,7 +308,7 @@ export function IngredientModal({
     >
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">Nama Bahan Baku</span>
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">Nama Bahan Baku</span>
           <input
             type="text"
             required
@@ -320,7 +320,7 @@ export function IngredientModal({
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">
             Satuan Stok
           </span>
           <select
@@ -336,7 +336,7 @@ export function IngredientModal({
               </option>
             ))}
           </select>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-slate-600">
             Dipakai untuk resep, out stock, opname, dan ledger stok.
           </p>
         </label>
@@ -344,7 +344,7 @@ export function IngredientModal({
 	        <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
 	          <div className="space-y-2">
 	            <label className="block">
-	              <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+	              <span className="mb-1.5 block text-sm font-medium text-slate-600">
 	                Satuan Beli / Receive
 	              </span>
 	              <select
@@ -387,7 +387,7 @@ export function IngredientModal({
 	          </div>
 
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+            <span className="mb-1.5 block text-sm font-medium text-slate-600">
               Isi per Satuan Beli
             </span>
             <input
@@ -407,12 +407,12 @@ export function IngredientModal({
             />
           </label>
         </div>
-        <p className="-mt-2 text-xs text-zinc-500">
+        <p className="-mt-2 text-xs text-slate-600">
           Contoh: stok pcs, receive pack, isi 50 berarti 1 pack masuk sebagai 50 pcs.
         </p>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">
             Harga Default / Satuan Receive (Rp)
           </span>
           <input
@@ -427,13 +427,13 @@ export function IngredientModal({
             placeholder="Kosong = 0, bisa dioverride saat receive"
             className={INPUT_CLASS}
           />
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-slate-600">
             Dipakai untuk hitung biaya receive kalau staff tidak isi harga aktual.
           </p>
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">Jenis Bahan</span>
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">Jenis Bahan</span>
           <select
             value={formData.kind}
             onChange={(e) =>
@@ -444,13 +444,13 @@ export function IngredientModal({
             <option value="raw">Bahan Baku (Raw)</option>
             <option value="premix">Premix / WIP (bisa punya resep produksi)</option>
           </select>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-slate-600">
             Premix diproduksi di dapur/bar dan bisa dipakai sebagai komponen menu atau premix lain.
           </p>
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">Departemen</span>
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">Departemen</span>
           <select
             value={formData.department}
             onChange={(e) =>
@@ -470,7 +470,7 @@ export function IngredientModal({
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">Supplier Utama</span>
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">Supplier Utama</span>
           <select
             value={formData.primary_supplier_id}
             onChange={(e) =>
@@ -485,13 +485,13 @@ export function IngredientModal({
               </option>
             ))}
           </select>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="mt-1 text-xs text-slate-600">
             Dipakai untuk mengelompokkan list order low stock ke purchasing.
           </p>
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-400">
+          <span className="mb-1.5 block text-sm font-medium text-slate-600">
             Batas Stok Minimum (Warning Low Stock)
           </span>
           <input
@@ -508,20 +508,20 @@ export function IngredientModal({
           />
         </label>
 
-        <label className="flex items-start gap-3 rounded-xl border border-zinc-700 bg-zinc-950/60 p-3">
+        <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3">
           <input
             type="checkbox"
             checked={formData.is_stock_tracked}
             onChange={(e) =>
               setFormData((prev) => ({ ...prev, is_stock_tracked: e.target.checked }))
             }
-            className="mt-1 h-4 w-4 rounded border-zinc-600 bg-zinc-950 text-indigo-600 focus:ring-indigo-500"
+            className="mt-1 h-4 w-4 rounded border-slate-200 bg-white text-teal-700 focus:ring-teal-500"
           />
           <span>
-            <span className="block text-sm font-medium text-zinc-200">
+            <span className="block text-sm font-medium text-slate-700">
               Dilacak sebagai stok
             </span>
-            <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">
+            <span className="mt-0.5 block text-xs leading-relaxed text-slate-600">
               Matikan untuk bahan unlimited/non-inventory seperti air keran. Bahan tetap bisa
               dipakai di resep, tapi tidak muncul di worksheet, ledger, low stock, atau adjustment.
             </span>
@@ -531,7 +531,7 @@ export function IngredientModal({
         <button
           type="submit"
           disabled={isSubmitting}
-          className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-teal-600 font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSubmitting ? (
             <>

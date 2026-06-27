@@ -6,7 +6,7 @@ export { SESSION_COOKIE };
 const staffSessionSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  role: z.enum(["admin", "op_manager", "bar_staff", "kitchen_staff", "viewer"]),
+  role: z.enum(["master_admin", "admin", "op_manager", "bar_staff", "kitchen_staff", "viewer"]),
   department: z.enum(["bar", "kitchen"]).nullable(),
 });
 

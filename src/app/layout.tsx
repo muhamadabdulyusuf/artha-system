@@ -15,7 +15,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="id" data-theme="dark">
+    <html lang="id" data-theme="light">
       <body className="min-h-screen">
         <ThemeProvider>
           {children}

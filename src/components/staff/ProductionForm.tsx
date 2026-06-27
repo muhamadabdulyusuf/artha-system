@@ -114,42 +114,42 @@ export function ProductionForm({ department }: ProductionFormProps) {
 
   if (isLoading) {
     return (
-      <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <LoadingState />
       </section>
     );
   }
 
   return (
-    <section className="rounded-2xl border border-emerald-900/50 bg-emerald-950/20 p-4 sm:p-5">
+    <section className="rounded-2xl border border-teal-200 bg-teal-50 p-4 sm:p-5">
       <div className="flex items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600/20 ring-1 ring-emerald-500/40">
-          <Factory className="h-5 w-5 text-emerald-400" />
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-white">
+          <Factory className="h-5 w-5 text-teal-700" />
         </div>
         <div>
-          <h2 className="text-sm font-semibold text-white">Produksi Premix (WIP)</h2>
-          <p className="text-xs text-zinc-500">
+          <h2 className="text-sm font-semibold text-slate-900">Produksi Premix (WIP)</h2>
+          <p className="text-xs text-slate-600">
             Departemen {department} · {formatBusinessDateLabel(businessDate)}
           </p>
         </div>
       </div>
 
       {premixItems.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">
+        <p className="mt-3 text-sm text-slate-600">
           Belum ada bahan premix aktif untuk departemen {department}. Admin dapat menandai
           bahan dengan jenis premix dan menambahkan resep di database.
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <label className="block">
-            <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-600">
               Bahan premix (WIP)
             </span>
             <select
               value={ingredientId}
               onChange={(e) => setIngredientId(e.target.value)}
               disabled={!canEdit || isSubmitting}
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-white"
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
               required
             >
               <option value="">— Pilih bahan —</option>
@@ -163,7 +163,7 @@ export function ProductionForm({ department }: ProductionFormProps) {
           </label>
 
           <label className="block">
-            <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-600">
               Jumlah batch
             </span>
             <input
@@ -173,18 +173,18 @@ export function ProductionForm({ department }: ProductionFormProps) {
               onChange={(e) => setQuantity(e.target.value)}
               disabled={!canEdit || isSubmitting}
               placeholder="mis. 2"
-              className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-sm text-white"
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
               required
             />
           </label>
 
           {error && (
-            <p className="rounded-lg border border-red-900/50 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
             </p>
           )}
           {success && (
-            <p className="rounded-lg border border-emerald-800/50 bg-emerald-950/50 px-3 py-2 text-sm text-emerald-300">
+            <p className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-700">
               {success}
             </p>
           )}
@@ -192,7 +192,7 @@ export function ProductionForm({ department }: ProductionFormProps) {
           <button
             type="submit"
             disabled={!canEdit || isSubmitting}
-            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSubmitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -209,7 +209,7 @@ export function ProductionForm({ department }: ProductionFormProps) {
 
 function LoadingState() {
   return (
-    <div className="flex items-center gap-2 text-sm text-zinc-400">
+    <div className="flex items-center gap-2 text-sm text-slate-600">
       <Loader2 className="h-4 w-4 animate-spin" />
       Memuat daftar premix…
     </div>

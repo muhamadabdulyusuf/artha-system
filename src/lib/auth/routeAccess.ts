@@ -1,6 +1,6 @@
 import type { Department, StaffRole } from "@/lib/types/database";
 
-export const ADMIN_ROLES: StaffRole[] = ["admin", "op_manager", "viewer"];
+export const ADMIN_ROLES: StaffRole[] = ["master_admin", "admin", "op_manager", "viewer"];
 export const OPS_ROLES: StaffRole[] = ["bar_staff", "kitchen_staff"];
 
 export function isAdminPath(pathname: string): boolean {
@@ -31,7 +31,7 @@ export function canAccessOpsRoute(
   opsDepartment: Department
 ): boolean {
   if (role == null) return false;
-  if (role === "admin" || role === "op_manager") return true;
+  if (role === "master_admin" || role === "admin" || role === "op_manager") return true;
   if (role === "bar_staff") return opsDepartment === "bar" && department === "bar";
   if (role === "kitchen_staff") return opsDepartment === "kitchen" && department === "kitchen";
   return false;
@@ -48,6 +48,7 @@ export function getOpsHomeForRole(
 
 export function getRouteForRole(role: StaffRole): string {
   switch (role) {
+    case "master_admin":
     case "admin":
     case "op_manager":
     case "viewer":

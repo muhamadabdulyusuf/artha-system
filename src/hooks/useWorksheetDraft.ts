@@ -18,6 +18,7 @@ type UseWorksheetDraftParams = {
   lines: WorksheetDraftPayload["lines"];
   soldItems: Record<string, string>;
   premixQuantities: Record<string, string>;
+  menuIssues: NonNullable<WorksheetDraftPayload["menuIssues"]>;
   activeTab: WorksheetTab;
   onRestore: (draft: WorksheetDraftPayload) => void;
 };
@@ -30,6 +31,7 @@ export function useWorksheetDraft({
   lines,
   soldItems,
   premixQuantities,
+  menuIssues,
   activeTab,
   onRestore,
 }: UseWorksheetDraftParams): void {
@@ -63,7 +65,8 @@ export function useWorksheetDraft({
       lines,
       soldItems,
       premixQuantities,
+      menuIssues,
       activeTab,
     });
-  }, [activeTab, businessDate, department, isLoading, lines, locked, premixQuantities, soldItems]);
+  }, [activeTab, businessDate, department, isLoading, lines, locked, menuIssues, premixQuantities, soldItems]);
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Loader2, Lock, UserRound } from "lucide-react";
 import { AbdulCompanyMark } from "@/components/brand/AbdulCompanyMark";
+import { getRoleLabel } from "@/lib/auth/permissions";
 import {
   getRouteForRole,
   getStaffSession,
@@ -133,29 +134,29 @@ export function PinGate() {
   }, [password, router, selectedName]);
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center overflow-y-auto bg-zinc-950 px-4 py-6">
+    <main className="flex min-h-dvh flex-col items-center justify-center overflow-y-auto bg-slate-50 px-4 py-6 text-slate-900">
       <header className="mb-7 flex w-full max-w-sm flex-col items-center text-center">
         <AbdulCompanyMark size="lg" showText={false} />
-        <p className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+        <p className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-teal-700">
           Abdul Company
         </p>
-        <h1 className="mt-2 text-3xl font-bold text-white">Artha System</h1>
-        <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+        <h1 className="mt-2 text-3xl font-bold text-slate-900">Artha System</h1>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
           Inventory control, worksheet, dan monitoring operasional dalam satu sistem.
         </p>
       </header>
 
       <form
-        className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 shadow-2xl shadow-black/30"
+        className="w-full max-w-sm rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
         onSubmit={(event) => {
           event.preventDefault();
           if (!checking && !loadingStaff) void verifyPassword();
         }}
       >
         <label className="block">
-          <span className="mb-1.5 block text-xs font-medium text-zinc-400">Nama staff</span>
-          <div className="flex min-h-11 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 focus-within:border-cyan-400">
-            <UserRound className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+          <span className="mb-1.5 block text-xs font-medium text-slate-700">Nama staff</span>
+          <div className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-100">
+            <UserRound className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
             <select
               value={selectedName}
               onChange={(event) => {
@@ -164,7 +165,7 @@ export function PinGate() {
                 setError(null);
               }}
               disabled={loadingStaff || checking}
-              className="h-10 min-w-0 flex-1 bg-transparent text-sm font-medium text-white outline-none disabled:opacity-60"
+              className="h-10 min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-900 outline-none disabled:opacity-60"
             >
               {loadingStaff ? (
                 <option value="">Memuat staff...</option>
@@ -172,8 +173,9 @@ export function PinGate() {
                 <option value="">Belum ada staff aktif</option>
               ) : (
                 staffOptions.map((staff) => (
-                  <option key={staff.id} value={staff.name} className="bg-zinc-950 text-white">
-                    {staff.name}
+                  <option key={staff.id} value={staff.name} className="bg-white text-slate-900">
+                    {staff.name} - {getRoleLabel(staff.role)}
+                    {staff.department ? ` ${staff.department}` : ""}
                   </option>
                 ))
               )}
@@ -182,9 +184,9 @@ export function PinGate() {
         </label>
 
         <label className="mt-4 block">
-          <span className="mb-1.5 block text-xs font-medium text-zinc-400">Password</span>
-          <div className="flex min-h-11 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 focus-within:border-cyan-400">
-            <Lock className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+          <span className="mb-1.5 block text-xs font-medium text-slate-700">Password</span>
+          <div className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-100">
+            <Lock className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
             <input
               type={showPassword ? "text" : "password"}
               value={password}
@@ -194,13 +196,13 @@ export function PinGate() {
               }}
               disabled={loadingStaff || checking || !selectedStaff}
               autoComplete="current-password"
-              className="h-10 min-w-0 flex-1 bg-transparent text-sm font-medium text-white outline-none placeholder:text-zinc-600 disabled:opacity-60"
+              className="h-10 min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60"
               placeholder="Masukkan password"
             />
             <button
               type="button"
               onClick={() => setShowPassword((value) => !value)}
-              className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+              className="rounded-md p-1.5 text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -209,7 +211,7 @@ export function PinGate() {
         </label>
 
         {error ? (
-          <p className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-300" role="alert">
+          <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700" role="alert">
             {error}
           </p>
         ) : null}
@@ -217,14 +219,14 @@ export function PinGate() {
         <button
           type="submit"
           disabled={loadingStaff || checking || !selectedStaff || !password.trim()}
-          className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-cyan-400 px-4 text-center text-sm font-bold leading-tight text-zinc-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-5 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 text-center text-sm font-bold leading-tight text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {checking ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
           {checking ? "Memverifikasi..." : "Masuk"}
         </button>
       </form>
 
-      <p className="mt-6 max-w-sm text-center text-xs text-zinc-500">
+      <p className="mt-6 max-w-sm text-center text-xs text-slate-600">
         Password awal mengikuti PIN lama sampai admin menggantinya.
       </p>
     </main>

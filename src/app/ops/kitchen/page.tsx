@@ -4,7 +4,7 @@ import { WorksheetClosing } from "@/components/staff/WorksheetClosing";
 export default function OpsKitchenPage() {
   return (
     <ProtectedRoute opsDepartment="kitchen">
-      <WorksheetClosing department="kitchen" title="Operasional Kitchen" />
+      <WorksheetClosing department="kitchen" title="Inventory Kitchen" />
     </ProtectedRoute>
   );
 }

@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, KeyRound, Loader2, Plus, RefreshCw, Save, ShieldCheck, UserCog } from "lucide-react";
+import {
+  ROLE_ACCESS_PROFILE,
+  canManageStaffAccounts,
+  getRoleDetail,
+  getRoleLabel,
+  getRoleScope,
+} from "@/lib/auth/permissions";
 import { getStaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type { Department, StaffRole, StaffRow } from "@/lib/types/database";
@@ -17,12 +24,43 @@ type StaffFormState = {
   isActive: boolean;
 };
 
-const ROLE_OPTIONS: { id: StaffRole; label: string; detail: string }[] = [
-  { id: "admin", label: "Admin", detail: "Akses penuh master data dan staff." },
-  { id: "op_manager", label: "Ops Manager", detail: "Kontrol operasional dan worksheet." },
-  { id: "viewer", label: "Viewer", detail: "Monitoring read-only." },
-  { id: "bar_staff", label: "Bar Staff", detail: "Worksheet department bar." },
-  { id: "kitchen_staff", label: "Kitchen Staff", detail: "Worksheet department kitchen." },
+const ROLE_OPTIONS: { id: StaffRole; label: string; detail: string; scope: string }[] = [
+  {
+    id: "master_admin",
+    label: ROLE_ACCESS_PROFILE.master_admin.label,
+    detail: ROLE_ACCESS_PROFILE.master_admin.detail,
+    scope: ROLE_ACCESS_PROFILE.master_admin.scope,
+  },
+  {
+    id: "admin",
+    label: ROLE_ACCESS_PROFILE.admin.label,
+    detail: ROLE_ACCESS_PROFILE.admin.detail,
+    scope: ROLE_ACCESS_PROFILE.admin.scope,
+  },
+  {
+    id: "op_manager",
+    label: ROLE_ACCESS_PROFILE.op_manager.label,
+    detail: ROLE_ACCESS_PROFILE.op_manager.detail,
+    scope: ROLE_ACCESS_PROFILE.op_manager.scope,
+  },
+  {
+    id: "bar_staff",
+    label: ROLE_ACCESS_PROFILE.bar_staff.label,
+    detail: ROLE_ACCESS_PROFILE.bar_staff.detail,
+    scope: ROLE_ACCESS_PROFILE.bar_staff.scope,
+  },
+  {
+    id: "kitchen_staff",
+    label: ROLE_ACCESS_PROFILE.kitchen_staff.label,
+    detail: ROLE_ACCESS_PROFILE.kitchen_staff.detail,
+    scope: ROLE_ACCESS_PROFILE.kitchen_staff.scope,
+  },
+  {
+    id: "viewer",
+    label: ROLE_ACCESS_PROFILE.viewer.label,
+    detail: ROLE_ACCESS_PROFILE.viewer.detail,
+    scope: ROLE_ACCESS_PROFILE.viewer.scope,
+  },
 ];
 
 const DEPARTMENT_OPTIONS: { id: Department; label: string }[] = [
@@ -40,27 +78,27 @@ const EMPTY_FORM: StaffFormState = {
 };
 
 function roleLabel(role: StaffRole): string {
-  return ROLE_OPTIONS.find((option) => option.id === role)?.label ?? role;
+  return getRoleLabel(role);
 }
 
 function normalizeDepartment(role: StaffRole, department: "" | Department): Department | null {
   if (role === "bar_staff") return "bar";
   if (role === "kitchen_staff") return "kitchen";
-  if (role === "admin" || role === "op_manager" || role === "viewer") return null;
+  if (role === "master_admin" || role === "admin" || role === "op_manager" || role === "viewer") return null;
   return department || null;
 }
 
 function nextDepartmentForRole(role: StaffRole, current: "" | Department): "" | Department {
   if (role === "bar_staff") return "bar";
   if (role === "kitchen_staff") return "kitchen";
-  if (role === "admin" || role === "op_manager" || role === "viewer") return "";
+  if (role === "master_admin" || role === "admin" || role === "op_manager" || role === "viewer") return "";
   return current;
 }
 
 export function StaffAccountsPanel() {
   const supabase = useMemo(() => getSupabaseClient(), []);
   const session = getStaffSession();
-  const canManageStaff = session?.role === "admin";
+  const canManageStaff = canManageStaffAccounts(session?.role);
   const [rows, setRows] = useState<StaffAccountRow[]>([]);
   const [form, setForm] = useState<StaffFormState>(EMPTY_FORM);
   const [isLoading, setIsLoading] = useState(true);
@@ -110,7 +148,7 @@ export function StaffAccountsPanel() {
 
   const saveStaff = async () => {
     if (!canManageStaff) {
-      setNotice({ variant: "error", message: "Hanya admin yang bisa mengubah akun staff." });
+      setNotice({ variant: "error", message: "Hanya Master Admin yang bisa mengubah akun staff." });
       return;
     }
 
@@ -167,18 +205,18 @@ export function StaffAccountsPanel() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2">
-            <UserCog className="h-5 w-5 text-cyan-300" />
-            <h2 className="text-lg font-bold text-zinc-50">Staff Account Control</h2>
+            <UserCog className="h-5 w-5 text-teal-700" />
+            <h2 className="text-lg font-bold text-slate-900">Account Role Control</h2>
           </div>
-          <p className="max-w-2xl text-sm leading-relaxed text-zinc-400">
-            Kelola akun login staff dari UI: role, department, status aktif, dan reset password/PIN.
+          <p className="max-w-2xl text-sm leading-relaxed text-slate-600">
+            Pisahkan akun sebagai Master Admin, Admin, Manager Operasional, Staff per department, dan Viewer.
           </p>
         </div>
         <button
           type="button"
           onClick={() => void loadStaff()}
           disabled={isLoading}
-          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm font-semibold text-zinc-200 transition hover:border-cyan-400/60 disabled:opacity-50"
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-200 disabled:opacity-50"
         >
           {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           Refresh
@@ -186,23 +224,43 @@ export function StaffAccountsPanel() {
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Total Staff</p>
-          <p className="mt-2 text-2xl font-bold text-zinc-50">{rows.length}</p>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">Total Staff</p>
+          <p className="mt-2 text-2xl font-bold text-slate-900">{rows.length}</p>
         </div>
-        <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">Aktif</p>
-          <p className="mt-2 text-2xl font-bold text-emerald-100">{activeCount}</p>
+        <div className="rounded-xl border border-teal-200 bg-teal-50 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-700">Aktif</p>
+          <p className="mt-2 text-2xl font-bold text-teal-700">{activeCount}</p>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Nonaktif</p>
-          <p className="mt-2 text-2xl font-bold text-zinc-50">{inactiveCount}</p>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">Nonaktif</p>
+          <p className="mt-2 text-2xl font-bold text-slate-900">{inactiveCount}</p>
         </div>
       </div>
 
+      <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+        {ROLE_OPTIONS.map((role) => {
+          const count = rows.filter((row) => row.role === role.id).length;
+          return (
+            <div key={role.id} className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">{role.label}</p>
+                  <p className="mt-0.5 truncate text-xs text-teal-700">{role.scope}</p>
+                </div>
+                <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
+                  {count}
+                </span>
+              </div>
+              <p className="mt-2 line-clamp-2 text-xs leading-snug text-slate-600">{role.detail}</p>
+            </div>
+          );
+        })}
+      </div>
+
       {!canManageStaff ? (
-        <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-          Akun kamu bukan admin, jadi panel ini read-only.
+        <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900">
+          Akun kamu bukan Master Admin, jadi panel account ini read-only.
         </p>
       ) : null}
 
@@ -210,17 +268,17 @@ export function StaffAccountsPanel() {
         <p
           className={`rounded-xl border px-4 py-3 text-sm ${
             notice.variant === "success"
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-              : "border-red-500/40 bg-red-500/10 text-red-200"
+              ? "border-teal-200 bg-teal-50 text-teal-700"
+              : "border-red-500/40 bg-red-500/10 text-red-700"
           }`}
         >
           {notice.message}
         </p>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[380px_1fr]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <form
-          className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4"
+          className="rounded-xl border border-slate-200 bg-white p-4 lg:col-span-4"
           onSubmit={(event) => {
             event.preventDefault();
             void saveStaff();
@@ -228,15 +286,15 @@ export function StaffAccountsPanel() {
         >
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-zinc-100">{form.id ? "Edit Staff" : "Tambah Staff"}</h3>
-              <p className="mt-0.5 text-xs text-zinc-500">
+              <h3 className="text-sm font-bold text-slate-900">{form.id ? "Edit Staff" : "Tambah Staff"}</h3>
+              <p className="mt-0.5 text-xs text-slate-600">
                 Password lama tidak ditampilkan. Isi password hanya saat reset.
               </p>
             </div>
             <button
               type="button"
               onClick={resetForm}
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-800 px-3 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-900"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50/80"
             >
               <Plus className="h-3.5 w-3.5" />
               Baru
@@ -245,18 +303,18 @@ export function StaffAccountsPanel() {
 
           <div className="space-y-3">
             <label className="block">
-              <span className="text-xs font-semibold text-zinc-400">Nama</span>
+              <span className="text-xs font-semibold text-slate-600">Nama</span>
               <input
                 value={form.name}
                 onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                 disabled={!canManageStaff}
-                className="mt-1 min-h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400 disabled:opacity-60"
+                className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-teal-500 disabled:opacity-60"
                 placeholder="Nama staff"
               />
             </label>
 
             <label className="block">
-              <span className="text-xs font-semibold text-zinc-400">Role</span>
+              <span className="text-xs font-semibold text-slate-600">Role</span>
               <select
                 value={form.role}
                 onChange={(event) => {
@@ -268,7 +326,7 @@ export function StaffAccountsPanel() {
                   }));
                 }}
                 disabled={!canManageStaff}
-                className="mt-1 min-h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400 disabled:opacity-60"
+                className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-teal-500 disabled:opacity-60"
               >
                 {ROLE_OPTIONS.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -276,20 +334,26 @@ export function StaffAccountsPanel() {
                   </option>
                 ))}
               </select>
-              <span className="mt-1 block text-xs text-zinc-500">
-                {ROLE_OPTIONS.find((option) => option.id === form.role)?.detail}
+              <span className="mt-1 block text-xs text-slate-600">
+                {getRoleDetail(form.role)}
               </span>
             </label>
 
             <label className="block">
-              <span className="text-xs font-semibold text-zinc-400">Department</span>
+              <span className="text-xs font-semibold text-slate-600">Department</span>
               <select
                 value={form.department}
                 onChange={(event) =>
                   setForm((current) => ({ ...current, department: event.target.value as "" | Department }))
                 }
-                disabled={!canManageStaff || form.role === "admin" || form.role === "op_manager" || form.role === "viewer"}
-                className="mt-1 min-h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400 disabled:opacity-60"
+                disabled={
+                  !canManageStaff ||
+                  form.role === "master_admin" ||
+                  form.role === "admin" ||
+                  form.role === "op_manager" ||
+                  form.role === "viewer"
+                }
+                className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-teal-500 disabled:opacity-60"
               >
                 <option value="">Tidak ada</option>
                 {DEPARTMENT_OPTIONS.map((option) => (
@@ -301,24 +365,24 @@ export function StaffAccountsPanel() {
             </label>
 
             <label className="block">
-              <span className="text-xs font-semibold text-zinc-400">
+              <span className="text-xs font-semibold text-slate-600">
                 {form.id ? "Reset Password/PIN" : "Password/PIN Awal"}
               </span>
               <div className="relative mt-1">
-                <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
                 <input
                   type="password"
                   value={form.password}
                   onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
                   disabled={!canManageStaff}
-                  className="min-h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 py-2 pl-9 pr-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400 disabled:opacity-60"
+                  className="min-h-11 w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-teal-500 disabled:opacity-60"
                   placeholder={form.id ? "Kosongkan jika tidak reset" : "Minimal 4 karakter"}
                 />
               </div>
             </label>
 
-            <label className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900/70 px-3">
-              <span className="text-sm font-semibold text-zinc-200">Akun aktif</span>
+            <label className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3">
+              <span className="text-sm font-semibold text-slate-700">Akun aktif</span>
               <input
                 type="checkbox"
                 checked={form.isActive}
@@ -331,7 +395,7 @@ export function StaffAccountsPanel() {
             <button
               type="submit"
               disabled={!canManageStaff || isSaving}
-              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-cyan-400 px-4 text-sm font-bold text-zinc-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 text-sm font-bold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               Simpan Akun
@@ -339,16 +403,16 @@ export function StaffAccountsPanel() {
           </div>
         </form>
 
-        <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/60">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white lg:col-span-8">
           {isLoading ? (
-            <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-zinc-500">
-              <Loader2 className="h-5 w-5 animate-spin text-cyan-300" />
+            <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-slate-600">
+              <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
               Memuat akun staff...
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-auto scrollbar-thin">
               <table className="w-full min-w-[760px] text-left text-sm">
-                <thead className="border-b border-zinc-800 bg-zinc-900/80 text-xs uppercase tracking-[0.12em] text-zinc-500">
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-600">
                   <tr>
                     <th className="px-4 py-3 font-semibold">Staff</th>
                     <th className="px-4 py-3 font-semibold">Role</th>
@@ -357,28 +421,31 @@ export function StaffAccountsPanel() {
                     <th className="px-4 py-3 text-right font-semibold">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800">
+                <tbody className="divide-y divide-slate-100">
                   {rows.map((row) => (
-                    <tr key={row.id} className="transition hover:bg-zinc-900/70">
+                    <tr key={row.id} className="border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/80">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-900 text-zinc-300">
+                          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-slate-700">
                             <ShieldCheck className="h-4 w-4" />
                           </span>
                           <div>
-                            <p className="font-semibold text-zinc-100">{row.name}</p>
-                            <p className="text-xs text-zinc-500">Updated {new Date(row.updated_at).toLocaleDateString("id-ID")}</p>
+                            <p className="font-semibold text-slate-900">{row.name}</p>
+                            <p className="text-xs text-slate-600">Updated {new Date(row.updated_at).toLocaleDateString("id-ID")}</p>
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-zinc-300">{roleLabel(row.role)}</td>
-                      <td className="px-4 py-3 text-zinc-400">{row.department ?? "-"}</td>
+                      <td className="px-4 py-3">
+                        <span className="block text-slate-700">{roleLabel(row.role)}</span>
+                        <span className="block text-xs text-slate-600">{getRoleScope(row.role)}</span>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-slate-900">{row.department ?? "-"}</td>
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
                             row.is_active
-                              ? "bg-emerald-400/10 text-emerald-200"
-                              : "bg-zinc-800 text-zinc-400"
+                              ? "bg-teal-50 text-teal-700"
+                              : "bg-slate-50 text-slate-600"
                           }`}
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -389,7 +456,7 @@ export function StaffAccountsPanel() {
                         <button
                           type="button"
                           onClick={() => editRow(row)}
-                          className="inline-flex min-h-9 items-center justify-center rounded-lg border border-zinc-700 px-3 text-xs font-semibold text-zinc-200 transition hover:border-cyan-400/60 hover:text-cyan-200"
+                          className="inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-200 px-3 text-xs font-semibold text-slate-700 transition hover:border-teal-200 hover:text-teal-700"
                         >
                           Edit
                         </button>

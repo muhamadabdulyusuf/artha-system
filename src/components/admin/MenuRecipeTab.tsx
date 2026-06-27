@@ -28,7 +28,7 @@ const emptyMenuForm = (): MenuForm => ({
 });
 
 const SEARCH_INPUT_CLASS =
-  "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
+  "min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white py-2 pl-10 pr-10 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 
 type ViewMode = "menu" | "recipe" | "premix";
 
@@ -487,8 +487,8 @@ export function MenuRecipeTab() {
             onClick={() => setViewMode("menu")}
             className={`min-h-10 rounded-full px-4 text-sm font-semibold transition ${
               viewMode === "menu"
-                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/30"
-                : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
+                ? "bg-teal-600 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
+                : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
             }`}
           >
             Daftar Menu
@@ -498,8 +498,8 @@ export function MenuRecipeTab() {
             onClick={() => setViewMode("recipe")}
             className={`min-h-10 rounded-full px-4 text-sm font-semibold transition ${
               viewMode === "recipe"
-                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/30"
-                : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
+                ? "bg-teal-600 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
+                : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
             }`}
           >
             Resep Menu
@@ -509,8 +509,8 @@ export function MenuRecipeTab() {
             onClick={() => setViewMode("premix")}
             className={`min-h-10 rounded-full px-4 text-sm font-semibold transition ${
               viewMode === "premix"
-                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/30"
-                : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
+                ? "bg-teal-600 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
+                : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
             }`}
           >
             Resep Premix
@@ -526,8 +526,8 @@ export function MenuRecipeTab() {
                 onClick={() => setFilter(d)}
                 className={`min-h-10 rounded-full px-4 text-sm font-medium transition ${
                   filter === d
-                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/30"
-                    : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
+                    ? "bg-teal-600 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
+                    : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                 }`}
               >
                 {d === "all" ? "Semua" : d === "bar" ? "Bar" : "Kitchen"}
@@ -537,7 +537,7 @@ export function MenuRecipeTab() {
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 lg:max-w-xl lg:flex-1 lg:justify-end">
             <div className="relative min-w-0 flex-1 sm:max-w-xs lg:max-w-sm">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
               <input
                 type="search"
                 value={searchTerm}
@@ -558,7 +558,7 @@ export function MenuRecipeTab() {
                 <button
                   type="button"
                   onClick={() => setSearchTerm("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 transition hover:text-zinc-200"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
                   aria-label="Hapus pencarian"
                 >
                   <X className="h-4 w-4" />
@@ -570,7 +570,7 @@ export function MenuRecipeTab() {
               <button
                 type="button"
                 onClick={openCreateModal}
-                className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-500"
+                className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 text-sm font-medium text-white transition-all hover:bg-teal-700 active:scale-[0.98]"
               >
                 <Plus className="h-4 w-4" />
                 Tambah Menu Baru
@@ -583,7 +583,7 @@ export function MenuRecipeTab() {
                   setRecipeTarget(null);
                   setBuilderOpen(true);
                 }}
-                className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-indigo-500/50 bg-indigo-600/15 px-4 font-semibold text-indigo-200 transition hover:bg-indigo-600/25"
+                className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 text-sm font-medium text-teal-700 transition-all hover:bg-teal-100 active:scale-[0.98]"
               >
                 <Wand2 className="h-4 w-4" />
                 Recipe Builder
@@ -594,45 +594,46 @@ export function MenuRecipeTab() {
       </div>
 
       {error && (
-        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       )}
 
       {viewMode === "menu" ? (
         isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-zinc-500">
-            <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+          <div className="flex items-center justify-center gap-2 py-12 text-slate-600">
+            <Loader2 className="h-5 w-5 animate-spin text-teal-600" />
             Memuat menu dari Supabase…
           </div>
         ) : filteredMenus.length === 0 ? (
-          <p className="py-12 text-center text-zinc-500">{emptyListMessage}</p>
+          <p className="rounded-xl border border-dashed border-slate-200 bg-white py-12 text-center text-sm text-slate-600">{emptyListMessage}</p>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-zinc-700">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+            <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
-              <thead className="bg-zinc-800 text-zinc-400">
+              <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-4 py-3 font-medium">Menu</th>
-                  <th className="px-4 py-3 font-medium">Departemen</th>
-                  <th className="px-4 py-3 font-medium">Harga</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 text-right font-medium">Aksi</th>
+                  <th className="px-4 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-600">Menu</th>
+                  <th className="px-4 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-600">Departemen</th>
+                  <th className="px-4 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-600">Harga</th>
+                  <th className="px-4 py-3.5 text-xs font-semibold uppercase tracking-wider text-slate-600">Status</th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-slate-600">Aksi</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-700/80">
+              <tbody className="bg-white">
                 {filteredMenus.map((menu) => (
-                  <tr key={menu.id} className="bg-zinc-900/40">
-                    <td className="px-4 py-3 font-medium text-white">{menu.menu_name}</td>
-                    <td className="px-4 py-3 capitalize text-zinc-300">{menu.department}</td>
-                    <td className="px-4 py-3 tabular-nums text-zinc-300">
+                  <tr key={menu.id} className="border-b border-slate-100 bg-white transition-colors last:border-b-0 hover:bg-slate-50/80">
+                    <td className="px-4 py-3 font-medium text-slate-900">{menu.menu_name}</td>
+                    <td className="px-4 py-3 font-medium capitalize text-slate-900">{menu.department}</td>
+                    <td className="px-4 py-3 font-semibold tabular-nums text-slate-900">
                       Rp {Number(menu.price).toLocaleString("id-ID")}
                     </td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-block rounded-full px-2 py-0.5 text-xs ${
                           menu.is_active
-                            ? "bg-emerald-500/20 text-emerald-300"
-                            : "bg-zinc-600/30 text-zinc-400"
+                            ? "border border-teal-200 bg-teal-50 text-teal-700"
+                            : "border border-slate-200 bg-slate-100 text-slate-700"
                         }`}
                       >
                         {menu.is_active ? "Aktif" : "Nonaktif"}
@@ -649,7 +650,7 @@ export function MenuRecipeTab() {
                                   setRecipeTarget({ type: "menu", item: menu });
                                   setBuilderOpen(true);
                                 }}
-                                className="flex min-h-9 items-center gap-1 rounded-lg bg-indigo-600/20 px-3 text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
+                                className="flex min-h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                               >
                                 <ChefHat className="h-4 w-4" />
                                 Kelola Resep
@@ -657,7 +658,7 @@ export function MenuRecipeTab() {
                               <button
                                 type="button"
                                 onClick={() => openEditModal(menu)}
-                                className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-zinc-400 ring-1 ring-zinc-600 hover:text-white"
+                                className="flex min-h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                               >
                                 <Pencil className="h-4 w-4" />
                                 Edit
@@ -665,7 +666,7 @@ export function MenuRecipeTab() {
                               <button
                                 type="button"
                                 onClick={() => void handleDeleteMenu(menu)}
-                                className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-red-400 ring-1 ring-zinc-600 hover:bg-red-500/10"
+                                className="flex min-h-9 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 hover:text-red-700"
                               >
                                 <Trash2 className="h-4 w-4" />
                                 Hapus
@@ -675,7 +676,7 @@ export function MenuRecipeTab() {
                             <button
                               type="button"
                               onClick={() => void handleActivateMenu(menu)}
-                              className="flex min-h-9 items-center gap-1 rounded-lg px-3 text-emerald-400 ring-1 ring-zinc-600 hover:bg-emerald-500/10"
+                              className="flex min-h-9 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-50"
                             >
                               <RotateCcw className="h-4 w-4" />
                               Aktifkan
@@ -683,37 +684,38 @@ export function MenuRecipeTab() {
                           )}
                         </div>
                       ) : (
-                        <span className="block text-right text-xs text-zinc-500">—</span>
+                        <span className="block text-right text-xs text-slate-600">—</span>
                       )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )
       ) : viewMode === "premix" ? (
         isLoadingPremix ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-zinc-500">
-            <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+          <div className="flex items-center justify-center gap-2 py-12 text-slate-600">
+            <Loader2 className="h-5 w-5 animate-spin text-teal-600" />
             Memuat resep premix…
           </div>
         ) : filteredPremixSummaries.length === 0 ? (
-          <p className="py-12 text-center text-zinc-500">{emptyListMessage}</p>
+          <p className="rounded-xl border border-dashed border-slate-200 bg-white py-12 text-center text-sm text-slate-600">{emptyListMessage}</p>
         ) : (
           <div className="space-y-3">
             {filteredPremixSummaries.map((premix) => (
               <article
                 key={premix.id}
-                className="rounded-xl border border-amber-500/20 bg-zinc-900/50 p-4"
+                className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
               >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <h3 className="flex items-center gap-2 font-semibold text-white">
-                      <Beaker className="h-4 w-4 text-amber-400" />
+                    <h3 className="flex items-center gap-2 font-semibold text-slate-900">
+                      <Beaker className="h-4 w-4 text-amber-600" />
                       {premix.name}
                     </h3>
-                    <p className="mt-1 text-xs capitalize text-zinc-500">
+                    <p className="mt-1 text-xs capitalize text-slate-600">
                       {premix.department} · {premix.unit} ·{" "}
                       {premix.hasRecipe
                         ? `${premix.components.length} bahan baku · 1 batch = ${premix.yieldQuantity} ${premix.unit}`
@@ -727,7 +729,7 @@ export function MenuRecipeTab() {
                         setRecipeTarget({ type: "premix", ingredient: premix });
                         setBuilderOpen(true);
                       }}
-                      className="flex min-h-9 shrink-0 items-center gap-1 self-start rounded-lg bg-amber-600/20 px-3 text-sm text-amber-200 ring-1 ring-amber-500/40 hover:bg-amber-600/30"
+                      className="flex min-h-9 shrink-0 items-center gap-1 self-start rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100"
                     >
                       <Beaker className="h-4 w-4" />
                       Kelola Bahan Baku
@@ -735,18 +737,18 @@ export function MenuRecipeTab() {
                   ) : null}
                 </div>
                 {premix.components.length > 0 ? (
-                  <ul className="mt-3 space-y-1 border-t border-zinc-800 pt-3 text-sm text-zinc-300">
+                  <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-sm text-slate-700">
                     {premix.components.map((component) => (
                       <li key={component.id} className="flex justify-between gap-3">
                         <span>{component.name}</span>
-                        <span className="tabular-nums text-zinc-500">
+                        <span className="font-medium tabular-nums text-slate-900">
                           {component.quantity_per_serving} {component.unit} / batch
                         </span>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="mt-3 border-t border-zinc-800 pt-3 text-sm text-zinc-500">
+                  <p className="mt-3 border-t border-slate-100 pt-3 text-sm text-slate-600">
                     Resep produksi belum disusun. Contoh: Mont Blanc Cream dari bahan raw.
                   </p>
                 )}
@@ -755,23 +757,23 @@ export function MenuRecipeTab() {
           </div>
         )
       ) : isLoadingRecipes ? (
-        <div className="flex items-center justify-center gap-2 py-12 text-zinc-500">
-          <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+        <div className="flex items-center justify-center gap-2 py-12 text-slate-600">
+          <Loader2 className="h-5 w-5 animate-spin text-teal-600" />
           Memuat daftar resep dari Supabase…
         </div>
       ) : filteredRecipeSummaries.length === 0 ? (
-        <p className="py-12 text-center text-zinc-500">{emptyListMessage}</p>
+        <p className="rounded-xl border border-dashed border-slate-200 bg-white py-12 text-center text-sm text-slate-600">{emptyListMessage}</p>
       ) : (
         <div className="space-y-3">
           {filteredRecipeSummaries.map((menu) => (
             <article
               key={menu.id}
-              className="rounded-xl border border-zinc-700 bg-zinc-900/50 p-4"
+              className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h3 className="font-semibold text-white">{menu.menu_name}</h3>
-                  <p className="mt-1 text-xs capitalize text-zinc-500">
+                  <h3 className="font-semibold text-slate-900">{menu.menu_name}</h3>
+                  <p className="mt-1 text-xs capitalize text-slate-600">
                     {menu.department} · {menu.hasRecipe ? `${menu.recipeIngredients.length} bahan` : "Belum ada resep"}
                   </p>
                 </div>
@@ -782,7 +784,7 @@ export function MenuRecipeTab() {
                       setRecipeTarget({ type: "menu", item: menu });
                       setBuilderOpen(true);
                     }}
-                    className="flex min-h-9 shrink-0 items-center gap-1 self-start rounded-lg bg-indigo-600/20 px-3 text-sm text-indigo-300 ring-1 ring-indigo-500/40 hover:bg-indigo-600/30"
+                    className="flex min-h-9 shrink-0 items-center gap-1 self-start rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                   >
                     <ChefHat className="h-4 w-4" />
                     Kelola Resep
@@ -790,18 +792,18 @@ export function MenuRecipeTab() {
                 ) : null}
               </div>
               {menu.recipeIngredients.length > 0 ? (
-                <ul className="mt-3 space-y-1 border-t border-zinc-800 pt-3 text-sm text-zinc-300">
+                <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-sm text-slate-700">
                   {menu.recipeIngredients.map((ingredient) => (
                     <li key={ingredient.id} className="flex justify-between gap-3">
                       <span>{ingredient.name}</span>
-                      <span className="tabular-nums text-zinc-500">
+                      <span className="font-medium tabular-nums text-slate-900">
                         {ingredient.quantity_per_serving} {ingredient.unit} / porsi
                       </span>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="mt-3 border-t border-zinc-800 pt-3 text-sm text-zinc-500">
+                <p className="mt-3 border-t border-slate-100 pt-3 text-sm text-slate-600">
                   Resep belum disusun. Klik Kelola Resep untuk menambahkan bahan baku.
                 </p>
               )}
@@ -817,26 +819,26 @@ export function MenuRecipeTab() {
       >
         <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
           <label className="block">
-            <span className="mb-1 block text-sm text-zinc-400">Nama Menu</span>
+            <span className="mb-1 block text-sm font-medium text-slate-700">Nama Menu</span>
             <input
               type="text"
               required
               value={menuForm.menu_name}
               onChange={(e) => setMenuForm((f) => ({ ...f, menu_name: e.target.value }))}
               placeholder="Contoh: Espresso, Nasi Goreng Spesial…"
-              className="min-h-12 w-full rounded-xl border border-zinc-600 bg-zinc-950 px-4 text-white placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+              className="min-h-12 w-full rounded-lg border border-slate-200 bg-white px-4 text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
             />
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm text-zinc-400">Departemen</span>
+            <span className="mb-1 block text-sm font-medium text-slate-700">Departemen</span>
             <select
               value={menuForm.department}
               disabled={!!editingMenu}
               onChange={(e) =>
                 setMenuForm((f) => ({ ...f, department: e.target.value as Department }))
               }
-              className="min-h-12 w-full rounded-xl border border-zinc-600 bg-zinc-950 px-4 text-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="min-h-12 w-full rounded-lg border border-slate-200 bg-white px-4 text-slate-900 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
             >
               {DEPARTMENTS.map((d) => (
                 <option key={d.value} value={d.value}>
@@ -847,21 +849,21 @@ export function MenuRecipeTab() {
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm text-zinc-400">Harga (Rp)</span>
+            <span className="mb-1 block text-sm font-medium text-slate-700">Harga (Rp)</span>
             <input
               type="text"
               required
               inputMode="decimal"
               value={menuForm.price}
               onChange={(e) => setMenuForm((f) => ({ ...f, price: e.target.value }))}
-              className="min-h-12 w-full rounded-xl border border-zinc-600 bg-zinc-950 px-4 text-white tabular-nums focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+              className="min-h-12 w-full rounded-lg border border-slate-200 bg-white px-4 tabular-nums text-slate-900 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
             />
           </label>
 
           <button
             type="submit"
             disabled={isSubmitting}
-            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 font-medium text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             {isSubmitting ? (
               <>

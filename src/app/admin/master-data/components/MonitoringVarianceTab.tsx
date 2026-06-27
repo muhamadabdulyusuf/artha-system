@@ -35,32 +35,32 @@ function StatusBadge({ status }: { status: ClosingStatus | "NONE" }) {
   > = {
     NONE: {
       label: "Belum Ada Session",
-      className: "bg-zinc-700/50 text-zinc-400 ring-zinc-600",
+      className: "bg-slate-50 text-slate-600 ring-slate-200",
       Icon: CircleDashed,
     },
     DRAFT: {
       label: "Draft",
-      className: "bg-zinc-600/40 text-zinc-300 ring-zinc-500",
+      className: "bg-slate-100 text-slate-700 ring-slate-200",
       Icon: CircleDashed,
     },
     SUBMITTED: {
       label: "Submitted",
-      className: "bg-amber-500/20 text-amber-300 ring-amber-500/40",
+      className: "bg-amber-500/20 text-amber-900 ring-amber-500/40",
       Icon: Send,
     },
     PENDING_APPROVAL_ADMIN: {
       label: "Pending Admin",
-      className: "bg-rose-500/20 text-rose-300 ring-rose-500/40",
+      className: "bg-rose-50 text-rose-700 ring-rose-200",
       Icon: AlertTriangle,
     },
     ADJUSTED: {
       label: "Adjusted",
-      className: "bg-orange-500/20 text-orange-300 ring-orange-500/40",
+      className: "bg-orange-50 text-orange-700 ring-orange-200",
       Icon: AlertTriangle,
     },
     LOCKED: {
       label: "Locked",
-      className: "bg-emerald-500/20 text-emerald-300 ring-emerald-500/40",
+      className: "bg-teal-50 text-teal-700 ring-teal-200",
       Icon: Lock,
     },
   };
@@ -189,17 +189,17 @@ function DepartmentPanel({
   };
 
   return (
-    <section className="rounded-xl border border-zinc-700 bg-zinc-900/60 p-4">
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h3 className="text-lg font-semibold capitalize text-white">{department}</h3>
-          <p className="text-xs text-zinc-500">Hari bisnis: {businessLabel}</p>
+          <h3 className="text-lg font-semibold capitalize text-slate-900">{department}</h3>
+          <p className="text-xs text-slate-500">Hari bisnis: {businessLabel}</p>
         </div>
         <StatusBadge status={status} />
       </div>
 
       {error && (
-        <p className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <p className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       )}
@@ -217,7 +217,7 @@ function DepartmentPanel({
       )}
 
       {status === "LOCKED" && (
-        <p className="mb-3 flex items-center gap-2 text-sm text-emerald-300">
+        <p className="mb-3 flex items-center gap-2 text-sm text-teal-700">
           <CheckCircle2 className="h-4 w-4" />
           Data terkunci — tidak dapat diubah staf.
         </p>
@@ -225,13 +225,13 @@ function DepartmentPanel({
 
       {showLedger ? (
         loadingLedger ? (
-          <p className="py-6 text-center text-zinc-500">Memuat ledger…</p>
+          <p className="py-6 text-center text-slate-500">Memuat ledger…</p>
         ) : ledgerRows.length === 0 ? (
-          <p className="py-6 text-center text-zinc-500">Belum ada data stock_ledger hari ini.</p>
+          <p className="py-6 text-center text-slate-500">Belum ada data stock_ledger hari ini.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-zinc-700">
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="w-full min-w-[560px] text-left text-sm">
-              <thead className="bg-zinc-800 text-zinc-400">
+              <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="px-3 py-2 font-medium">Nama Bahan</th>
                   <th className="px-3 py-2 font-medium text-right">Opening</th>
@@ -240,27 +240,27 @@ function DepartmentPanel({
                   <th className="px-3 py-2 font-medium text-right">Variance</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-700/80">
+              <tbody className="divide-y divide-slate-100">
                 {ledgerRows.map(({ ingredient, ledger }) => (
                   <tr key={ledger.id}>
-                    <td className="px-3 py-2 text-white">
+                    <td className="px-3 py-2 text-slate-900">
                       {ingredient.name}
-                      <span className="ml-1 text-xs text-zinc-500">({ingredient.unit})</span>
+                      <span className="ml-1 text-xs text-slate-500">({ingredient.unit})</span>
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-zinc-300">
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
                       {Number(ledger.opening_stock)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-zinc-300">
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
                       {Number(ledger.in_qty)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium text-indigo-300">
+                    <td className="px-3 py-2 text-right tabular-nums font-medium text-teal-700">
                       {Number(ledger.closing_stock)}
                     </td>
                     <td
                       className={`px-3 py-2 text-right tabular-nums font-medium ${
                         Number(ledger.adjustment_qty) !== 0
-                          ? "text-amber-400"
-                          : "text-zinc-500"
+                          ? "text-amber-700"
+                          : "text-slate-500"
                       }`}
                     >
                       {Number(ledger.adjustment_qty)}
@@ -272,7 +272,7 @@ function DepartmentPanel({
           </div>
         )
       ) : (
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-slate-500">
           {status === "DRAFT" || status === "NONE"
             ? "Menunggu staf submit closing untuk menampilkan variance."
             : null}
@@ -343,17 +343,17 @@ export function MonitoringVarianceTab() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-white">Monitoring Harian</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Monitoring Harian</h2>
           {businessLabel && (
-            <p className="text-sm text-zinc-400">
-              Hari Bisnis: <span className="text-indigo-300">{businessLabel}</span>
+            <p className="text-sm text-slate-600">
+              Hari Bisnis: <span className="text-teal-700">{businessLabel}</span>
             </p>
           )}
         </div>
         <button
           type="button"
           onClick={() => void load()}
-          className="flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-600 px-4 text-sm text-zinc-300 hover:border-indigo-500 hover:text-indigo-300"
+          className="flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 px-4 text-sm text-slate-700 hover:border-teal-300 hover:text-teal-700"
         >
           <RefreshCw className="h-4 w-4" />
           Refresh
@@ -361,13 +361,13 @@ export function MonitoringVarianceTab() {
       </div>
 
       {error && (
-        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center gap-2 py-16 text-zinc-500">
+        <div className="flex items-center justify-center gap-2 py-16 text-slate-500">
           <Loader2 className="h-5 w-5 animate-spin" />
           Memuat status operasional…
         </div>

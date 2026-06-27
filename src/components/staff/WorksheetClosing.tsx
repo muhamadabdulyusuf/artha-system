@@ -26,6 +26,11 @@ import { AbdulCompanyMark } from "@/components/brand/AbdulCompanyMark";
 import { Toast, type ToastVariant } from "@/components/ui/Toast";
 import { translateWorksheetSubmitError } from "@/lib/worksheet/errorTranslator";
 import { canEditStaffData } from "@/lib/auth/permissions";
+import {
+  WORKSHEET_TAB_TASK_ID,
+  isRoleTaskEnabled,
+  mergeRoleTaskSettings,
+} from "@/lib/auth/roleTasks";
 import { getStaffSession, type StaffSession } from "@/lib/auth/session";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import type {
@@ -74,6 +79,8 @@ const OUTLET_TIMEZONE = "Asia/Jakarta";
 const BUSINESS_DATE_CUTOFF_HOUR = 5;
 
 type WorksheetTab = "receive" | "outstock" | "opname" | "premix" | "issue" | "sold";
+type OutflowType = "operational" | "spoil";
+type LossResponsibilityScope = "general" | "unknown" | "staff";
 
 type IngredientLineState = {
   inQty: string;
@@ -81,6 +88,9 @@ type IngredientLineState = {
   closingStock: string;
   outQty: string;
   outNote: string;
+  outflowType: OutflowType;
+  outResponsibilityScope: LossResponsibilityScope;
+  outResponsibleStaffId: string;
   outPhotoUrl: string;
   outPhotoPublicId: string;
 };
@@ -99,6 +109,8 @@ type MenuIssueLineState = {
   quantity: string;
   reason: MenuIssueReason;
   note: string;
+  lossResponsibilityScope: LossResponsibilityScope;
+  responsibleStaffId: string;
   photoUrl: string;
   photoPublicId: string;
 };
@@ -106,6 +118,13 @@ type MenuIssueLineState = {
 type WorksheetPhoto = {
   url: string;
   publicId: string;
+};
+
+type DepartmentStaffOption = {
+  id: string;
+  name: string;
+  role: StaffRole;
+  department: Department | null;
 };
 
 type SoldEntrySummary = {
@@ -143,6 +162,9 @@ type OutLineJoined = StaffJoin & {
   ingredient_id: string;
   quantity: number;
   note: string | null;
+  outflow_type?: OutflowType | null;
+  loss_responsibility_scope?: LossResponsibilityScope | null;
+  responsible_staff_id?: string | null;
   photo_url: string | null;
   photo_public_id: string | null;
 };
@@ -152,6 +174,8 @@ type IssueLineJoined = StaffJoin & {
   quantity: number;
   reason: string | null;
   note: string | null;
+  loss_responsibility_scope?: LossResponsibilityScope | null;
+  responsible_staff_id?: string | null;
   photo_url: string | null;
   photo_public_id: string | null;
 };
@@ -226,6 +250,9 @@ const DEFAULT_LINE: IngredientLineState = {
   closingStock: "",
   outQty: "",
   outNote: "",
+  outflowType: "operational",
+  outResponsibilityScope: "unknown",
+  outResponsibleStaffId: "",
   outPhotoUrl: "",
   outPhotoPublicId: "",
 };
@@ -338,12 +365,22 @@ const MENU_ISSUE_REASONS = [
 ] as const;
 
 type MenuIssueReason = (typeof MENU_ISSUE_REASONS)[number]["id"];
+const SERVICE_DEDUCTIBLE_MENU_ISSUE_REASONS = new Set<MenuIssueReason>([
+  "too_salty",
+  "undercooked",
+  "burnt",
+  "hair",
+  "wrong_order",
+  "spilled",
+  "staff_error",
+  "other",
+]);
 
 const INPUT_CLASS =
-  "min-h-12 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-lg font-semibold tabular-nums text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-12 w-full rounded-lg border border-slate-200/80 bg-white px-3 text-lg font-semibold tabular-nums text-slate-900 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50";
 
 const SEARCH_INPUT_CLASS =
-  "min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 py-2.5 pl-10 pr-10 text-sm text-zinc-50 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-11 w-full rounded-lg border border-slate-200/80 bg-white py-2.5 pl-10 pr-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100 disabled:cursor-not-allowed disabled:opacity-50";
 
 const TEST_BUSINESS_DATE_STORAGE_KEY = "artha_test_business_date";
 
@@ -396,8 +433,16 @@ function blankZero(value: string | undefined): string {
 function normalizeRestoredLines(
   restoredLines: Record<
     string,
-    Omit<IngredientLineState, "inUnitPrice" | "outPhotoUrl" | "outPhotoPublicId"> &
-      Partial<Pick<IngredientLineState, "inUnitPrice" | "outPhotoUrl" | "outPhotoPublicId">>
+    Omit<
+      IngredientLineState,
+      "inUnitPrice" | "outflowType" | "outResponsibilityScope" | "outResponsibleStaffId" | "outPhotoUrl" | "outPhotoPublicId"
+    > &
+      Partial<
+        Pick<
+          IngredientLineState,
+          "inUnitPrice" | "outflowType" | "outResponsibilityScope" | "outResponsibleStaffId" | "outPhotoUrl" | "outPhotoPublicId"
+        >
+      >
   >
 ): Record<string, IngredientLineState> {
   return Object.fromEntries(
@@ -409,6 +454,10 @@ function normalizeRestoredLines(
         closingStock: blankZero(line.closingStock),
         outQty: blankZero(line.outQty),
         outNote: line.outNote ?? "",
+        outflowType: line.outflowType ?? "operational",
+        outResponsibilityScope: line.outResponsibilityScope ?? "unknown",
+        outResponsibleStaffId:
+          line.outflowType === "spoil" && line.outResponsibilityScope === "staff" ? line.outResponsibleStaffId ?? "" : "",
         outPhotoUrl: line.outPhotoUrl ?? "",
         outPhotoPublicId: line.outPhotoPublicId ?? "",
       },
@@ -422,8 +471,20 @@ function normalizeRestoredSoldItems(restoredSoldItems: Record<string, string>): 
   );
 }
 
+function normalizeLossResponsibilityScope(value: string | null | undefined): LossResponsibilityScope {
+  return value === "staff" || value === "general" ? value : "unknown";
+}
+
 function createDefaultMenuIssue(): MenuIssueLineState {
-  return { quantity: "", reason: "guest_complaint", note: "", photoUrl: "", photoPublicId: "" };
+  return {
+    quantity: "",
+    reason: "guest_complaint",
+    note: "",
+    lossResponsibilityScope: "unknown",
+    responsibleStaffId: "",
+    photoUrl: "",
+    photoPublicId: "",
+  };
 }
 
 function normalizeIssueReason(value: string | null | undefined): MenuIssueReason {
@@ -437,6 +498,42 @@ function formatIssueReasonLabel(value: string | null | undefined): string {
   return MENU_ISSUE_REASONS.find((reason) => reason.id === normalized)?.label ?? "Lainnya";
 }
 
+function isServiceDeductibleMenuIssueReason(value: string | null | undefined): boolean {
+  return SERVICE_DEDUCTIBLE_MENU_ISSUE_REASONS.has(normalizeIssueReason(value));
+}
+
+function normalizeRestoredMenuIssues(
+  restoredIssues: Record<
+    string,
+    Partial<Omit<MenuIssueLineState, "reason" | "lossResponsibilityScope">> & {
+      reason?: string | null;
+      lossResponsibilityScope?: string | null;
+    }
+  >
+): Record<string, MenuIssueLineState> {
+  return Object.fromEntries(
+    Object.entries(restoredIssues).map(([menuId, issue]) => {
+      const reason = normalizeIssueReason(issue.reason);
+      const scope = isServiceDeductibleMenuIssueReason(reason)
+        ? normalizeLossResponsibilityScope(issue.lossResponsibilityScope)
+        : "unknown";
+
+      return [
+        menuId,
+        {
+          quantity: blankZero(issue.quantity),
+          reason,
+          note: issue.note ?? "",
+          lossResponsibilityScope: scope,
+          responsibleStaffId: scope === "staff" ? issue.responsibleStaffId ?? "" : "",
+          photoUrl: issue.photoUrl ?? "",
+          photoPublicId: issue.photoPublicId ?? "",
+        },
+      ];
+    })
+  );
+}
+
 function isWorksheetLocked(status: ClosingStatus | null | undefined): boolean {
   return status !== null && status !== undefined && SUBMITTED_LOCK_STATUSES.includes(status);
 }
@@ -446,7 +543,7 @@ function canRequestResubmit(status: ClosingStatus | null | undefined): boolean {
 }
 
 function isMasterRole(role: StaffRole | null | undefined): boolean {
-  return role === "admin" || role === "op_manager";
+  return role === "master_admin" || role === "admin" || role === "op_manager";
 }
 
 function resolveLineOwner(row: StaffJoin): WorksheetLineOwner {
@@ -594,8 +691,59 @@ function createDefaultLine(preset?: Partial<IngredientLineState>): IngredientLin
     closingStock: preset?.closingStock ?? "",
     outQty: preset?.outQty ?? "",
     outNote: preset?.outNote ?? "",
+    outflowType: preset?.outflowType ?? "operational",
+    outResponsibilityScope: preset?.outResponsibilityScope ?? "unknown",
+    outResponsibleStaffId:
+      preset?.outflowType === "spoil" && preset?.outResponsibilityScope === "staff" ? preset?.outResponsibleStaffId ?? "" : "",
     outPhotoUrl: preset?.outPhotoUrl ?? "",
     outPhotoPublicId: preset?.outPhotoPublicId ?? "",
+  };
+}
+
+function resolveOutstockLossPayload(line: IngredientLineState): {
+  outflow_type: OutflowType;
+  loss_responsibility_scope: LossResponsibilityScope;
+  responsible_staff_id: string | null;
+} {
+  if (line.outflowType !== "spoil") {
+    return {
+      outflow_type: "operational",
+      loss_responsibility_scope: "unknown",
+      responsible_staff_id: null,
+    };
+  }
+
+  const scope =
+    line.outResponsibilityScope === "staff" && !line.outResponsibleStaffId
+      ? "unknown"
+      : line.outResponsibilityScope;
+
+  return {
+    outflow_type: "spoil",
+    loss_responsibility_scope: scope,
+    responsible_staff_id: scope === "staff" ? line.outResponsibleStaffId || null : null,
+  };
+}
+
+function resolveMenuIssueLossPayload(issue: MenuIssueLineState): {
+  loss_responsibility_scope: LossResponsibilityScope;
+  responsible_staff_id: string | null;
+} {
+  if (!isServiceDeductibleMenuIssueReason(issue.reason)) {
+    return {
+      loss_responsibility_scope: "unknown",
+      responsible_staff_id: null,
+    };
+  }
+
+  const scope =
+    issue.lossResponsibilityScope === "staff" && !issue.responsibleStaffId
+      ? "unknown"
+      : issue.lossResponsibilityScope;
+
+  return {
+    loss_responsibility_scope: scope,
+    responsible_staff_id: scope === "staff" ? issue.responsibleStaffId || null : null,
   };
 }
 
@@ -914,6 +1062,7 @@ function WorksheetClosingInner(
   const [ingredients, setIngredients] = useState<IngredientRow[]>([]);
   const [menus, setMenus] = useState<MenuItemWithRecipe[]>([]);
   const [premixItems, setPremixItems] = useState<PremixItemWithRecipe[]>([]);
+  const [departmentStaffOptions, setDepartmentStaffOptions] = useState<DepartmentStaffOption[]>([]);
   const [lines, setLines] = useState<Record<string, IngredientLineState>>({});
   const [receiveEntryInputs, setReceiveEntryInputs] = useState<Record<string, string>>({});
   const [receiveEntrySummaries, setReceiveEntrySummaries] = useState<Record<string, SoldEntrySummary[]>>({});
@@ -959,7 +1108,7 @@ function WorksheetClosingInner(
   const pendingAdminApproval = worksheetStatus === "PENDING_APPROVAL_ADMIN";
   const showResubmitCta = canRequestResubmit(worksheetStatus ?? undefined);
   const canEdit = canEditStaffData(staff?.role);
-  const canApproveCorrection = staff?.role === "admin" || staff?.role === "op_manager";
+  const canApproveCorrection = isMasterRole(staff?.role);
   const canFinalizeWorksheet = canApproveCorrection;
   const canOverrideWorksheetOwnership = canApproveCorrection;
   const correctionReasonReady = correctionReason.trim().length >= 5;
@@ -1007,6 +1156,9 @@ function WorksheetClosingInner(
     () => (embedded ? TAB_CONFIG : TAB_CONFIG.filter((tab) => worksheetFeatures[tab.id])),
     [embedded, worksheetFeatures]
   );
+  const departmentLabel = department === "bar" ? "Bar" : "Kitchen";
+  const inventoryTitle = title?.trim() || `Inventory ${departmentLabel}`;
+  const moduleCountLabel = `${visibleTabs.length} modul aktif`;
 
   const outstockHasBlockingErrors = useMemo(
     () => hasOutstockValidationErrors(ingredients, lines),
@@ -1187,10 +1339,10 @@ function WorksheetClosingInner(
       const total = entries.reduce((sum, entry) => sum + entry.quantity, 0);
 
       return (
-        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+        <div className="mt-3 rounded-lg border border-slate-200/80 bg-white px-3 py-2">
           <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-            <span className="font-medium text-zinc-400">{totalLabel}</span>
-            <span className="font-semibold tabular-nums text-indigo-200">
+            <span className="font-medium text-slate-600">{totalLabel}</span>
+            <span className="font-semibold tabular-nums text-teal-700">
               {formatQty(total)} {unit}
             </span>
           </div>
@@ -1205,8 +1357,8 @@ function WorksheetClosingInner(
                   key={`${entry.staffId ?? entry.staffName}-${index}`}
                   className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                     ownEntry
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "bg-zinc-800 text-zinc-300"
+                      ? "bg-teal-50 text-teal-700"
+                      : "bg-slate-100 text-slate-700"
                   }`}
                 >
                   {summarizeStaffEntry(entry)} {unit}
@@ -1716,21 +1868,16 @@ function WorksheetClosingInner(
 
     const nextFeatures = { ...DEFAULT_WORKSHEET_FEATURES };
     if (!embedded) {
-      const { data: featureRows, error: featureErr } = await supabase
-        .from("worksheet_staff_setting")
-        .select("tab_id, is_enabled")
-        .eq("department", department);
+      const { data: featureRows } = await supabase
+        .from("role_task_setting")
+        .select("task_id, is_enabled")
+        .eq("role", staff.role);
 
-      if (featureErr) {
-        setError(`Gagal memuat setting worksheet staff: ${featureErr.message}`);
-        setIsLoading(false);
-        return;
-      }
+      const roleTaskMap = mergeRoleTaskSettings(staff.role, featureRows ?? []);
 
-      for (const row of featureRows ?? []) {
-        if (row.tab_id in nextFeatures) {
-          nextFeatures[row.tab_id as WorksheetTab] = Boolean(row.is_enabled);
-        }
+      for (const tab of TAB_CONFIG) {
+        const taskId = WORKSHEET_TAB_TASK_ID[tab.id];
+        nextFeatures[tab.id] = isRoleTaskEnabled(roleTaskMap, staff.role, taskId);
       }
     }
     setWorksheetFeatures(nextFeatures);
@@ -1762,6 +1909,22 @@ function WorksheetClosingInner(
       setIsLoading(false);
       return;
     }
+
+    const staffRoleForDepartment = department === "bar" ? "bar_staff" : "kitchen_staff";
+    const { data: staffRows, error: staffErr } = await supabase
+      .from("staff")
+      .select("id, name, role, department")
+      .eq("is_active", true)
+      .eq("role", staffRoleForDepartment)
+      .order("name", { ascending: true });
+
+    if (staffErr) {
+      setError(staffErr.message);
+      setIsLoading(false);
+      return;
+    }
+
+    setDepartmentStaffOptions((staffRows ?? []) as DepartmentStaffOption[]);
 
     const ingredientList = ingRows ?? [];
     setIngredients(ingredientList);
@@ -1848,7 +2011,7 @@ function WorksheetClosingInner(
 
       const { data: outLines } = await supabase
         .from("worksheet_out_line")
-        .select("ingredient_id, quantity, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name, role )")
+        .select("ingredient_id, quantity, note, outflow_type, loss_responsibility_scope, responsible_staff_id, photo_url, photo_public_id, staff_id, staff:staff_id ( name, role )")
         .eq("session_id", ws.id);
 
       const nextOutOwners: Record<string, WorksheetLineOwner> = {};
@@ -1869,6 +2032,12 @@ function WorksheetClosingInner(
 	              ? String(parseQty(existingOutQty) + quantity)
 	              : String(row.quantity),
 	            outNote: row.note ?? "",
+              outflowType: row.outflow_type ?? "operational",
+              outResponsibilityScope: row.loss_responsibility_scope ?? "unknown",
+              outResponsibleStaffId:
+                row.outflow_type === "spoil" && row.loss_responsibility_scope === "staff"
+                  ? row.responsible_staff_id ?? ""
+                  : "",
 	            outPhotoUrl: row.photo_url ?? "",
 	            outPhotoPublicId: row.photo_public_id ?? "",
           };
@@ -1938,7 +2107,7 @@ function WorksheetClosingInner(
 
       const { data: issueLines } = await supabase
         .from("worksheet_menu_issue_line")
-        .select("menu_item_id, quantity, reason, note, photo_url, photo_public_id, staff_id, staff:staff_id ( name, role )")
+        .select("menu_item_id, quantity, reason, note, loss_responsibility_scope, responsible_staff_id, photo_url, photo_public_id, staff_id, staff:staff_id ( name, role )")
         .eq("session_id", ws.id);
 
       const nextIssueOwners: Record<string, WorksheetLineOwner> = {};
@@ -1954,11 +2123,14 @@ function WorksheetClosingInner(
 	        if (canEditLineOwner(owner)) {
 	          const existingIssue = issuePreset[row.menu_item_id] ?? createDefaultMenuIssue();
 	          issuePreset[row.menu_item_id] = {
-	            quantity: canOverrideWorksheetOwnership
-	              ? String(parseQty(existingIssue.quantity) + quantity)
-	              : String(row.quantity),
-	            reason: normalizeIssueReason(row.reason),
-	            note: row.note ?? "",
+            quantity: canOverrideWorksheetOwnership
+              ? String(parseQty(existingIssue.quantity) + quantity)
+              : String(row.quantity),
+            reason: normalizeIssueReason(row.reason),
+            note: row.note ?? "",
+            lossResponsibilityScope: row.loss_responsibility_scope ?? "unknown",
+            responsibleStaffId:
+              row.loss_responsibility_scope === "staff" ? row.responsible_staff_id ?? "" : "",
             photoUrl: row.photo_url ?? "",
             photoPublicId: row.photo_public_id ?? "",
           };
@@ -2126,12 +2298,13 @@ function WorksheetClosingInner(
     businessDate,
     isLoading,
     locked,
-    lines,
-    soldItems,
-    premixQuantities,
-    activeTab,
-    onRestore: (draft) => {
-      const restoredLines = normalizeRestoredLines(draft.lines);
+	    lines,
+	    soldItems,
+	    premixQuantities,
+	    menuIssues,
+	    activeTab,
+	    onRestore: (draft) => {
+	      const restoredLines = normalizeRestoredLines(draft.lines);
       setLines((prev) =>
         Object.fromEntries(
           Object.entries(restoredLines).map(([ingredientId, line]) => [
@@ -2142,11 +2315,12 @@ function WorksheetClosingInner(
             },
           ])
         )
-      );
-      setSoldItems(normalizeRestoredSoldItems(draft.soldItems));
-      setPremixQuantities(normalizeRestoredSoldItems(draft.premixQuantities ?? {}));
-      setActiveTab(draft.activeTab);
-      showSuccessToast("Draft lokal dipulihkan setelah refresh.");
+	      );
+	      setSoldItems(normalizeRestoredSoldItems(draft.soldItems));
+	      setPremixQuantities(normalizeRestoredSoldItems(draft.premixQuantities ?? {}));
+	      setMenuIssues(normalizeRestoredMenuIssues(draft.menuIssues ?? {}));
+	      setActiveTab(draft.activeTab);
+	      showSuccessToast("Draft lokal dipulihkan setelah refresh.");
     },
   });
 
@@ -2295,6 +2469,36 @@ function WorksheetClosingInner(
     setLines((prev) => ({
       ...prev,
       [ingredientId]: { ...(prev[ingredientId] ?? DEFAULT_LINE), outNote: value },
+    }));
+  };
+
+  const updateOutflowType = (ingredientId: string, isSpoil: boolean) => {
+    if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
+    setLines((prev) => {
+      const current = prev[ingredientId] ?? DEFAULT_LINE;
+      return {
+        ...prev,
+        [ingredientId]: {
+          ...current,
+          outflowType: isSpoil ? "spoil" : "operational",
+          outResponsibilityScope: isSpoil ? current.outResponsibilityScope : "unknown",
+          outResponsibleStaffId: isSpoil ? current.outResponsibleStaffId : "",
+        },
+      };
+    });
+  };
+
+  const updateOutResponsibility = (ingredientId: string, value: string) => {
+    if (locked || isOwnedByOther(outLineOwners[ingredientId])) return;
+    const nextScope: LossResponsibilityScope = value.startsWith("staff:") ? "staff" : value === "general" ? "general" : "unknown";
+    const nextStaffId = nextScope === "staff" ? value.replace("staff:", "") : "";
+    setLines((prev) => ({
+      ...prev,
+      [ingredientId]: {
+        ...(prev[ingredientId] ?? DEFAULT_LINE),
+        outResponsibilityScope: nextScope,
+        outResponsibleStaffId: nextStaffId,
+      },
     }));
   };
 
@@ -2827,6 +3031,15 @@ function WorksheetClosingInner(
     }));
   };
 
+  const updateMenuIssueResponsibility = (menuId: string, value: string) => {
+    const nextScope: LossResponsibilityScope = value.startsWith("staff:") ? "staff" : value === "general" ? "general" : "unknown";
+    const nextStaffId = nextScope === "staff" ? value.replace("staff:", "") : "";
+    updateMenuIssue(menuId, {
+      lossResponsibilityScope: nextScope,
+      responsibleStaffId: nextStaffId,
+    });
+  };
+
   const uploadMenuIssuePhotos = async (menuId: string, files: File[]) => {
     if (files.length === 0 || locked || isOwnedByOther(issueLineOwners[menuId])) return;
 
@@ -2956,12 +3169,14 @@ function WorksheetClosingInner(
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
           const owner = outOwnerByIngredientId.get(ing.id) ?? currentStaffOwner();
+          const lossPayload = resolveOutstockLossPayload(line);
           return {
             session_id: activeSessionId,
             ingredient_id: ing.id,
             staff_id: owner.staffId,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
+            ...lossPayload,
             photo_url: line.outPhotoUrl || null,
             photo_public_id: line.outPhotoPublicId || null,
           };
@@ -3418,6 +3633,7 @@ function WorksheetClosingInner(
       .map((menu) => {
         const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
         const owner = issueOwnerByMenuId.get(menu.id) ?? currentStaffOwner();
+        const lossPayload = resolveMenuIssueLossPayload(issue);
         return {
           session_id: activeSessionId,
           menu_item_id: menu.id,
@@ -3425,6 +3641,7 @@ function WorksheetClosingInner(
           quantity: parseQty(issue.quantity),
           reason: issue.reason,
           note: issue.note.trim(),
+          ...lossPayload,
           photo_url: issue.photoUrl || null,
           photo_public_id: issue.photoPublicId || null,
         };
@@ -3536,12 +3753,14 @@ function WorksheetClosingInner(
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
           const owner = outOwnerByIngredientId.get(ing.id) ?? currentStaffOwner();
+          const lossPayload = resolveOutstockLossPayload(line);
           return {
             session_id: activeSessionId,
             ingredient_id: ing.id,
             staff_id: owner.staffId,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
+            ...lossPayload,
             photo_url: line.outPhotoUrl || null,
             photo_public_id: line.outPhotoPublicId || null,
           };
@@ -3835,12 +4054,14 @@ function WorksheetClosingInner(
         .map((ing) => {
           const line = lines[ing.id] ?? DEFAULT_LINE;
           const owner = outOwnerByIngredientId.get(ing.id) ?? currentStaffOwner();
+          const lossPayload = resolveOutstockLossPayload(line);
           return {
             session_id: ensuredSessionId,
             ingredient_id: ing.id,
             staff_id: owner.staffId,
             quantity: parseQty(line.outQty),
             note: line.outNote.trim(),
+            ...lossPayload,
             photo_url: line.outPhotoUrl || null,
             photo_public_id: line.outPhotoPublicId || null,
           };
@@ -4285,8 +4506,8 @@ function WorksheetClosingInner(
 
   if (!staff) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
-        <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+      <main className="flex min-h-screen items-center justify-center bg-white text-slate-600">
+        <Loader2 className="h-6 w-6 animate-spin text-teal-700" />
       </main>
     );
   }
@@ -4305,12 +4526,12 @@ function WorksheetClosingInner(
   const overlayMessage = isSubmitting
     ? "Mengirim laporan closing…"
     : isSavingAll
-      ? "Menyimpan worksheet…"
+      ? "Menyimpan inventory…"
     : isChangingBusinessDate
-      ? "Memuat tanggal worksheet…"
+      ? "Memuat tanggal inventory…"
       : isRequestingResubmit
         ? canApproveCorrection
-          ? "Membuka kembali worksheet…"
+          ? "Membuka kembali inventory…"
           : "Mengirim request koreksi…"
       : isSavingReceive
         ? "Menyimpan pasokan…"
@@ -4344,8 +4565,8 @@ function WorksheetClosingInner(
     <main
       className={
         embedded
-          ? "w-full bg-zinc-950 pb-32"
-          : "mx-auto min-h-screen max-w-lg bg-zinc-950 pb-48"
+          ? "w-full bg-white pb-32"
+          : "mx-auto min-h-screen max-w-lg bg-white pb-48"
       }
     >
       <Toast
@@ -4381,120 +4602,131 @@ function WorksheetClosingInner(
           role="status"
           aria-live="polite"
           aria-busy="true"
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-zinc-950/85 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-white/90 backdrop-blur-sm"
         >
-          <Loader2 className="h-10 w-10 animate-spin text-indigo-400" />
-          <p className="text-sm font-medium text-zinc-200">{overlayMessage}</p>
+          <Loader2 className="h-10 w-10 animate-spin text-teal-700" />
+          <p className="text-sm font-medium text-slate-800">{overlayMessage}</p>
         </div>
       ) : null}
 
       {!embedded ? (
-        <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 backdrop-blur">
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 px-4 py-3 backdrop-blur">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <AbdulCompanyMark
                 size="sm"
-                className="mb-3"
+                className="mb-2"
               />
-              <h1 className="text-lg font-bold text-zinc-50">{staff.name}</h1>
-              {businessDateLabel ? (
-                <p className="mt-1 text-sm text-zinc-300">
-                  {businessDateLabel}
-                </p>
-              ) : null}
-              {worksheetStatus ? (
-                <p className="mt-1 inline-flex items-center gap-1 rounded-md bg-zinc-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
-                  {locked ? <Lock className="h-3 w-3 text-sky-400" /> : null}
-                  {worksheetStatus}
-                </p>
-              ) : null}
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-teal-700">
+                Inventory {departmentLabel}
+              </p>
+              <h1 className="mt-0.5 truncate text-xl font-bold text-slate-900">{inventoryTitle}</h1>
+              <p className="mt-1 truncate text-xs text-slate-600">Operator: {staff.name}</p>
             </div>
-            <LogoutButton className="shrink-0 min-h-10 rounded-lg border border-zinc-700 px-3 text-sm font-medium text-zinc-300 hover:border-zinc-600" />
+            <LogoutButton className="shrink-0 min-h-10 rounded-lg border border-slate-200/80 px-3 text-sm font-medium text-slate-700 hover:border-slate-200/80" />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <span className="min-h-9 rounded-lg border border-slate-200/80 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800">
+              {businessDateLabel || "Tanggal belum aktif"}
+            </span>
+            <span className="inline-flex min-h-9 items-center justify-center gap-1 rounded-lg border border-slate-200/80 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-700">
+              {locked ? <Lock className="h-3 w-3 text-teal-700" /> : <Unlock className="h-3 w-3 text-teal-700" />}
+              {worksheetStatus || "DRAFT"}
+            </span>
           </div>
         </header>
       ) : null}
 
       <nav
-        className={`sticky z-10 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur ${
-          embedded ? "top-0" : "top-[100px]"
+        className={`sticky z-10 border-b border-slate-200/80 bg-white/95 backdrop-blur ${
+          embedded ? "top-0" : "top-[142px]"
         } ${embedded ? "px-4 py-2" : "px-2 py-2"}`}
-        aria-label="Worksheet tabs"
+        aria-label="Inventory worksheet tabs"
       >
         <div className={embedded ? "flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between" : ""}>
-        <ul className={embedded ? "flex gap-2 overflow-x-auto" : "grid grid-cols-4 gap-1"}>
-          {visibleTabs.map(({ id, label, icon: Icon }) => {
-            const active = activeTab === id;
-            return (
-              <li key={id} className={embedded ? "shrink-0" : ""}>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab(id)}
-                  className={`flex text-center transition active:scale-[0.98] ${
-                    active
-                      ? embedded
-                        ? "border-cyan-300 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
-                        : "bg-indigo-600 text-white shadow-md shadow-indigo-900/50"
-                      : embedded
-                        ? "border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700 hover:text-zinc-100"
-                        : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
-                  } ${
-                    embedded
-                      ? "min-h-11 items-center justify-center gap-2 rounded-lg border px-4"
-                      : "min-h-14 w-full flex-col items-center justify-center gap-0.5 rounded-xl px-1"
-                  }`}
-                >
-                  <Icon className={`h-4 w-4 ${active && !embedded ? "text-amber-200" : ""}`} />
-                  <span className={embedded ? "text-sm font-semibold" : "text-[10px] font-bold uppercase leading-tight tracking-wide"}>
-                    {label}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+          <ul className={embedded ? "flex gap-2 overflow-x-auto" : "grid grid-cols-4 gap-1"}>
+            {visibleTabs.map(({ id, label, icon: Icon }) => {
+              const active = activeTab === id;
+              return (
+                <li key={id} className={embedded ? "shrink-0" : ""}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab(id)}
+                    className={`flex text-center transition active:scale-[0.98] ${
+                      active
+                        ? embedded
+                          ? "border-teal-600 bg-teal-600 text-white shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)] "
+                          : "bg-teal-600 text-white shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)] "
+                        : embedded
+                          ? "border-slate-200/80 bg-slate-50 text-slate-600 hover:border-slate-200/80 hover:text-slate-900"
+                          : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                    } ${
+                      embedded
+                        ? "min-h-11 items-center justify-center gap-2 rounded-lg border px-4"
+                        : "min-h-14 w-full flex-col items-center justify-center gap-0.5 rounded-xl px-1"
+                    }`}
+                  >
+                    <Icon className={`h-4 w-4 ${active && !embedded ? "text-amber-900" : ""}`} />
+                    <span
+                      className={
+                        embedded
+                          ? "text-sm font-semibold"
+                          : "text-[10px] font-bold uppercase leading-tight tracking-wide"
+                      }
+                    >
+                      {label}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
 
-        {embedded ? (
-          <div className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
-            {businessDateLabel ? (
-              <span className="rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 font-semibold text-zinc-200">
-                {businessDateLabel}
+          {embedded ? (
+            <div className="flex shrink-0 items-center gap-2 text-xs text-slate-600">
+              {businessDateLabel ? (
+                <span className="rounded-md border border-slate-200/80 bg-slate-50 px-2.5 py-1 font-semibold text-slate-800">
+                  {businessDateLabel}
+                </span>
+              ) : null}
+              {worksheetStatus ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 px-2 py-1 font-semibold uppercase tracking-wide text-slate-600">
+                  {locked ? <Lock className="h-3 w-3 text-teal-700" /> : null}
+                  {worksheetStatus}
+                </span>
+              ) : null}
+              <span className="hidden sm:inline">{staff.name}</span>
+              <span className="hidden rounded-md border border-slate-200/80 bg-slate-50 px-2.5 py-1 font-semibold text-slate-700 md:inline">
+                {moduleCountLabel}
               </span>
-            ) : null}
-            {worksheetStatus ? (
-              <span className="inline-flex items-center gap-1 rounded-md bg-zinc-900 px-2 py-1 font-semibold uppercase tracking-wide text-zinc-400">
-                {locked ? <Lock className="h-3 w-3 text-sky-400" /> : null}
-                {worksheetStatus}
-              </span>
-            ) : null}
-            <span className="hidden sm:inline">{staff.name}</span>
-          </div>
-        ) : null}
+            </div>
+          ) : null}
         </div>
       </nav>
 
       {!embedded && visibleTabs.length === 0 ? (
-        <section className="mx-4 mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          Worksheet nonaktif.
+        <section className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Inventory nonaktif.
         </section>
       ) : null}
 
       <section
         className={
           embedded
-            ? "border-b border-zinc-800 bg-zinc-900/30 px-4 py-3"
-            : "border-b border-indigo-500/20 bg-indigo-500/5 px-4 py-3"
+            ? "border-b border-slate-200/80 bg-slate-50 px-4 py-3"
+            : "border-b border-teal-200 bg-teal-50 px-4 py-3"
         }
       >
         <div className={embedded ? "flex flex-col gap-3 lg:flex-row lg:items-center" : ""}>
           <div className={embedded ? "hidden" : ""}>
-            <div className={`flex items-center gap-2 text-xs font-semibold uppercase tracking-wide ${embedded ? "text-cyan-300" : "text-indigo-300"}`}>
+            <div className={`flex items-center gap-2 text-xs font-semibold uppercase tracking-wide ${embedded ? "text-teal-700" : "text-teal-700"}`}>
             <CalendarDays className="h-4 w-4" />
             Tanggal
             </div>
           </div>
           <div className={embedded ? "flex flex-col gap-2 sm:flex-row sm:items-center lg:w-auto" : "mt-2 flex flex-col gap-2 sm:flex-row"}>
             {embedded ? (
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-600">
                 <CalendarDays className="h-4 w-4" />
                 Tanggal
               </div>
@@ -4503,10 +4735,10 @@ function WorksheetClosingInner(
               type="date"
               value={testBusinessDate}
               onChange={(e) => setTestBusinessDate(e.target.value)}
-              className={`min-h-11 rounded-lg border bg-zinc-950 px-3 text-sm text-zinc-100 ${
-                embedded ? "w-full border-zinc-700 sm:w-44" : "flex-1 border-indigo-500/30"
+              className={`min-h-11 rounded-lg border bg-white px-3 text-sm text-slate-900 ${
+                embedded ? "w-full border-slate-200/80 sm:w-44" : "flex-1 border-teal-200"
               }`}
-              aria-label="Tanggal business date worksheet"
+              aria-label="Tanggal business date inventory"
             />
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -4514,7 +4746,7 @@ function WorksheetClosingInner(
                 disabled={isChangingBusinessDate}
                 onClick={() => void applyTestBusinessDate()}
                 className={`min-h-11 rounded-lg px-3 text-sm font-bold disabled:opacity-50 ${
-                  embedded ? "bg-cyan-400 text-zinc-950" : "bg-indigo-600 text-white"
+                  embedded ? "bg-teal-600 text-white" : "bg-teal-600 text-white"
                 }`}
               >
                 Pakai
@@ -4523,7 +4755,7 @@ function WorksheetClosingInner(
                 type="button"
                 disabled={isChangingBusinessDate}
                 onClick={() => void clearTestBusinessDate()}
-                className="min-h-11 rounded-lg border border-zinc-700 px-3 text-sm font-semibold text-zinc-300"
+                className="min-h-11 rounded-lg border border-slate-200/80 px-3 text-sm font-semibold text-slate-700"
               >
                 Hari Ini
               </button>
@@ -4531,7 +4763,7 @@ function WorksheetClosingInner(
           </div>
           {embedded && !isLoading && (ingredients.length > 0 || menus.length > 0 || premixItems.length > 0) ? (
             <div className="relative w-full lg:ml-auto lg:max-w-sm">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
               <input
                 type="search"
                 value={searchTerm}
@@ -4548,13 +4780,13 @@ function WorksheetClosingInner(
                 autoCorrect="off"
                 spellCheck={false}
                 className={SEARCH_INPUT_CLASS}
-                aria-label="Pencarian cepat worksheet"
+                aria-label="Pencarian cepat inventory"
               />
               {searchTerm ? (
                 <button
                   type="button"
                   onClick={() => setSearchTerm("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-200"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-600 hover:text-slate-800"
                   aria-label="Hapus pencarian"
                 >
                   <X className="h-4 w-4" />
@@ -4568,7 +4800,7 @@ function WorksheetClosingInner(
       {!embedded && !isLoading && (ingredients.length > 0 || menus.length > 0 || premixItems.length > 0) ? (
         <div className="px-4 pt-3">
           <div className="relative mb-4 w-full">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
             <input
               type="search"
               value={searchTerm}
@@ -4585,13 +4817,13 @@ function WorksheetClosingInner(
               autoCorrect="off"
               spellCheck={false}
               className={SEARCH_INPUT_CLASS}
-              aria-label="Pencarian cepat worksheet"
+              aria-label="Pencarian cepat inventory"
             />
             {searchTerm ? (
               <button
                 type="button"
                 onClick={() => setSearchTerm("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-200"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-600 hover:text-slate-800"
                 aria-label="Hapus pencarian"
               >
                 <X className="h-4 w-4" />
@@ -4603,31 +4835,31 @@ function WorksheetClosingInner(
 
       <div className="px-4 pt-4">
         {pendingAdminApproval ? (
-          <div className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4">
-            <p className="text-sm font-semibold text-emerald-100">Terkirim</p>
+          <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-4">
+            <p className="text-sm font-semibold text-teal-700">Terkirim</p>
           </div>
         ) : null}
 
         {locked ? (
-          <div className="mb-4 rounded-xl border border-sky-500/40 bg-sky-500/10 p-4">
+          <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-4">
             <div className="flex items-start gap-3">
-              <Lock className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" />
+              <Lock className="mt-0.5 h-5 w-5 shrink-0 text-teal-700" />
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-sky-100">
+                <p className="text-sm font-semibold text-teal-700">
                   Terkunci
                 </p>
                 {editRequest ? (
-                  <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
-                    <p className="text-xs font-semibold text-amber-100">
+                  <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-amber-900">
                       Menunggu approval
                     </p>
-                    <p className="mt-1 text-xs text-amber-100/75">{editRequest.reason}</p>
+                    <p className="mt-1 text-xs text-amber-900">{editRequest.reason}</p>
                   </div>
                 ) : showResubmitCta && canEdit ? (
                   <>
                     {!canApproveCorrection ? (
                       <label className="mt-3 block">
-                        <span className="mb-1 block text-xs font-medium text-sky-100">
+                        <span className="mb-1 block text-xs font-medium text-teal-700">
                           Alasan koreksi
                         </span>
                         <textarea
@@ -4635,7 +4867,7 @@ function WorksheetClosingInner(
                           value={correctionReason}
                           onChange={(e) => setCorrectionReason(e.target.value)}
                           placeholder="Contoh: Receive shift 2 ketinggalan input"
-                          className="w-full rounded-lg border border-sky-500/30 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 placeholder:text-zinc-600 focus:border-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-400/30"
+                          className="w-full rounded-lg border border-teal-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100"
                         />
                       </label>
                     ) : null}
@@ -4647,7 +4879,7 @@ function WorksheetClosingInner(
                         (!canApproveCorrection && !correctionReasonReady)
                       }
                       onClick={() => void handleRequestResubmit()}
-                      className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-amber-400/50 bg-amber-500/20 px-4 text-sm font-bold text-amber-100 active:bg-amber-500/30 disabled:opacity-50"
+                      className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-amber-400/50 bg-amber-50 px-4 text-sm font-bold text-amber-900 active:bg-amber-100 disabled:opacity-50"
                     >
                       {isRequestingResubmit ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -4658,7 +4890,7 @@ function WorksheetClosingInner(
                     </button>
                   </>
                 ) : (
-                  <p className="mt-2 text-xs text-sky-300/80">
+                  <p className="mt-2 text-xs text-teal-700">
                     Hubungi Admin.
                   </p>
                 )}
@@ -4668,30 +4900,30 @@ function WorksheetClosingInner(
         ) : null}
 
         {error ? (
-          <p className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <p className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
             {error}
           </p>
         ) : null}
 
         {isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-zinc-400">
-            <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+          <div className="flex items-center justify-center gap-2 py-12 text-slate-600">
+            <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
             Memuat data…
           </div>
                 ) : ingredients.length === 0 && activeTab !== "premix" && activeTab !== "issue" && activeTab !== "sold" ? (
-          <p className="py-12 text-center text-zinc-400">
+          <p className="py-12 text-center text-slate-600">
             Belum ada bahan.
           </p>
         ) : (
           <>
             {activeTabEnabled && activeTab === "receive" ? (
               <section>
-                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-700">
                   Receive
                 </h2>
                 <ul className="space-y-3">
                   {filteredReceiveIngredients.length === 0 ? (
-                    <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                    <li className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                       Tidak ditemukan.
                     </li>
                   ) : null}
@@ -4717,13 +4949,13 @@ function WorksheetClosingInner(
                     return (
                       <li
                         key={ing.id}
-                        className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
+                        className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
                       >
                         <div className="mb-3">
-                          <p className="font-semibold text-zinc-50">{ing.name}</p>
-                          <p className="text-xs text-zinc-500">
+                          <p className="font-semibold text-slate-900">{ing.name}</p>
+                          <p className="text-xs text-slate-600">
                             Total{" "}
-                            <span className="font-semibold text-amber-200">
+                            <span className="font-semibold text-amber-900">
                               {formatQty(totalReceiveQty)} {purchaseUnit}
                             </span>
                           </p>
@@ -4734,8 +4966,8 @@ function WorksheetClosingInner(
                                   key={`${entry.staffId ?? "legacy"}-${index}`}
                                   className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
                                     isCurrentStaffOwner({ staffId: entry.staffId, staffName: entry.staffName })
-                                      ? "border-indigo-400/30 bg-indigo-500/10 text-indigo-200"
-                                      : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+                                      ? "border-teal-200 bg-teal-50 text-teal-700"
+                                      : "border-teal-200 bg-teal-50 text-teal-700"
                                   }`}
                                 >
                                   {entry.staffName}: {formatQty(entry.quantity)} {purchaseUnit}
@@ -4746,7 +4978,7 @@ function WorksheetClosingInner(
                         </div>
                         <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                           <label className="block">
-                            <span className="mb-1 block text-xs text-zinc-400">
+                            <span className="mb-1 block text-xs text-slate-600">
                               Receive ({purchaseUnit})
                             </span>
                             <input
@@ -4761,17 +4993,17 @@ function WorksheetClosingInner(
                               className={INPUT_CLASS}
                             />
                           </label>
-                          <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-right">
-                            <p className="text-[10px] uppercase tracking-wide text-zinc-500">
+                          <div className="rounded-lg border border-slate-200/80 bg-white px-3 py-2 text-right">
+                            <p className="text-[10px] uppercase tracking-wide text-slate-600">
                               Preview
                             </p>
-                            <p className="text-sm font-semibold tabular-nums text-zinc-100">
+                            <p className="text-sm font-semibold tabular-nums text-slate-900">
                               {formatQty(afterSaveReceiveQty)} {purchaseUnit}
                             </p>
                           </div>
                         </div>
                         {purchaseUnit !== ing.unit && entryQty > 0 ? (
-                          <p className="mt-2 text-xs text-emerald-300">
+                          <p className="mt-2 text-xs text-teal-700">
                             +{formatQty(entryStockQty)} {ing.unit}
                           </p>
                         ) : null}
@@ -4784,12 +5016,12 @@ function WorksheetClosingInner(
 
             {activeTabEnabled && activeTab === "outstock" ? (
               <section>
-                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-400">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-amber-700">
                   Out Stock
                 </h2>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (
-                    <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                    <li className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                       Tidak ditemukan.
                     </li>
                   ) : null}
@@ -4797,6 +5029,7 @@ function WorksheetClosingInner(
                     const line = lines[ing.id] ?? DEFAULT_LINE;
                     const validation = validateOutstockLine(ing, line);
                     const showOutFields = validation.outQty > 0;
+                    const isSpoilOutflow = line.outflowType === "spoil";
                     const qtyInputInvalid = validation.exceedsStock;
                     const isUploadingPhoto = uploadingPhotoFor === ing.id;
                     const owner = outLineOwners[ing.id];
@@ -4812,22 +5045,22 @@ function WorksheetClosingInner(
                       <li
                         id={`worksheet-outstock-${ing.id}`}
                         key={ing.id}
-                        className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
+                        className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
                       >
                         <div className="mb-3">
-                          <p className="font-semibold text-zinc-50">{ing.name}</p>
+                          <p className="font-semibold text-slate-900">{ing.name}</p>
                           {owner ? (
-                            <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                            <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-900" : "text-teal-700"}`}>
                               {formatOwnerLabel(owner)}
                             </p>
                           ) : null}
                           {renderEntrySummaries(outSummaries, ing.unit)}
                         </div>
                         <label className="mb-3 block">
-                          <span className="mb-1 block text-xs text-zinc-400">
+                          <span className="mb-1 block text-xs text-slate-600">
                             Out Stock ({ing.unit})
                           </span>
-                          <p className="mb-2 text-xs font-medium text-sky-300/90">
+                          <p className="mb-2 text-xs font-medium text-teal-700">
                             {formatStockAvailability(ing)}
                           </p>
                           <input
@@ -4847,30 +5080,107 @@ function WorksheetClosingInner(
                             }`}
                           />
                           {qtyInputInvalid ? (
-                            <p className="mt-2 text-xs text-red-300" role="alert">
+                            <p className="mt-2 text-xs text-rose-700" role="alert">
                               {OUTSTOCK_LOGICAL_FALLACY_MESSAGE}
                             </p>
                           ) : null}
                         </label>
                         {showOutFields ? (
-                          <label className="block">
-                            <span className="mb-1 block text-xs text-zinc-400">
-                              Keterangan
-                            </span>
-                            <textarea
-                              rows={3}
-                              disabled={inputDisabled || isUploadingPhoto}
-                              value={line.outNote}
-                              onChange={(e) => updateOutNote(ing.id, e.target.value)}
-                              placeholder="Contoh: Tumpah, Salah buat/re-make, Expired"
-                              autoCorrect="off"
-                              spellCheck={false}
-                              className="min-h-24 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
-                            />
-                            <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                          <div className="block">
+                            <label className="block">
+                              <span className="mb-1 block text-xs text-slate-600">
+                                Keterangan
+                              </span>
+                              <textarea
+                                rows={3}
+                                disabled={inputDisabled || isUploadingPhoto}
+                                value={line.outNote}
+                                onChange={(e) => updateOutNote(ing.id, e.target.value)}
+                                placeholder="Contoh: stok keluar untuk produksi, tumpah, expired"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                className="min-h-24 w-full rounded-lg border border-slate-200/80 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100"
+                              />
+                            </label>
+                            <div
+                              className={`mt-3 rounded-lg border p-3 transition ${
+                                isSpoilOutflow
+                                  ? "border-amber-200 bg-amber-50"
+                                  : "border-slate-200/80 bg-white"
+                              }`}
+                            >
+                              <label className="flex items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={isSpoilOutflow}
+                                  disabled={inputDisabled || isUploadingPhoto}
+                                  onChange={(event) => updateOutflowType(ing.id, event.target.checked)}
+                                  className="sr-only"
+                                />
+                                <span
+                                  className={`mt-0.5 flex h-6 w-11 shrink-0 items-center rounded-full border p-0.5 transition ${
+                                    isSpoilOutflow
+                                      ? "border-amber-300/70 bg-amber-400/40"
+                                      : "border-slate-200/80 bg-slate-50"
+                                  } ${inputDisabled || isUploadingPhoto ? "opacity-50" : ""}`}
+                                  aria-hidden="true"
+                                >
+                                  <span
+                                    className={`h-5 w-5 rounded-full transition ${
+                                      isSpoilOutflow
+                                        ? "translate-x-5 bg-amber-100"
+                                        : "translate-x-0 bg-slate-500"
+                                    }`}
+                                  />
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block text-xs font-semibold text-slate-900">
+                                    Tandai sebagai Spoil / Loss
+                                  </span>
+                                  <span className="mt-1 block text-xs leading-relaxed text-slate-600">
+                                    Aktifkan hanya kalau barang keluar karena rusak, tumpah, expired, atau kesalahan kerja.
+                                  </span>
+                                </span>
+                              </label>
+                              {isSpoilOutflow ? (
+                                <div className="mt-3 border-t border-amber-300/20 pt-3">
+                                  <span className="mb-1 block text-xs font-semibold text-amber-900">
+                                    PIC potongan service
+                                  </span>
+                                  <select
+                                    disabled={inputDisabled || isUploadingPhoto}
+                                    value={
+                                      line.outResponsibilityScope === "staff" && line.outResponsibleStaffId
+                                        ? `staff:${line.outResponsibleStaffId}`
+                                        : line.outResponsibilityScope === "staff"
+                                          ? "unknown"
+                                          : line.outResponsibilityScope
+                                    }
+                                    onChange={(event) => updateOutResponsibility(ing.id, event.target.value)}
+                                    className="min-h-10 w-full rounded-lg border border-slate-200/80 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <option value="unknown">Abu-abu / belum jelas PIC - potong team dept</option>
+                                    <option value="general">General team loss - potong team dept</option>
+                                    {departmentStaffOptions.map((staffOption) => (
+                                      <option key={staffOption.id} value={`staff:${staffOption.id}`}>
+                                        {staffOption.name} - potong pribadi
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                                    Yang input data tidak otomatis disalahkan. Pilih nama hanya kalau memang sudah jelas PIC kesalahannya.
+                                  </p>
+                                </div>
+                              ) : (
+                                <p className="mt-3 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-xs leading-relaxed text-teal-700">
+                                  Mode operasional: barang keluar normal dan tidak masuk potongan service.
+                                </p>
+                              )}
+                            </div>
+                            <div className="mt-3 rounded-lg border border-slate-200/80 bg-white p-3">
                               <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0">
-                                  <p className="flex items-center gap-1 text-xs font-medium text-zinc-300">
+                                  <p className="flex items-center gap-1 text-xs font-medium text-slate-700">
                                     <Camera className="h-3.5 w-3.5" />
                                     Foto
                                   </p>
@@ -4888,7 +5198,7 @@ function WorksheetClosingInner(
                                     }}
                                     className="sr-only"
                                   />
-                                  <span className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-indigo-500/50 bg-indigo-600/15 px-3 text-xs font-semibold text-indigo-100">
+                                  <span className="inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-600/15 px-3 text-xs font-semibold text-teal-700">
                                     {isUploadingPhoto ? (
                                       <Loader2 className="h-4 w-4 animate-spin" />
                                     ) : (
@@ -4903,13 +5213,13 @@ function WorksheetClosingInner(
                                   {outPhotoItems.map((photo, photoIndex) => (
                                     <div
                                       key={`${photo.url}-${photoIndex}`}
-                                      className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-2"
+                                      className="rounded-lg border border-slate-200/80 bg-white p-2"
                                     >
                                       <a href={photo.url} target="_blank" rel="noreferrer">
                                         <img
                                           src={photo.url}
                                           alt={`Bukti out stock ${ing.name} ${photoIndex + 1}`}
-                                          className="aspect-square w-full rounded-md object-cover ring-1 ring-zinc-700"
+                                          className="aspect-square w-full rounded-md object-cover ring-1 ring-slate-200/80"
                                         />
                                       </a>
                                       <div className="mt-2 flex items-center justify-between gap-2">
@@ -4917,7 +5227,7 @@ function WorksheetClosingInner(
                                           href={photo.url}
                                           target="_blank"
                                           rel="noreferrer"
-                                          className="truncate text-xs font-medium text-sky-300 hover:text-sky-200"
+                                          className="truncate text-xs font-medium text-teal-700 hover:text-teal-700"
                                         >
                                           Foto {photoIndex + 1}
                                         </a>
@@ -4925,7 +5235,7 @@ function WorksheetClosingInner(
                                           type="button"
                                           disabled={inputDisabled || isUploadingPhoto}
                                           onClick={() => removeOutPhoto(ing.id, photoIndex)}
-                                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-red-300 transition hover:bg-red-500/10 hover:text-red-200 disabled:opacity-50"
+                                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rose-700 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
                                           aria-label={`Hapus foto out stock ${photoIndex + 1}`}
                                         >
                                           <X className="h-3.5 w-3.5" />
@@ -4936,7 +5246,7 @@ function WorksheetClosingInner(
                                 </div>
                               ) : null}
                             </div>
-                          </label>
+                          </div>
                         ) : null}
                       </li>
                     );
@@ -4947,12 +5257,12 @@ function WorksheetClosingInner(
 
             {activeTabEnabled && activeTab === "opname" ? (
               <section>
-                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-teal-700">
                   Opname
                 </h2>
                 <ul className="space-y-3">
                   {filteredIngredients.length === 0 ? (
-                    <li className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                    <li className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                       Tidak ditemukan.
                     </li>
                   ) : null}
@@ -4964,22 +5274,22 @@ function WorksheetClosingInner(
                     return (
                       <li
                         key={ing.id}
-                        className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
+                        className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
                       >
                         <div className="mb-3">
-                          <p className="font-semibold text-zinc-50">{ing.name}</p>
+                          <p className="font-semibold text-slate-900">{ing.name}</p>
                           {owner ? (
-                            <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                            <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-900" : "text-teal-700"}`}>
                               {formatOwnerLabel(owner)}
                             </p>
                           ) : null}
                           {renderEntrySummaries(opnameSummaries, ing.unit)}
                         </div>
                         <label className="block">
-                          <span className="mb-1 block text-xs text-zinc-400">
+                          <span className="mb-1 block text-xs text-slate-600">
                             Opname ({ing.unit})
                           </span>
-                          <p className="mb-2 text-xs font-medium text-sky-300/90">
+                          <p className="mb-2 text-xs font-medium text-teal-700">
                             {formatSystemStockGuide(ing)}
                           </p>
                           <input
@@ -5003,15 +5313,15 @@ function WorksheetClosingInner(
 
             {activeTabEnabled && activeTab === "premix" ? (
               <section>
-                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-emerald-400">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-teal-700">
                   Premix
                 </h2>
                 {premixItems.length === 0 ? (
-                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                  <p className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                     Belum ada premix.
                   </p>
                 ) : filteredPremixItems.length === 0 ? (
-                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                  <p className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                     Tidak ditemukan.
                   </p>
                 ) : (
@@ -5031,26 +5341,26 @@ function WorksheetClosingInner(
                       return (
                         <li
                           key={premix.id}
-                          className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4 shadow-sm"
+                          className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]"
                         >
                           <div className="mb-3 flex items-start justify-between gap-3">
                             <div>
-                              <p className="font-semibold text-zinc-50">{premix.name}</p>
-                              <p className="text-xs text-zinc-500">
+                              <p className="font-semibold text-slate-900">{premix.name}</p>
+                              <p className="text-xs text-slate-600">
                                 {yieldQty.toLocaleString("id-ID")} {premix.unit}
                               </p>
                               {owner ? (
-                                <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                                <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-900" : "text-teal-700"}`}>
                                   {formatOwnerLabel(owner)}
                                 </p>
                               ) : null}
                               {renderEntrySummaries(premixSummaries, "batch")}
                             </div>
-                            <Beaker className="h-5 w-5 shrink-0 text-emerald-400" />
+                            <Beaker className="h-5 w-5 shrink-0 text-teal-700" />
                           </div>
 
                           <label className="block">
-                            <span className="mb-1 block text-xs text-zinc-400">
+                            <span className="mb-1 block text-xs text-slate-600">
                               Jumlah
                             </span>
                             <div className="flex items-center gap-1">
@@ -5058,7 +5368,7 @@ function WorksheetClosingInner(
                                 type="button"
                                 disabled={inputDisabled}
                                 onClick={() => adjustPremixQty(premix.id, -1)}
-                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 active:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200/80 bg-white text-slate-800 active:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <Minus className="h-5 w-5" />
                               </button>
@@ -5077,24 +5387,24 @@ function WorksheetClosingInner(
                                 type="button"
                                 disabled={inputDisabled || !recipe}
                                 onClick={() => adjustPremixQty(premix.id, 1)}
-                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-emerald-500/50 bg-emerald-600/20 text-emerald-100 active:bg-emerald-600/35 disabled:cursor-not-allowed disabled:opacity-50"
+                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 text-teal-700 active:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <Plus className="h-5 w-5" />
                               </button>
                             </div>
                           </label>
                           {qty > 0 && recipe ? (
-                            <p className="mt-2 text-xs font-medium text-emerald-300">
+                            <p className="mt-2 text-xs font-medium text-teal-700">
                               Output {outputQty.toLocaleString("id-ID")} {premix.unit}
                             </p>
                           ) : null}
                           {!recipe ? (
-                            <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                               Belum ada resep.
                             </p>
                           ) : recipe.recipe_component.length > 0 ? (
-                            <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-                              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Bahan</p>
+                            <div className="mt-3 rounded-lg border border-slate-200/80 bg-white p-3">
+                              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Bahan</p>
                               <ul className="space-y-1.5 text-xs">
                                 {recipe.recipe_component.map((component) => {
                                   const componentIng = component.ingredient;
@@ -5118,31 +5428,31 @@ function WorksheetClosingInner(
                                   return (
                                     <li
                                       key={component.ingredient_id}
-                                      className="flex justify-between gap-3 text-zinc-300"
+                                      className="flex justify-between gap-3 text-slate-700"
                                     >
                                       <span>{liveComponentIng?.name ?? componentIng?.name ?? component.ingredient_id}</span>
                                       <span className="flex flex-col items-end text-right">
-                                        <span className={enough ? "text-zinc-400" : "text-red-300"}>
+                                        <span className={enough ? "text-slate-600" : "text-rose-700"}>
                                           {required.toLocaleString("id-ID")} {liveComponentIng?.unit ?? componentIng?.unit ?? ""}{" "}
                                           {unlimited
                                             ? "(non-stok)"
                                             : `/ tersedia ${available.toLocaleString("id-ID")}`}
                                         </span>
                                         {!unlimited && receiveDelta !== 0 ? (
-                                          <span className={`text-[11px] ${receiveDelta > 0 ? "text-emerald-300" : "text-amber-300"}`}>
+                                          <span className={`text-[11px] ${receiveDelta > 0 ? "text-teal-700" : "text-amber-900"}`}>
                                             {baseStock.source === "opname" ? "opname" : "stok"}{" "}
                                             {baseStock.quantity.toLocaleString("id-ID")}{" "}
                                             {receiveDelta > 0 ? "+ receive" : "- koreksi receive"}{" "}
                                             {Math.abs(receiveDelta).toLocaleString("id-ID")}
                                           </span>
                                         ) : !unlimited && savedEditableUsage > 0 ? (
-                                          <span className="text-[11px] text-emerald-300">
+                                          <span className="text-[11px] text-teal-700">
                                             {baseStock.source === "opname" ? "opname" : "stok"}{" "}
                                             {baseStock.quantity.toLocaleString("id-ID")} + premix tersimpan{" "}
                                             {savedEditableUsage.toLocaleString("id-ID")}
                                           </span>
                                         ) : !unlimited && baseStock.source === "opname" ? (
-                                          <span className="text-[11px] text-indigo-300">
+                                          <span className="text-[11px] text-teal-700">
                                             Opname {baseStock.quantity.toLocaleString("id-ID")}
                                           </span>
                                         ) : null}
@@ -5163,17 +5473,20 @@ function WorksheetClosingInner(
 
             {activeTabEnabled && activeTab === "issue" ? (
               <section>
-                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-red-400">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-red-700">
                   Remake
                 </h2>
                 {filteredIssueMenus.length === 0 ? (
-                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                  <p className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                     Tidak ditemukan.
                   </p>
                 ) : (
                   <ul className="space-y-3">
                     {filteredIssueMenus.map((menu) => {
                       const issue = menuIssues[menu.id] ?? createDefaultMenuIssue();
+                      const issueQty = parseQty(issue.quantity);
+                      const showIssueResponsibility = issueQty > 0;
+                      const isServiceDeductibleIssue = isServiceDeductibleMenuIssueReason(issue.reason);
                       const hasRecipe = getActiveRecipeLines(menu).length > 0;
                       const owner = issueLineOwners[menu.id];
                       const ownedByOther = isOwnedByOther(owner);
@@ -5186,13 +5499,13 @@ function WorksheetClosingInner(
                       return (
                         <li
                           key={menu.id}
-                          className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4"
+                          className="rounded-xl border border-slate-200/80 bg-white p-4"
                         >
                           <div className="mb-3">
-                            <p className="font-semibold text-zinc-50">{menu.menu_name}</p>
-                            {!hasRecipe ? <p className="text-xs text-zinc-500">Tanpa resep</p> : null}
+                            <p className="font-semibold text-slate-900">{menu.menu_name}</p>
+                            {!hasRecipe ? <p className="text-xs text-slate-600">Tanpa resep</p> : null}
                             {owner ? (
-                              <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-300" : "text-emerald-300"}`}>
+                              <p className={`mt-1 text-xs font-medium ${ownedByOther ? "text-amber-900" : "text-teal-700"}`}>
                                 {formatOwnerLabel(owner)}
                               </p>
                             ) : null}
@@ -5200,7 +5513,7 @@ function WorksheetClosingInner(
                           </div>
                           <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
                             <label className="block">
-                              <span className="mb-1 block text-xs text-zinc-400">Qty</span>
+                              <span className="mb-1 block text-xs text-slate-600">Qty</span>
                               <input
                                 type="number"
                                 inputMode="decimal"
@@ -5216,16 +5529,20 @@ function WorksheetClosingInner(
                               />
                             </label>
                             <label className="block">
-                              <span className="mb-1 block text-xs text-zinc-400">Alasan</span>
+                              <span className="mb-1 block text-xs text-slate-600">Alasan</span>
                               <select
                                 disabled={inputDisabled}
                                 value={issue.reason}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  const nextReason = normalizeIssueReason(e.target.value);
                                   updateMenuIssue(menu.id, {
-                                    reason: normalizeIssueReason(e.target.value),
-                                  })
-                                }
-                                className="min-h-12 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm font-semibold text-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    reason: nextReason,
+                                    ...(isServiceDeductibleMenuIssueReason(nextReason)
+                                      ? {}
+                                      : { lossResponsibilityScope: "unknown", responsibleStaffId: "" }),
+                                  });
+                                }}
+                                className="min-h-12 w-full rounded-lg border border-slate-200/80 bg-white px-3 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 {MENU_ISSUE_REASONS.map((reason) => (
                                   <option key={reason.id} value={reason.id}>
@@ -5236,7 +5553,7 @@ function WorksheetClosingInner(
                             </label>
                           </div>
                           <label className="mt-3 block">
-                            <span className="mb-1 block text-xs text-zinc-400">
+                            <span className="mb-1 block text-xs text-slate-600">
                               Catatan
                             </span>
                             <input
@@ -5247,12 +5564,56 @@ function WorksheetClosingInner(
                                 updateMenuIssue(menu.id, { note: e.target.value })
                               }
                               placeholder="Contoh: tamu minta diganti karena terlalu asin"
-                              className="min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-50 placeholder:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="min-h-11 w-full rounded-lg border border-slate-200/80 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50"
                             />
                           </label>
-                          <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+                          {showIssueResponsibility ? (
+                            <div
+                              className={`mt-3 rounded-lg border p-3 transition ${
+                                isServiceDeductibleIssue
+                                  ? "border-amber-200 bg-amber-50"
+                                  : "border-teal-200 bg-teal-50"
+                              }`}
+                            >
+                              {isServiceDeductibleIssue ? (
+                                <>
+                                  <span className="mb-1 block text-xs font-semibold text-amber-900">
+                                    PIC potongan service remake
+                                  </span>
+                                  <select
+                                    disabled={inputDisabled || uploadingPhotoFor === `issue-${menu.id}`}
+                                    value={
+                                      issue.lossResponsibilityScope === "staff" && issue.responsibleStaffId
+                                        ? `staff:${issue.responsibleStaffId}`
+                                        : issue.lossResponsibilityScope === "staff"
+                                          ? "unknown"
+                                          : issue.lossResponsibilityScope
+                                    }
+                                    onChange={(event) => updateMenuIssueResponsibility(menu.id, event.target.value)}
+                                    className="min-h-10 w-full rounded-lg border border-slate-200/80 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <option value="unknown">Abu-abu / belum jelas PIC - potong team dept</option>
+                                    <option value="general">General team error - potong team dept</option>
+                                    {departmentStaffOptions.map((staffOption) => (
+                                      <option key={staffOption.id} value={`staff:${staffOption.id}`}>
+                                        {staffOption.name} - potong pribadi
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                                    Yang input remake tidak otomatis disalahkan. Pilih nama hanya kalau PIC kesalahannya sudah jelas.
+                                  </p>
+                                </>
+                              ) : (
+                                <p className="text-xs leading-relaxed text-teal-700">
+                                  Complaint tamu / quality note: tetap tercatat sebagai remake, tapi tidak masuk potongan service.
+                                </p>
+                              )}
+                            </div>
+                          ) : null}
+                          <div className="mt-3 rounded-lg border border-slate-200/80 bg-white p-3">
                             <div className="mb-2 flex items-center justify-between gap-3">
-                              <span className="text-xs font-medium text-zinc-400">
+                              <span className="text-xs font-medium text-slate-600">
                                 Foto
                               </span>
                             </div>
@@ -5261,13 +5622,13 @@ function WorksheetClosingInner(
                                 {issuePhotoItems.map((photo, photoIndex) => (
                                   <div
                                     key={`${photo.url}-${photoIndex}`}
-                                    className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-2"
+                                    className="rounded-lg border border-slate-200/80 bg-white p-2"
                                   >
                                     <a href={photo.url} target="_blank" rel="noreferrer">
                                       <img
                                         src={photo.url}
                                         alt={`Bukti remake ${menu.menu_name} ${photoIndex + 1}`}
-                                        className="aspect-square w-full rounded-md object-cover ring-1 ring-zinc-700"
+                                        className="aspect-square w-full rounded-md object-cover ring-1 ring-slate-200/80"
                                       />
                                     </a>
                                     <div className="mt-2 flex items-center justify-between gap-2">
@@ -5275,7 +5636,7 @@ function WorksheetClosingInner(
                                         href={photo.url}
                                         target="_blank"
                                         rel="noreferrer"
-                                        className="truncate text-xs font-medium text-indigo-300 hover:text-indigo-200"
+                                        className="truncate text-xs font-medium text-teal-700 hover:text-teal-700"
                                       >
                                         Foto {photoIndex + 1}
                                       </a>
@@ -5283,7 +5644,7 @@ function WorksheetClosingInner(
                                         type="button"
                                         disabled={inputDisabled || uploadingPhotoFor === `issue-${menu.id}`}
                                         onClick={() => removeMenuIssuePhoto(menu.id, photoIndex)}
-                                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-red-300 transition hover:bg-red-500/10 hover:text-red-200 disabled:opacity-50"
+                                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-rose-700 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
                                         aria-label={`Hapus foto remake ${photoIndex + 1}`}
                                       >
                                         <X className="h-3.5 w-3.5" />
@@ -5293,7 +5654,7 @@ function WorksheetClosingInner(
                                 ))}
                               </div>
                             ) : null}
-                            <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-medium text-zinc-200 active:bg-zinc-800">
+                            <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200/80 bg-slate-50 px-3 text-sm font-medium text-slate-800 active:bg-slate-100">
                               {uploadingPhotoFor === `issue-${menu.id}` ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
@@ -5330,15 +5691,15 @@ function WorksheetClosingInner(
 
             {activeTabEnabled && activeTab === "sold" ? (
               <section>
-                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-indigo-400">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-wider text-teal-700">
                   Menu
                 </h2>
                 {menus.length === 0 ? (
-                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                  <p className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                     Belum ada menu.
                   </p>
                 ) : filteredMenus.length === 0 ? (
-                  <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+                  <p className="rounded-xl border border-slate-200/80 bg-white px-4 py-6 text-center text-sm text-slate-600">
                     Tidak ditemukan.
                   </p>
                 ) : (
@@ -5350,17 +5711,17 @@ function WorksheetClosingInner(
                       return (
                         <li
                           key={menu.id}
-                          className="rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-3"
+                          className="rounded-xl border border-slate-200/80 bg-white px-4 py-3"
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0 flex-1">
-                              <p className="truncate font-medium text-zinc-50">{menu.menu_name}</p>
-                              <p className="text-xs text-zinc-500">
+                              <p className="truncate font-medium text-slate-900">{menu.menu_name}</p>
+                              <p className="text-xs text-slate-600">
                                 Rp {Number(menu.price).toLocaleString("id-ID")}
                               </p>
                             </div>
                             <div className="shrink-0">
-                              <span className="mb-1 block text-right text-xs text-zinc-400">
+                              <span className="mb-1 block text-right text-xs text-slate-600">
                                 Qty
                               </span>
                               <div className="flex items-center gap-1">
@@ -5369,7 +5730,7 @@ function WorksheetClosingInner(
                                   disabled={locked}
                                   onClick={() => adjustSoldQty(menu.id, -1)}
                                   aria-label={`Kurangi ${menu.menu_name}`}
-                                  className="flex h-12 w-12 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-zinc-200 active:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="flex h-12 w-12 items-center justify-center rounded-lg border border-slate-200/80 bg-white text-slate-800 active:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                   <Minus className="h-5 w-5" />
                                 </button>
@@ -5382,14 +5743,14 @@ function WorksheetClosingInner(
                                   value={soldValue}
                                   onChange={(e) => updateSoldQty(menu.id, e.target.value)}
                                   placeholder="-"
-                                  className="min-h-12 w-16 rounded-lg border border-zinc-700 bg-zinc-950 px-1 text-center text-lg font-semibold tabular-nums text-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="min-h-12 w-16 rounded-lg border border-slate-200/80 bg-white px-1 text-center text-lg font-semibold tabular-nums text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
                                 />
                                 <button
                                   type="button"
                                   disabled={locked}
                                   onClick={() => adjustSoldQty(menu.id, 1)}
                                   aria-label={`Tambah ${menu.menu_name}`}
-                                  className="flex h-12 w-12 items-center justify-center rounded-lg border border-indigo-500/50 bg-indigo-600/20 text-indigo-100 active:bg-indigo-600/35 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="flex h-12 w-12 items-center justify-center rounded-lg border border-teal-200 bg-teal-600/20 text-teal-700 active:bg-teal-600/35 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                   <Plus className="h-5 w-5" />
                                 </button>
@@ -5397,10 +5758,10 @@ function WorksheetClosingInner(
                             </div>
                           </div>
                           {menuSoldEntries.length > 0 ? (
-                            <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+                            <div className="mt-3 rounded-lg border border-slate-200/80 bg-white px-3 py-2">
                               <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                                <span className="font-medium text-zinc-400">Akumulasi</span>
-                                <span className="font-semibold tabular-nums text-indigo-200">
+                                <span className="font-medium text-slate-600">Akumulasi</span>
+                                <span className="font-semibold tabular-nums text-teal-700">
                                   {formatQty(totalSold)}
                                 </span>
                               </div>
@@ -5410,8 +5771,8 @@ function WorksheetClosingInner(
                                     key={`${menu.id}-${entry.staffId ?? entry.staffName}`}
                                     className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                                       entry.staffId === staff?.id
-                                        ? "bg-emerald-500/15 text-emerald-200"
-                                        : "bg-zinc-800 text-zinc-300"
+                                        ? "bg-teal-50 text-teal-700"
+                                        : "bg-slate-100 text-slate-700"
                                     }`}
                                   >
                                     {entry.staffName}: {formatQty(entry.quantity)}
@@ -5439,7 +5800,7 @@ function WorksheetClosingInner(
               type="button"
               disabled={isSavingAll || isSubmitting || outstockHasBlockingErrors}
               onClick={stickySaveAll}
-              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-600/20 px-3 text-center text-sm font-bold leading-tight text-emerald-100 active:bg-emerald-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 text-center text-sm font-bold leading-tight text-teal-700 active:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSavingAll ? (
                 <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
@@ -5454,7 +5815,7 @@ function WorksheetClosingInner(
                 type="button"
                 disabled={isSubmitting || isSavingAll}
                 onClick={stickySubmit}
-                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-lg shadow-indigo-900/40 active:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 disabled:shadow-none"
+                className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-teal-600 px-3 text-center text-sm font-bold leading-tight text-white shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)] active:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 disabled:shadow-none"
               >
                 {isSubmitting ? (
                   <Loader2 className="h-5 w-5 shrink-0 animate-spin" />

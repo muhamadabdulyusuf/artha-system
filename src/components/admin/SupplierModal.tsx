@@ -33,9 +33,9 @@ const INITIAL_FORM_DATA: SupplierFormData = {
 };
 
 const INPUT_CLASS =
-  "min-h-12 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-slate-100 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40";
+  "min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 font-medium text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-100";
 
-const NOTE_CLASS = "mt-1.5 text-xs text-zinc-500";
+const NOTE_CLASS = "mt-1.5 text-xs leading-5 text-slate-600";
 
 function sanitizeWhatsAppPhoneInput(raw: string): string {
   return raw.replace(/\D/g, "");
@@ -160,7 +160,7 @@ export function SupplierModal({
     >
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-slate-300">Nama Supplier</span>
+          <span className="mb-1.5 block text-sm font-medium text-slate-700">Nama Supplier</span>
           <input
             type="text"
             name="supplier_name"
@@ -174,7 +174,7 @@ export function SupplierModal({
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-slate-300">Nomor WhatsApp</span>
+          <span className="mb-1.5 block text-sm font-medium text-slate-700">Nomor WhatsApp</span>
           <input
             type="text"
             name="phone_number"
@@ -192,7 +192,7 @@ export function SupplierModal({
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-slate-300">Minimal Order (Rp)</span>
+          <span className="mb-1.5 block text-sm font-medium text-slate-700">Minimal Order (Rp)</span>
           <input
             type="number"
             name="min_order_amount"
@@ -212,14 +212,14 @@ export function SupplierModal({
             type="button"
             onClick={onClose}
             disabled={isSubmitting}
-            className="flex min-h-12 flex-1 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-900 px-4 font-semibold text-slate-300 transition hover:border-zinc-600 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex min-h-12 flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 font-semibold text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Batal
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-teal-600 font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSubmitting ? (
               <>

@@ -163,8 +163,8 @@ export function IngredientsTab() {
               onClick={() => setFilter(d)}
               className={`min-h-11 rounded-full px-4 text-sm font-medium transition ${
                 filter === d
-                  ? "bg-indigo-600 text-white"
-                  : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700"
+                  ? "bg-teal-600 text-white"
+                  : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
               }`}
             >
               {d === "all" ? "Semua" : d === "bar" ? "Bar" : "Kitchen"}
@@ -181,39 +181,40 @@ export function IngredientsTab() {
       </div>
 
       {error && (
-        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       )}
 
       {loading ? (
-        <p className="py-8 text-center text-zinc-500">Memuat bahan baku…</p>
+        <p className="py-8 text-center text-slate-500">Memuat bahan baku…</p>
       ) : filtered.length === 0 ? (
-        <p className="py-8 text-center text-zinc-500">Belum ada bahan untuk filter ini.</p>
+        <p className="py-8 text-center text-slate-500">Belum ada bahan untuk filter ini.</p>
       ) : (
-        <div className="-mx-1 overflow-x-auto">
+        <div className="-mx-1 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-zinc-700 text-zinc-500">
-                <th className="px-2 py-3 font-medium">Nama</th>
-                <th className="px-2 py-3 font-medium">Dept</th>
-                <th className="px-2 py-3 font-medium">Unit</th>
-                <th className="px-2 py-3 font-medium">Slow (hari)</th>
-                <th className="px-2 py-3 font-medium">Status</th>
-                <th className="px-2 py-3 font-medium" />
+            <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
+              <tr>
+                <th className="px-2 py-3.5 font-semibold">Nama</th>
+                <th className="px-2 py-3.5 font-semibold">Dept</th>
+                <th className="px-2 py-3.5 font-semibold">Unit</th>
+                <th className="px-2 py-3.5 font-semibold">Slow (hari)</th>
+                <th className="px-2 py-3.5 font-semibold">Status</th>
+                <th className="px-2 py-3.5 font-semibold" />
               </tr>
             </thead>
-            <tbody>
+            <tbody className="bg-white">
               {filtered.map((row) => (
-                <tr key={row.id} className="border-b border-zinc-700/60">
-                  <td className="px-2 py-3 font-medium text-white">{row.name}</td>
-                  <td className="px-2 py-3 capitalize">{row.department}</td>
-                  <td className="px-2 py-3">{row.unit}</td>
-                  <td className="px-2 py-3 tabular-nums">{row.slow_moving_threshold_days}</td>
+                <tr key={row.id} className="border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/80">
+                  <td className="px-2 py-3 font-medium text-slate-900">{row.name}</td>
+                  <td className="px-2 py-3 font-medium capitalize text-slate-900">{row.department}</td>
+                  <td className="px-2 py-3 font-medium text-slate-900">{row.unit}</td>
+                  <td className="px-2 py-3 font-semibold tabular-nums text-slate-900">{row.slow_moving_threshold_days}</td>
                   <td className="px-2 py-3">
                     <span
                       className={`inline-block rounded-full px-2 py-0.5 text-xs ${
-                        row.is_active ? "bg-emerald-500/20 text-emerald-300" : "bg-zinc-500/20 text-zinc-400"
+                        row.is_active ? "bg-teal-50 text-teal-700" : "bg-slate-100 text-slate-600"
                       }`}
                     >
                       {row.is_active ? "Aktif" : "Nonaktif"}
@@ -224,14 +225,14 @@ export function IngredientsTab() {
                       <button
                         type="button"
                         onClick={() => openEdit(row)}
-                        className="min-h-10 rounded-lg px-3 text-indigo-400 ring-1 ring-artha-border"
+                        className="min-h-10 rounded-lg px-3 text-teal-700 ring-1 ring-artha-border"
                       >
                         Edit
                       </button>
                       <button
                         type="button"
                         onClick={() => toggleActive(row)}
-                        className="min-h-10 rounded-lg px-3 text-zinc-500 ring-1 ring-artha-border"
+                        className="min-h-10 rounded-lg px-3 text-slate-500 ring-1 ring-artha-border"
                       >
                         {row.is_active ? "Off" : "On"}
                       </button>
@@ -241,6 +242,7 @@ export function IngredientsTab() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -251,24 +253,24 @@ export function IngredientsTab() {
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           <label className="block">
-            <span className="mb-1 block text-sm text-zinc-500">Nama Bahan</span>
+            <span className="mb-1 block text-sm text-slate-500">Nama Bahan</span>
             <input
               required
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              className="min-h-12 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-white outline-none focus:ring-2 focus:ring-indigo-500"
+              className="min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 outline-none focus:ring-2 focus:ring-teal-500"
               placeholder="Contoh: Lemon"
             />
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm text-zinc-500">Departemen</span>
+            <span className="mb-1 block text-sm text-slate-500">Departemen</span>
             <select
               value={form.department}
               onChange={(e) =>
                 setForm((f) => ({ ...f, department: e.target.value as Department }))
               }
-              className="min-h-12 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-white"
+              className="min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900"
             >
               {DEPARTMENTS.map((d) => (
                 <option key={d.value} value={d.value}>
@@ -279,11 +281,11 @@ export function IngredientsTab() {
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm text-zinc-500">Unit</span>
+            <span className="mb-1 block text-sm text-slate-500">Unit</span>
             <select
               value={form.unit}
               onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value as IngredientUnit }))}
-              className="min-h-12 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-white"
+              className="min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900"
             >
               {UNITS.map((u) => (
                 <option key={u} value={u}>
@@ -294,7 +296,7 @@ export function IngredientsTab() {
           </label>
 
           <label className="block">
-            <span className="mb-1 block text-sm text-zinc-500">Slow Moving Threshold (hari)</span>
+            <span className="mb-1 block text-sm text-slate-500">Slow Moving Threshold (hari)</span>
             <input
               required
               inputMode="numeric"
@@ -302,7 +304,7 @@ export function IngredientsTab() {
               onChange={(e) =>
                 setForm((f) => ({ ...f, slow_moving_threshold_days: e.target.value }))
               }
-              className="min-h-12 w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 text-white tabular-nums"
+              className="min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-slate-900 tabular-nums"
             />
           </label>
 
@@ -318,4 +320,3 @@ export function IngredientsTab() {
     </div>
   );
 }
-

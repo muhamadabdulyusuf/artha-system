@@ -7,7 +7,7 @@ const SESSION_EXPIRES_DAYS = 7;
 const staffSessionSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  role: z.enum(["admin", "op_manager", "bar_staff", "kitchen_staff", "viewer"]),
+  role: z.enum(["master_admin", "admin", "op_manager", "bar_staff", "kitchen_staff", "viewer"]),
   department: z.enum(["bar", "kitchen"]).nullable(),
   // Tambahkan signature/hash sederhana jika tidak ingin pakai JWT penuh
   // Untuk audit ini, kita asumsikan integrasi JWT di masa depan.

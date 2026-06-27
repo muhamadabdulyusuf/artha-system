@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-type ThemeMode = "dark" | "light";
+type ThemeMode = "light";
 
 type ThemeContextValue = {
   theme: ThemeMode;
@@ -15,30 +15,29 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function applyTheme(theme: ThemeMode) {
   document.documentElement.dataset.theme = theme;
-  document.documentElement.classList.toggle("dark", theme === "dark");
+  document.documentElement.classList.remove("dark");
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeMode>("dark");
+  const [theme, setThemeState] = useState<ThemeMode>("light");
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    const nextTheme: ThemeMode = stored === "light" ? "light" : "dark";
-    setThemeState(nextTheme);
-    applyTheme(nextTheme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+    setThemeState("light");
+    applyTheme("light");
   }, []);
 
   const setTheme = (nextTheme: ThemeMode) => {
     setThemeState(nextTheme);
-    window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
-    applyTheme(nextTheme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+    applyTheme("light");
   };
 
   const value = useMemo<ThemeContextValue>(
     () => ({
       theme,
       setTheme,
-      toggleTheme: () => setTheme(theme === "dark" ? "light" : "dark"),
+      toggleTheme: () => setTheme("light"),
     }),
     [theme],
   );

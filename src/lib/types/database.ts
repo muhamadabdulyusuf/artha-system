@@ -2,6 +2,7 @@ export type Department = "bar" | "kitchen";
 export type IngredientKind = "raw" | "premix";
 export type IngredientUnit = "ml" | "gram" | "pcs";
 export type StaffRole =
+  | "master_admin"
   | "admin"
   | "op_manager"
   | "bar_staff"
@@ -211,6 +212,8 @@ export type WorksheetMenuIssueLineRow = {
   reason: string;
   note: string;
   staff_id: string | null;
+  loss_responsibility_scope: "general" | "unknown" | "staff";
+  responsible_staff_id: string | null;
   photo_url: string | null;
   photo_public_id: string | null;
   created_at: string;
@@ -224,6 +227,9 @@ export type WorksheetOutLineRow = {
   quantity: number;
   note: string;
   staff_id: string | null;
+  outflow_type: "operational" | "spoil";
+  loss_responsibility_scope: "general" | "unknown" | "staff";
+  responsible_staff_id: string | null;
   photo_url: string | null;
   photo_public_id: string | null;
   created_at: string;
@@ -420,6 +426,53 @@ export type WorksheetStaffSettingRow = {
   updated_at: string;
 };
 
+export type RoleTaskSettingRow = {
+  role: StaffRole;
+  task_id: string;
+  is_enabled: boolean;
+  updated_at: string;
+};
+
+export type ServiceChargeSettingRow = {
+  id: string;
+  service_percent: number;
+  tax_percent: number;
+  updated_by_staff_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ServiceSharePointRow = {
+  staff_id: string;
+  point: number;
+  is_eligible: boolean;
+  updated_by_staff_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OperationalTrackerRecordType = "overtime" | "daily_worker";
+export type OperationalTrackerPaymentStatus = "draft" | "paid";
+
+export type OperationalTrackerRecordRow = {
+  id: string;
+  record_type: OperationalTrackerRecordType;
+  staff_id: string | null;
+  name: string;
+  date: string;
+  hourly_rate: number;
+  total_hours: number;
+  daily_rate: number;
+  work_days: number;
+  total_daily_wage: number;
+  activity_log: unknown[];
+  total_pay: number;
+  status: OperationalTrackerPaymentStatus;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type MenuCategory = "food" | "beverage";
 
 export type Database = {
@@ -550,6 +603,93 @@ export type Database = {
         };
         Relationships: [];
       };
+      role_task_setting: {
+        Row: RoleTaskSettingRow;
+        Insert: {
+          role: StaffRole;
+          task_id: string;
+          is_enabled?: boolean;
+          updated_at?: string;
+        };
+        Update: {
+          is_enabled?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      service_charge_setting: {
+        Row: ServiceChargeSettingRow;
+        Insert: {
+          id?: string;
+          service_percent?: number;
+          tax_percent?: number;
+          updated_by_staff_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          service_percent?: number;
+          tax_percent?: number;
+          updated_by_staff_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      service_share_point: {
+        Row: ServiceSharePointRow;
+        Insert: {
+          staff_id: string;
+          point?: number;
+          is_eligible?: boolean;
+          updated_by_staff_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          point?: number;
+          is_eligible?: boolean;
+          updated_by_staff_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      operational_tracker_record: {
+        Row: OperationalTrackerRecordRow;
+        Insert: {
+          id?: string;
+          record_type: OperationalTrackerRecordType;
+          staff_id?: string | null;
+          name: string;
+          date: string;
+          hourly_rate?: number;
+          total_hours?: number;
+          daily_rate?: number;
+          work_days?: number;
+          total_daily_wage?: number;
+          activity_log?: unknown[];
+          total_pay?: number;
+          status?: OperationalTrackerPaymentStatus;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          staff_id?: string | null;
+          name?: string;
+          date?: string;
+          hourly_rate?: number;
+          total_hours?: number;
+          daily_rate?: number;
+          work_days?: number;
+          total_daily_wage?: number;
+          activity_log?: unknown[];
+          total_pay?: number;
+          status?: OperationalTrackerPaymentStatus;
+          created_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       worksheet_session: {
         Row: WorksheetSessionRow;
         Insert: {
@@ -658,6 +798,8 @@ export type Database = {
           reason?: string;
           note?: string;
           staff_id?: string | null;
+          loss_responsibility_scope?: "general" | "unknown" | "staff";
+          responsible_staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };
@@ -666,6 +808,8 @@ export type Database = {
           reason?: string;
           note?: string;
           staff_id?: string | null;
+          loss_responsibility_scope?: "general" | "unknown" | "staff";
+          responsible_staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };
@@ -680,6 +824,9 @@ export type Database = {
           quantity: number;
           note?: string;
           staff_id?: string | null;
+          outflow_type?: "operational" | "spoil";
+          loss_responsibility_scope?: "general" | "unknown" | "staff";
+          responsible_staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };
@@ -687,6 +834,9 @@ export type Database = {
           quantity?: number;
           note?: string;
           staff_id?: string | null;
+          outflow_type?: "operational" | "spoil";
+          loss_responsibility_scope?: "general" | "unknown" | "staff";
+          responsible_staff_id?: string | null;
           photo_url?: string | null;
           photo_public_id?: string | null;
         };

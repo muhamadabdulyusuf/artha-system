@@ -490,7 +490,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
       <Modal open={open} title={modalTitle} onClose={onClose}>
         <div className="mb-4 space-y-4">
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-600">
               Jenis Target
             </p>
             <div className="flex flex-wrap gap-2">
@@ -507,8 +507,8 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                   }}
                   className={`flex min-h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition ${
                     targetType === value
-                      ? "bg-indigo-600 text-white"
-                      : "bg-zinc-800 text-zinc-400 ring-1 ring-zinc-700 hover:text-white"
+                      ? "bg-teal-600 text-white"
+                      : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
                   <Icon className="h-4 w-4" />
@@ -519,11 +519,11 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
           </div>
 
           <label className="block">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
               Target Item
             </span>
             {loadingTargets ? (
-              <div className="flex items-center gap-2 py-2 text-sm text-zinc-400">
+              <div className="flex items-center gap-2 py-2 text-sm text-slate-600">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Memuat daftar…
               </div>
@@ -532,7 +532,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                 value={targetMenuId}
                 disabled={(initialTarget?.type === "menu") || saving}
                 onChange={(e) => setTargetMenuId(e.target.value)}
-                className="min-h-11 w-full rounded-lg border border-zinc-600 bg-zinc-950 px-3 text-white disabled:opacity-60"
+                className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-slate-900 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
               >
                 <option value="">— Pilih menu —</option>
                 {menuItems.map((m) => (
@@ -546,7 +546,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                 value={targetPremixId}
                 disabled={(initialTarget?.type === "premix") || saving}
                 onChange={(e) => setTargetPremixId(e.target.value)}
-                className="min-h-11 w-full rounded-lg border border-zinc-600 bg-zinc-950 px-3 text-white disabled:opacity-60"
+                className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-slate-900 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
               >
                 <option value="">— Pilih premix —</option>
                 {premixItems.length === 0 ? (
@@ -565,26 +565,26 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
           </label>
 
           {department ? (
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm text-slate-600">
               Departemen{" "}
-              <span className="font-medium capitalize text-indigo-300">{department}</span>
+              <span className="font-medium capitalize text-teal-700">{department}</span>
               {" · "}
               {targetType === "menu" ? (
                 <>
-                  Komposisi bisa ambil bahan dari <span className="text-indigo-300">Bar</span>{" "}
-                  dan <span className="text-indigo-300">Kitchen</span>.
+                  Komposisi bisa ambil bahan dari <span className="text-teal-700">Bar</span>{" "}
+                  dan <span className="text-teal-700">Kitchen</span>.
                 </>
               ) : (
                 <>
-                  Komponen bisa berupa bahan <span className="text-emerald-300">Raw</span> atau{" "}
-                  <span className="text-amber-300">Premix</span> lain.
+                  Komponen bisa berupa bahan <span className="text-teal-700">Raw</span> atau{" "}
+                  <span className="text-amber-700">Premix</span> lain.
                 </>
               )}
             </p>
           ) : null}
 
           {targetType === "premix" && premixItems.length === 0 ? (
-            <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <p>
                 Buat bahan dengan jenis <strong>Premix</strong> di tab Ingredients, lalu kembali
@@ -595,7 +595,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
 
           {targetType === "premix" && department ? (
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-600">
                 Output / 1 Batch
               </span>
               <div className="flex items-center gap-2">
@@ -605,12 +605,12 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                   value={premixYieldQty}
                   onChange={(e) => setPremixYieldQty(e.target.value)}
                   disabled={saving}
-                  className="min-h-11 flex-1 rounded-lg border border-zinc-600 bg-zinc-950 px-3 tabular-nums text-white focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  className="min-h-11 flex-1 rounded-lg border border-slate-200 bg-white px-3 tabular-nums text-slate-900 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                   placeholder="Contoh: 1100"
                 />
-                <span className="min-w-14 text-sm text-zinc-400">{selectedPremix?.unit ?? ""}</span>
+                <span className="min-w-14 text-sm text-slate-600">{selectedPremix?.unit ?? ""}</span>
               </div>
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-slate-600">
                 Contoh: 1 batch Base Tea menghasilkan 1100 ml.
               </p>
             </label>
@@ -618,23 +618,23 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
         </div>
 
         {error ? (
-          <p className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </p>
         ) : null}
 
         {!department ? (
-          <p className="py-8 text-center text-sm text-zinc-500">
+          <p className="rounded-xl border border-dashed border-slate-200 bg-white py-8 text-center text-sm text-slate-600">
             Pilih target item untuk mulai menyusun resep.
           </p>
         ) : loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-zinc-400">
+          <div className="flex items-center justify-center gap-2 py-12 text-slate-600">
             <Loader2 className="h-5 w-5 animate-spin" />
             Memuat resep…
           </div>
         ) : (
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-white">{componentsSectionTitle}</h3>
+            <h3 className="text-sm font-semibold text-slate-900">{componentsSectionTitle}</h3>
 
             {rows.map((row, index) => {
               const qtyInvalid =
@@ -650,17 +650,17 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
               return (
                 <div
                   key={row.clientKey}
-                  className="grid gap-2 rounded-lg border border-zinc-700 bg-zinc-900/80 p-3 sm:grid-cols-[1fr_120px_40px]"
+                  className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 shadow-[0_2px_8px_rgba(0,0,0,0.04)] sm:grid-cols-[1fr_120px_40px]"
                 >
                   <label className="block">
-                    <span className="mb-1 flex items-center gap-2 text-xs text-zinc-500">
+                    <span className="mb-1 flex items-center gap-2 text-xs text-slate-600">
                       #{index + 1}
                       {rowKind === "premix" ? (
-                        <span className="rounded bg-amber-500/20 px-1 text-[10px] text-amber-300">
+                        <span className="rounded border border-amber-200 bg-amber-50 px-1 text-[10px] font-medium text-amber-900">
                           Premix
                         </span>
                       ) : rowKind === "raw" ? (
-                        <span className="rounded bg-emerald-500/15 px-1 text-[10px] text-emerald-300">
+                        <span className="rounded border border-teal-200 bg-teal-50 px-1 text-[10px] font-medium text-teal-700">
                           Raw
                         </span>
                       ) : null}
@@ -676,17 +676,17 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-xs text-zinc-500">{quantityLabel}</span>
+                    <span className="mb-1 block text-xs text-slate-600">{quantityLabel}</span>
                     <input
                       type="text"
                       inputMode="decimal"
                       value={row.quantity}
                       onChange={(e) => updateRow(row.clientKey, { quantity: e.target.value })}
-                      className={`min-h-11 w-full rounded-lg border bg-zinc-950 px-3 tabular-nums text-white ${
+                      className={`min-h-11 w-full rounded-lg border bg-white px-3 tabular-nums text-slate-900 outline-none transition ${
                         qtyInvalid
-                          ? "border-red-500 focus:border-red-500 focus:ring-red-500/40"
-                          : "border-zinc-600 focus:border-indigo-500 focus:ring-indigo-500/40"
-                      } focus:outline-none focus:ring-2`}
+                          ? "border-red-400 focus:border-red-500 focus:ring-red-100"
+                          : "border-slate-200 focus:border-teal-500 focus:ring-teal-500"
+                      } focus:ring-1`}
                       placeholder="0"
                       aria-invalid={qtyInvalid}
                     />
@@ -696,7 +696,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                       type="button"
                       disabled={isDeleting || saving}
                       onClick={() => void removeRow(row)}
-                      className="mt-6 flex h-11 items-center justify-center rounded-lg text-red-400 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="mt-6 flex h-11 items-center justify-center rounded-lg text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
                       aria-label="Hapus baris"
                     >
                       {isDeleting ? (
@@ -715,7 +715,7 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                 <button
                   type="button"
                   onClick={addRow}
-                  className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-600 text-sm text-zinc-300 hover:border-indigo-500 hover:text-indigo-300"
+                  className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white text-sm font-medium text-slate-700 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
                 >
                   <Plus className="h-4 w-4" />
                   Tambah {targetType === "premix" ? "Bahan" : "Komponen"}
@@ -725,14 +725,14 @@ export function RecipeBuilder({ open, onClose, onSaved, initialTarget }: RecipeB
                   type="button"
                   disabled={saving || loading || loadingTargets || deletingKey !== null || !department}
                   onClick={() => void handleSave()}
-                  className="mt-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mt-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 font-medium text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
                   {saving ? "Menyimpan…" : "Simpan Resep"}
                 </button>
               </>
             ) : (
-              <p className="text-sm text-zinc-500">Mode penonton: resep hanya dapat dilihat.</p>
+              <p className="text-sm text-slate-600">Mode penonton: resep hanya dapat dilihat.</p>
             )}
           </div>
         )}

@@ -47,6 +47,16 @@
 \ir migrations/039_harden_purchase_arrival_stock_apply.sql
 \ir migrations/040_multi_photo_column_comments.sql
 \ir migrations/041_ai_business_memory.sql
+\ir migrations/042_role_task_setting.sql
+\ir migrations/043_staff_role_master_admin.sql
+\ir migrations/044_split_master_admin_and_admin.sql
+\ir migrations/045_service_charge_setting.sql
+\ir migrations/046_service_share_point.sql
+\ir migrations/047_outstock_loss_responsibility.sql
+\ir migrations/048_outstock_outflow_type.sql
+\ir migrations/049_menu_issue_loss_responsibility.sql
+\ir migrations/050_service_tax_setting.sql
+\ir migrations/051_operational_tracker.sql
 
 -- Optional JWT-only read-only viewer policies. Do not run for the current anon-client prototype.
 -- \ir seeds/viewer_rls_policies.sql

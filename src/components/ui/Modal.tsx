@@ -26,16 +26,16 @@ export function Modal({ open, title, onClose, children }: ModalProps) {
       <button
         type="button"
         aria-label="Tutup"
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 bg-slate-950/35 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="relative z-10 max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-artha-border bg-artha-surface p-5 shadow-xl sm:rounded-2xl">
+      <div className="relative z-10 max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-slate-200/80 bg-white p-5 shadow-[0_20px_50px_rgba(15,23,42,0.16)] sm:rounded-2xl">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 id="modal-title" className="text-lg font-semibold text-white">{title}</h2>
+          <h2 id="modal-title" className="text-lg font-semibold text-slate-900">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-artha-border text-artha-muted hover:text-white"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200/80 bg-white text-slate-600 transition-all hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98]"
           >
             ✕
           </button>

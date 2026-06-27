@@ -127,7 +127,7 @@ export function OpnameApprovalPanel() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 py-6 text-sm text-zinc-400">
+      <div className="flex items-center gap-2 py-6 text-sm text-slate-600">
         <Loader2 className="h-4 w-4 animate-spin" />
         Memuat antrian persetujuan opname…
       </div>
@@ -137,29 +137,29 @@ export function OpnameApprovalPanel() {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-amber-400">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-amber-700">
           Persetujuan Opname (Selisih Besar)
         </h3>
-        <p className="mt-1 text-xs text-zinc-500">
+        <p className="mt-1 text-xs text-slate-600">
           Transaksi dengan selisih lebih dari 15% dari stok sistem ditahan di sini sebelum stok
           permanen diperbarui.
         </p>
       </div>
 
       {error ? (
-        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       ) : null}
 
       {toast ? (
-        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+        <p className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-700">
           {toast}
         </p>
       ) : null}
 
       {pending.length === 0 ? (
-        <p className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-6 text-center text-sm text-zinc-400">
+        <p className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-sm text-slate-600">
           Tidak ada opname menunggu persetujuan.
         </p>
       ) : (
@@ -173,23 +173,23 @@ export function OpnameApprovalPanel() {
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <p className="font-semibold text-zinc-50">{row.ingredient.name}</p>
-                    <p className="text-xs text-zinc-500">
+                    <p className="font-semibold text-slate-900">{row.ingredient.name}</p>
+                    <p className="text-xs text-slate-600">
                       {formatBusinessDateLabel(row.business_date)} · {row.ingredient.department}
                     </p>
                   </div>
-                  <p className="text-xs font-medium text-amber-300">Selisih {pct}%</p>
+                  <p className="text-xs font-medium text-amber-900">Selisih {pct}%</p>
                 </div>
-                <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-400">
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
                   <div>
                     <dt>Stok sistem</dt>
-                    <dd className="font-semibold tabular-nums text-zinc-200">
+                    <dd className="font-semibold tabular-nums text-slate-900">
                       {Number(row.system_stock).toLocaleString("id-ID")} {row.ingredient.unit}
                     </dd>
                   </div>
                   <div>
                     <dt>Stok fisik (staff)</dt>
-                    <dd className="font-semibold tabular-nums text-zinc-200">
+                    <dd className="font-semibold tabular-nums text-slate-900">
                       {Number(row.physical_stock).toLocaleString("id-ID")} {row.ingredient.unit}
                     </dd>
                   </div>
@@ -200,7 +200,7 @@ export function OpnameApprovalPanel() {
                       type="button"
                       disabled={actingId === row.id}
                       onClick={() => void handleReview(row, "APPROVED")}
-                      className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg bg-emerald-600/80 text-sm font-bold text-white disabled:opacity-50"
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg bg-teal-600 text-sm font-bold text-white transition hover:bg-teal-700 disabled:opacity-50"
                     >
                       {actingId === row.id ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -213,14 +213,14 @@ export function OpnameApprovalPanel() {
                       type="button"
                       disabled={actingId === row.id}
                       onClick={() => void handleReview(row, "REJECTED")}
-                      className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg border border-red-500/50 bg-red-500/10 text-sm font-bold text-red-200 disabled:opacity-50"
+                      className="flex min-h-10 flex-1 items-center justify-center gap-1 rounded-lg border border-red-500/50 bg-red-500/10 text-sm font-bold text-red-700 disabled:opacity-50"
                     >
                       <X className="h-4 w-4" />
                       Tolak
                     </button>
                   </div>
                 ) : (
-                  <p className="mt-4 text-xs text-zinc-500">Mode penonton: tidak dapat menyetujui atau menolak.</p>
+                  <p className="mt-4 text-xs text-slate-600">Mode penonton: tidak dapat menyetujui atau menolak.</p>
                 )}
               </li>
             );

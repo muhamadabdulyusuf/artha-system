@@ -260,7 +260,7 @@ BEGIN
     IF v_staff.role = 'kitchen_staff' AND p_department <> 'kitchen' THEN
       RAISE EXCEPTION 'kitchen_staff cannot produce for bar';
     END IF;
-  ELSIF v_staff.role NOT IN ('admin', 'op_manager') THEN
+  ELSIF v_staff.role NOT IN ('master_admin', 'admin', 'op_manager') THEN
     RAISE EXCEPTION 'role % is not allowed to run production', v_staff.role;
   END IF;
 

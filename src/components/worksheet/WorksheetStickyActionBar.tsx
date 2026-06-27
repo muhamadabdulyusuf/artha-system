@@ -12,7 +12,7 @@ export function WorksheetStickyActionBar({ children, variant = "staff" }: Worksh
 
   return (
     <div
-      className={`fixed bottom-0 left-0 right-0 z-40 border-t border-zinc-800/80 bg-zinc-950/90 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-md ${
+      className={`fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200/80 bg-white/95 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur-md ${
         admin ? "px-5" : "px-3 sm:px-4"
       }`}
     >

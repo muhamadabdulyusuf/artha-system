@@ -23,7 +23,7 @@ export function AbdulCompanyMark({
   return (
     <div className={`flex items-center gap-3 ${className}`}>
       <div
-        className={`${SIZE_CLASS[size]} flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white p-1.5 shadow-lg shadow-black/20`}
+        className={`${SIZE_CLASS[size]} flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200/80 bg-white p-1.5 shadow-[0_1px_3px_rgba(0,0,0,0.02),0_1px_2px_rgba(0,0,0,0.04)]`}
       >
         <Image
           src={AbdulCompanyLogo}
@@ -34,8 +34,8 @@ export function AbdulCompanyMark({
       </div>
       {showText ? (
         <div className="min-w-0">
-          <p className="text-sm font-bold leading-tight text-zinc-50">Abdul Company</p>
-          <p className="mt-0.5 text-xs font-medium leading-tight text-zinc-500">{subtitle}</p>
+          <p className="text-sm font-semibold leading-tight text-slate-900">Abdul Company</p>
+          <p className="mt-0.5 text-xs font-medium leading-tight text-slate-500">{subtitle}</p>
         </div>
       ) : null}
     </div>

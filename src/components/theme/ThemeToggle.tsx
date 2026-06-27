@@ -1,6 +1,6 @@
 "use client";
 
-import { Moon, Sun } from "lucide-react";
+import { Sun } from "lucide-react";
 import { useTheme } from "@/components/theme/ThemeProvider";
 
 type ThemeToggleProps = {
@@ -8,19 +8,18 @@ type ThemeToggleProps = {
 };
 
 export function ThemeToggle({ className = "" }: ThemeToggleProps) {
-  const { theme, toggleTheme } = useTheme();
-  const isLight = theme === "light";
+  const { toggleTheme } = useTheme();
 
   return (
     <button
       type="button"
       onClick={toggleTheme}
-      className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-800 ${className}`}
-      aria-label={isLight ? "Aktifkan dark mode" : "Aktifkan light mode"}
-      title={isLight ? "Aktifkan mode gelap" : "Aktifkan mode terang"}
+      className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-50 ${className}`}
+      aria-label="Mode terang aktif"
+      title="Mode terang aktif"
     >
-      {isLight ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-      <span className="hidden sm:inline">{isLight ? "Gelap" : "Terang"}</span>
+      <Sun className="h-4 w-4 text-teal-700" />
+      <span className="hidden sm:inline">Terang</span>
     </button>
   );
 }

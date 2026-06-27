@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 type SupplierListItem = SupplierRow;
 
 const SEARCH_INPUT_CLASS =
-  "min-h-11 w-full min-w-0 rounded-xl border border-zinc-700 bg-zinc-900 py-2.5 pl-10 pr-10 text-sm text-slate-100 placeholder:text-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
+  "min-h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-10 text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-500";
 
 const TABLE_COL_COUNT = 5;
 
@@ -124,9 +124,9 @@ export function SuppliersTab() {
       />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 text-slate-300">
-          <Truck className="h-5 w-5 text-indigo-400" />
-          <p className="text-sm">
+        <div className="flex items-center gap-2 text-slate-600">
+          <Truck className="h-5 w-5 text-teal-700" />
+          <p className="text-sm font-medium leading-6">
             Kelola profil supplier, nomor WhatsApp operasional, dan batas
             minimum order.
           </p>
@@ -134,7 +134,7 @@ export function SuppliersTab() {
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="relative min-w-0 flex-1 sm:max-w-xs">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
             <input
               type="search"
               value={searchTerm}
@@ -149,7 +149,7 @@ export function SuppliersTab() {
               <button
                 type="button"
                 onClick={() => setSearchTerm("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 transition hover:text-zinc-200"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
                 aria-label="Hapus pencarian"
               >
                 <X className="h-4 w-4" />
@@ -161,7 +161,7 @@ export function SuppliersTab() {
             <button
               type="button"
               onClick={openCreateModal}
-              className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-500"
+              className="flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-teal-600 px-4 font-semibold text-white transition hover:bg-teal-600"
             >
               <Plus className="h-4 w-4" />
               Tambah Supplier
@@ -171,32 +171,32 @@ export function SuppliersTab() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center gap-2 py-16 text-zinc-500">
-          <Loader2 className="h-5 w-5 animate-spin text-indigo-400" />
+        <div className="flex items-center justify-center gap-2 py-16 text-slate-600">
+          <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
           Memuat supplier dari Supabase…
         </div>
       ) : suppliers.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/40 py-16 text-center text-sm text-slate-400">
+        <p className="rounded-xl border border-dashed border-slate-200 bg-white py-16 text-center text-sm font-medium text-slate-600">
           Belum ada supplier. Klik &quot;Tambah Supplier&quot; untuk mulai.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-zinc-700 bg-zinc-900/40">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
           <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="bg-zinc-800 text-zinc-400">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
               <tr>
-                <th className="w-14 px-4 py-3 font-medium">No</th>
-                <th className="px-4 py-3 font-medium">Nama Supplier</th>
-                <th className="px-4 py-3 font-medium">WhatsApp</th>
-                <th className="px-4 py-3 font-medium">Min. Order</th>
-                <th className="px-4 py-3 text-right font-medium">Aksi</th>
+                <th className="w-14 px-4 py-3.5 font-semibold">No</th>
+                <th className="px-4 py-3.5 font-semibold">Nama Supplier</th>
+                <th className="px-4 py-3.5 font-semibold">WhatsApp</th>
+                <th className="px-4 py-3.5 font-semibold">Min. Order</th>
+                <th className="px-4 py-3.5 text-right font-semibold">Aksi</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-700/80">
+            <tbody className="divide-y divide-slate-100 bg-white">
               {filteredSuppliers.length === 0 ? (
                 <tr>
                   <td
                     colSpan={TABLE_COL_COUNT}
-                    className="px-4 py-12 text-center text-sm text-slate-500"
+                    className="px-4 py-12 text-center text-sm font-medium text-slate-600"
                   >
                     {emptyTableMessage}
                   </td>
@@ -205,18 +205,18 @@ export function SuppliersTab() {
                 filteredSuppliers.map((item, index) => (
                   <tr
                     key={item.id}
-                    className={`bg-zinc-900/60 ${!item.is_active ? "opacity-50" : ""}`}
+                    className={`border-b border-slate-100 bg-white transition-colors last:border-b-0 hover:bg-slate-50/80 ${!item.is_active ? "opacity-60" : ""}`}
                   >
-                    <td className="px-4 py-3 tabular-nums text-zinc-500">
+                    <td className="px-4 py-3 font-medium tabular-nums text-slate-900">
                       {index + 1}
                     </td>
-                    <td className="px-4 py-3 font-medium text-slate-100">
+                    <td className="px-4 py-3 font-semibold text-slate-900">
                       {item.name}
                     </td>
-                    <td className="px-4 py-3 font-mono text-sm text-slate-300">
+                    <td className="px-4 py-3 font-mono text-sm font-medium text-slate-900">
                       {formatWhatsAppDisplay(item.phone_number)}
                     </td>
-                    <td className="px-4 py-3 tabular-nums text-slate-300">
+                    <td className="px-4 py-3 font-semibold tabular-nums text-slate-900">
                       {formatRupiah(Number(item.min_order_amount))}
                     </td>
                     <td className="px-4 py-3">
@@ -226,14 +226,14 @@ export function SuppliersTab() {
                             type="button"
                             onClick={() => openEditModal(item)}
                             disabled={!item.is_active}
-                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-indigo-400 ring-1 ring-zinc-600 transition hover:bg-indigo-600/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="flex min-h-9 min-w-9 items-center justify-center rounded-lg text-teal-700 ring-1 ring-slate-200 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
                             aria-label={`Edit ${item.name}`}
                           >
                             <Edit className="h-4 w-4" />
                           </button>
                         </div>
                       ) : (
-                        <span className="block text-right text-xs text-zinc-500">—</span>
+                        <span className="block text-right text-xs font-medium text-slate-600">—</span>
                       )}
                     </td>
                   </tr>

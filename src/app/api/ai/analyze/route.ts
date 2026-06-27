@@ -394,7 +394,13 @@ export async function POST(request: Request) {
   for (const provider of providers) {
     try {
       const result = await provider.run(dataContext);
-      return Response.json(result.data);
+      return Response.json({
+        success: true,
+        provider: result.provider,
+        model: result.model,
+        result: result.data,
+        ...result.data,
+      });
     } catch (error) {
       attempts.push({
         provider: provider.provider,

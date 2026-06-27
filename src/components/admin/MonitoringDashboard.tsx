@@ -1,11 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
+  ChevronDown,
   Download,
+  FileSpreadsheet,
   Loader2,
   Lock,
   MessageSquareWarning,
@@ -400,12 +403,18 @@ type LowStockInventoryRow = {
   primarySupplierPhone: string | null;
 };
 
+type LossResponsibilityScope = "general" | "unknown" | "staff";
+type MenuIssueStaffJoin = { name: string } | { name: string }[] | null;
+
 type MenuIssueJoined = {
   id: string;
   menu_item_id: string;
   quantity: number;
   reason: string;
   note: string;
+  loss_responsibility_scope: LossResponsibilityScope | null;
+  responsible_staff_id: string | null;
+  responsible_staff: MenuIssueStaffJoin;
   photo_url: string | null;
   created_at: string;
   menu_item:
@@ -427,6 +436,10 @@ type MenuIssueReportRow = {
   reason: string;
   reasonLabel: string;
   note: string;
+  serviceDeductible: boolean;
+  lossResponsibilityScope: LossResponsibilityScope;
+  responsibleStaffName: string;
+  deductionTargetLabel: string;
   photoUrl: string;
   createdAt: string;
 };
@@ -485,7 +498,7 @@ type PremixComponentRow = {
   qty_per_batch: number;
 };
 
-type MonitoringTabId = "overview" | "demand" | "inventory" | "sales" | "control" | "export";
+export type MonitoringTabId = "overview" | "demand" | "inventory" | "sales" | "control" | "export";
 
 const MONITORING_TABS: { id: MonitoringTabId; label: string; description: string; icon: typeof Package }[] = [
   { id: "overview", label: "Ringkasan Dashboard", description: "Prioritas, fondasi, PO, complaint", icon: BarChart3 },
@@ -496,7 +509,32 @@ const MONITORING_TABS: { id: MonitoringTabId; label: string; description: string
   { id: "export", label: "Download Laporan", description: "XLSX stok, sales, demand, complaint", icon: Download },
 ];
 
+const REPORT_SALES_SUMMARY_NAV_ITEM = {
+  label: "Report",
+  description: "Moka POS spreadsheet entry & manual revenue",
+  icon: FileSpreadsheet,
+};
+
+const REPORT_SUB_MENU_ITEMS = [
+  { href: "/dashboard/reports?tab=sales-summary", label: "Sales Summary", description: "Moka POS entry & manual revenue" },
+  { href: "/dashboard/reports?tab=gross-profit", label: "Gross Profit", description: "Daily gross margin & food cost calculation" },
+  { href: "/dashboard/reports?tab=item-sales", label: "Item Sales", description: "Menu movement quantity from Moka" },
+  { href: "/dashboard/reports?tab=service-charge", label: "Service Charge", description: "Staff gross share & net settlement" },
+  { href: "/dashboard/reports?tab=overtime-staff", label: "Overtime Staff", description: "Daily staff overtime & DW tracking" },
+  { href: "/dashboard/reports?tab=complaint-case", label: "Complaint & Case", description: "Real-time daily guest feedback & issues" },
+];
+
 const CUSTOMER_COMPLAINT_REASON = "guest_complaint";
+const SERVICE_DEDUCTIBLE_MENU_ISSUE_REASONS = new Set([
+  "too_salty",
+  "undercooked",
+  "burnt",
+  "hair",
+  "wrong_order",
+  "spilled",
+  "staff_error",
+  "other",
+]);
 
 const MENU_ISSUE_REASON_LABEL: Record<string, string> = {
   too_salty: "Terlalu asin",
@@ -1252,6 +1290,75 @@ async function downloadComplaintXlsx(filename: string, rows: MenuIssueReportRow[
   URL.revokeObjectURL(url);
 }
 
+async function downloadRemakeServiceXlsx(filename: string, rows: MenuIssueReportRow[]): Promise<void> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Remake Service Audit");
+
+  sheet.columns = [
+    { header: "Tanggal", key: "date", width: 14 },
+    { header: "Dept", key: "department", width: 12 },
+    { header: "Menu", key: "menu", width: 30 },
+    { header: "Qty Remake", key: "quantity", width: 14 },
+    { header: "Alasan", key: "reason", width: 20 },
+    { header: "Target Potongan", key: "deductionTarget", width: 28 },
+    { header: "Scope", key: "scope", width: 14 },
+    { header: "Catatan", key: "note", width: 42 },
+    { header: "Jumlah Foto", key: "photoCount", width: 14 },
+    { header: "Link Foto", key: "photos", width: 48 },
+    { header: "Waktu Input", key: "createdAt", width: 24 },
+  ];
+
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF111827" },
+  };
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  for (const row of rows) {
+    const photoUrls = splitStoredPhotoUrls(row.photoUrl);
+    const excelRow = sheet.addRow({
+      date: row.businessDate,
+      department: row.department,
+      menu: row.menuName,
+      quantity: row.quantity,
+      reason: row.reasonLabel,
+      deductionTarget: row.deductionTargetLabel,
+      scope: row.lossResponsibilityScope,
+      note: row.note || "-",
+      photoCount: photoUrls.length,
+      photos: photoUrls.join("\n"),
+      createdAt: new Date(row.createdAt).toLocaleString("id-ID"),
+    });
+    excelRow.alignment = { vertical: "top", wrapText: true };
+    if (row.lossResponsibilityScope === "staff") {
+      excelRow.getCell("deductionTarget").font = { bold: true, color: { argb: "FFB91C1C" } };
+    }
+  }
+
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: sheet.columnCount },
+  };
+  sheet.getColumn("quantity").numFmt = "#,##0.##";
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
 function formatRupiah(amount: number): string {
   return new Intl.NumberFormat("id-ID", {
     style: "currency",
@@ -1383,31 +1490,31 @@ function TopSellingWidget({
   emptyLabel: string;
 }) {
   return (
-    <section className="rounded-xl border border-slate-800 bg-zinc-900/70 p-4 shadow-lg shadow-black/20">
+    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
       <div className="mb-4 flex items-center gap-2">
-        <BarChart3 className="h-5 w-5 text-slate-300" />
-        <h3 className="text-base font-semibold text-slate-100">{title}</h3>
+        <BarChart3 className="h-5 w-5 text-slate-700" />
+        <h3 className="text-base font-semibold text-slate-900">{title}</h3>
       </div>
       {items.length === 0 ? (
-        <p className="py-8 text-center text-sm text-slate-500">{emptyLabel}</p>
+        <p className="py-8 text-center text-sm text-slate-600">{emptyLabel}</p>
       ) : (
         <ul className="space-y-3">
           {items.map((item, index) => (
             <li key={`${item.menu_name}-${index}`}>
               <div className="mb-1 flex items-center justify-between gap-2 text-sm">
-                <span className="truncate font-medium text-slate-100">
-                  <span className="mr-2 text-slate-500">#{index + 1}</span>
+                <span className="truncate font-medium text-slate-900">
+                  <span className="mr-2 text-slate-600">#{index + 1}</span>
                   {item.menu_name}
                 </span>
-                <span className="shrink-0 tabular-nums text-slate-300">
+                <span className="shrink-0 font-semibold tabular-nums text-slate-900">
                   {formatQtyId(item.quantity_sold)} {unitLabel}
                 </span>
               </div>
-              <div className="mb-1 flex justify-between text-xs text-slate-500">
+              <div className="mb-1 flex justify-between text-xs text-slate-600">
                 <span>Kontribusi penjualan</span>
                 <span className="tabular-nums">{item.sharePercent.toFixed(1)}%</span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+              <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                 <div
                   className={`h-full rounded-full transition-all ${barColorClass}`}
                   style={{ width: `${Math.min(item.sharePercent, 100)}%` }}
@@ -1433,16 +1540,16 @@ function StatusIndicator({
   detail: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-zinc-950/60 px-3 py-2.5">
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
       <div className="flex items-center gap-2">
         <span
           className={`inline-flex h-2.5 w-2.5 rounded-full ${
-            active ? `${activeClassName} animate-pulse` : "bg-emerald-500/80"
+            active ? `${activeClassName} animate-pulse` : "bg-teal-600/80"
           }`}
         />
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">{label}</span>
       </div>
-      <p className="mt-1 text-xs text-slate-300">{detail}</p>
+      <p className="mt-1 text-xs text-slate-700">{detail}</p>
     </div>
   );
 }
@@ -1450,7 +1557,7 @@ function StatusIndicator({
 function QtyCell({
   value,
   unit,
-  className = "text-slate-300",
+  className = "text-slate-700",
 }: {
   value: number;
   unit: string;
@@ -1465,13 +1572,13 @@ function AdjustmentCell({ row }: { row: LedgerTableRow }) {
   return (
     <td
       className={`px-3 py-2 text-right align-top tabular-nums font-medium ${
-        row.adjustment_qty < 0 ? "text-red-400" : "text-slate-400"
+        row.adjustment_qty < 0 ? "text-red-700" : "text-slate-600"
       }`}
     >
       <div className="inline-flex flex-col items-end gap-0.5">
         <span>{formatQtyWithUnit(row.adjustment_qty, row.unit)}</span>
         {showNote && (
-          <span className="max-w-[200px] text-left text-[11px] font-normal leading-snug text-zinc-400 sm:max-w-xs sm:text-right">
+          <span className="max-w-[200px] text-left text-[11px] font-normal leading-snug text-slate-600 sm:max-w-xs sm:text-right">
             (Catatan: {row.outStockNote})
           </span>
         )}
@@ -1482,7 +1589,7 @@ function AdjustmentCell({ row }: { row: LedgerTableRow }) {
 
 function LowStockBadge() {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-500/50 bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400 animate-pulse">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-200 bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-700 animate-pulse">
       ⚠️ Low Stock
     </span>
   );
@@ -1498,21 +1605,21 @@ function LiveStockTable({
   const changedRows = rows.filter((row) => row.sourceCount > 0).length;
 
   return (
-    <div className="mb-4 rounded-xl border border-indigo-500/25 bg-zinc-950/60 p-4">
+    <div className="mb-4 rounded-xl border border-teal-200 bg-white p-4">
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h4 className="text-sm font-semibold text-slate-100">Live Stock Worksheet</h4>
-          <p className="text-xs text-slate-500">
+          <h4 className="text-sm font-semibold text-slate-900">Live Stock Worksheet</h4>
+          <p className="text-xs text-slate-600">
             Stok resmi + draft worksheet per {formatBusinessDateLabel(businessDate)}.
           </p>
         </div>
-        <span className="rounded-full bg-indigo-500/10 px-2.5 py-1 text-xs font-medium tabular-nums text-indigo-200">
+        <span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium tabular-nums text-teal-700">
           {changedRows} bahan bergerak
         </span>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-slate-800">
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full min-w-[1080px] text-left text-sm">
-          <thead className="bg-zinc-950 text-slate-400">
+          <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
             <tr>
               <th className="px-3 py-2 font-medium">Bahan</th>
               <th className="px-3 py-2 font-medium">Dept</th>
@@ -1528,10 +1635,10 @@ function LiveStockTable({
               <th className="px-3 py-2 font-medium">Status</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800/80">
+          <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={12} className="px-3 py-8 text-center text-slate-600">
                   Tidak ada bahan cocok dengan pencarian.
                 </td>
               </tr>
@@ -1541,52 +1648,52 @@ function LiveStockTable({
                 return (
                   <tr
                     key={row.ingredientId}
-                    className={row.status === "LOW STOCK" ? "bg-red-950/10" : "hover:bg-zinc-900/60"}
+                    className={row.status === "LOW STOCK" ? "bg-red-50/30" : "hover:bg-slate-50/80"}
                   >
-                    <td className="px-3 py-2 font-medium text-slate-100">
+                    <td className="px-3 py-2 font-medium text-slate-900">
                       <div className="flex items-center gap-2">
                         <span>{row.ingredientName}</span>
                         {row.status === "LOW STOCK" ? <LowStockBadge /> : null}
                       </div>
                     </td>
-                    <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                    <td className="px-3 py-2 font-medium capitalize text-slate-900">{row.department}</td>
+                    <td className="px-3 py-2 text-right font-medium tabular-nums text-slate-900">
                       {formatQtyWithUnit(row.officialStock, row.unit)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
+                    <td className="px-3 py-2 text-right tabular-nums text-teal-700">
                       {row.receiveQty > 0 ? `+${formatQtyWithUnit(row.receiveQty, row.unit)}` : "-"}
                     </td>
                     <td
                       className={`px-3 py-2 text-right tabular-nums ${
-                        premixNet >= 0 ? "text-emerald-300" : "text-red-300"
+                        premixNet >= 0 ? "text-teal-700" : "text-red-700"
                       }`}
                     >
                       {premixNet === 0
                         ? "-"
                         : `${premixNet > 0 ? "+" : ""}${formatQtyWithUnit(premixNet, row.unit)}`}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-red-300">
+                    <td className="px-3 py-2 text-right tabular-nums text-red-700">
                       {row.menuUsageQty > 0 ? `-${formatQtyWithUnit(row.menuUsageQty, row.unit)}` : "-"}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-red-300">
+                    <td className="px-3 py-2 text-right tabular-nums text-red-700">
                       {row.issueUsageQty > 0 ? `-${formatQtyWithUnit(row.issueUsageQty, row.unit)}` : "-"}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-red-300">
+                    <td className="px-3 py-2 text-right tabular-nums text-red-700">
                       {row.outQty > 0 ? `-${formatQtyWithUnit(row.outQty, row.unit)}` : "-"}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-indigo-200">
+                    <td className="px-3 py-2 text-right tabular-nums text-teal-700">
                       {row.opnameQty === null ? "-" : formatQtyWithUnit(row.opnameQty, row.unit)}
                     </td>
-                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-100">
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
                       {formatQtyWithUnit(row.liveStock, row.unit)}
                     </td>
                     <td
                       className={`px-3 py-2 text-right tabular-nums ${
                         row.liveDelta < 0
-                          ? "text-red-300"
+                          ? "text-red-700"
                           : row.liveDelta > 0
-                            ? "text-emerald-300"
-                            : "text-slate-500"
+                            ? "text-teal-700"
+                            : "text-slate-600"
                       }`}
                     >
                       {row.liveDelta === 0
@@ -1597,8 +1704,8 @@ function LiveStockTable({
                       <span
                         className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                           row.status === "LOW STOCK"
-                            ? "bg-red-500/15 text-red-300"
-                            : "bg-emerald-500/10 text-emerald-300"
+                            ? "bg-red-100 text-red-700"
+                            : "bg-teal-50 text-teal-700"
                         }`}
                       >
                         {row.status}
@@ -1633,24 +1740,24 @@ function DepartmentLedgerTable({
   const sectionLowStockCount = rows.filter((row) => row.isLowStock).length;
 
   return (
-    <section className={`rounded-xl border ${accentClass} bg-zinc-900/60 p-4`}>
+    <section className={`rounded-xl border ${accentClass} bg-white p-4`}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-lg" aria-hidden>
           {emoji}
         </span>
-        <h4 className="text-sm font-bold uppercase tracking-wide text-slate-100">{title}</h4>
+        <h4 className="text-sm font-bold uppercase tracking-wide text-slate-900">{title}</h4>
         {sectionLowStockCount > 0 && (
-          <span className="rounded-full border border-red-800/60 bg-red-950/30 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-red-300">
+          <span className="rounded-full border border-red-200 bg-red-50/30 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-red-700">
             {sectionLowStockCount} low stock
           </span>
         )}
-        <span className="ml-auto rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+        <span className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
           {rows.length} bahan
         </span>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-slate-800">
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
         <table className="w-full min-w-[680px] text-left text-sm">
-          <thead className="bg-zinc-950 text-slate-400">
+          <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
             <tr>
               {showDateColumn && <th className="px-3 py-2 font-medium">Tanggal</th>}
               <th className="px-3 py-2 font-medium">Bahan</th>
@@ -1662,10 +1769,10 @@ function DepartmentLedgerTable({
               <th className="px-3 py-2 text-right font-medium">Variance</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800/80">
+          <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={showDateColumn ? 8 : 7} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={showDateColumn ? 8 : 7} className="px-3 py-8 text-center text-slate-600">
                   {emptyMessage}
                 </td>
               </tr>
@@ -1675,24 +1782,24 @@ function DepartmentLedgerTable({
                   key={ledgerRowKey(row)}
                   className={
                     row.isLowStock
-                      ? "border-l-2 border-red-800 bg-red-950/20 hover:bg-red-950/30"
-                      : "hover:bg-zinc-950/50"
+                      ? "border-l-2 border-red-800 bg-red-50/30 hover:bg-red-50/30"
+                      : "hover:bg-slate-50/80"
                   }
                 >
                   {showDateColumn && (
-                    <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                    <td className="whitespace-nowrap px-3 py-2 text-xs font-medium text-slate-900">
                       {formatBusinessDateLabel(row.business_date)}
                     </td>
                   )}
-                  <td className="px-3 py-2 text-slate-100">
+                  <td className="px-3 py-2 text-slate-900">
                     <span className="flex flex-wrap items-center gap-2">
                       {row.spillageAlert && (
                         <span
-                          className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500"
+                          className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-600"
                           title="Spillage alert"
                         />
                       )}
-                      <span className={row.isLowStock ? "font-medium text-red-300" : undefined}>
+                      <span className={row.isLowStock ? "font-medium text-red-700" : undefined}>
                         {row.ingredient_name}
                       </span>
                       {row.isLowStock && <LowStockBadge />}
@@ -1704,13 +1811,13 @@ function DepartmentLedgerTable({
                   <AdjustmentCell row={row} />
                   <td
                     className={`px-3 py-2 text-right align-top tabular-nums ${
-                      row.isLowStock ? "font-semibold text-amber-400" : "text-indigo-300"
+                      row.isLowStock ? "font-semibold text-amber-700" : "text-teal-700"
                     }`}
                   >
                     <div className="inline-flex flex-col items-end gap-1">
                       <span>{formatQtyWithUnit(row.closing_stock, row.unit)}</span>
                       {row.isLowStock && row.minimum_stock > 0 && (
-                        <span className="text-[10px] font-normal text-red-400/90">
+                        <span className="text-[10px] font-normal text-red-700/90">
                           Min. {formatQtyWithUnit(row.minimum_stock, row.unit)}
                         </span>
                       )}
@@ -1718,7 +1825,7 @@ function DepartmentLedgerTable({
                   </td>
                   <td
                     className={`px-3 py-2 text-right tabular-nums font-medium ${
-                      row.variance_qty !== 0 ? "text-amber-300" : "text-slate-500"
+                      row.variance_qty !== 0 ? "text-amber-900" : "text-slate-600"
                     }`}
                   >
                     {formatQtyWithUnit(row.variance_qty, row.unit)}
@@ -1873,18 +1980,18 @@ function WorksheetEditRequestPanel({
   };
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-100">Approval Koreksi Worksheet</h3>
-          <p className="mt-1 text-xs text-slate-500">
+          <h3 className="text-sm font-semibold text-slate-900">Approval Koreksi Worksheet</h3>
+          <p className="mt-1 text-xs text-slate-600">
             Approval hanya membuka session tanggal dan department yang diminta.
           </p>
         </div>
         <button
           type="button"
           onClick={() => void loadRequests()}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
           aria-label="Refresh request koreksi worksheet"
         >
           <RefreshCw className="h-4 w-4" />
@@ -1895,8 +2002,8 @@ function WorksheetEditRequestPanel({
         <p
           className={`mb-3 rounded-lg border px-3 py-2 text-xs ${
             notice.variant === "success"
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-              : "border-red-500/40 bg-red-500/10 text-red-300"
+              ? "border-teal-200 bg-teal-50 text-teal-700"
+              : "border-red-200 bg-red-50/30 text-red-700"
           }`}
         >
           {notice.message}
@@ -1904,38 +2011,38 @@ function WorksheetEditRequestPanel({
       ) : null}
 
       {loading ? (
-        <div className="flex items-center gap-2 py-4 text-sm text-slate-400">
-          <Loader2 className="h-4 w-4 animate-spin text-indigo-300" />
+        <div className="flex items-center gap-2 py-4 text-sm text-slate-600">
+          <Loader2 className="h-4 w-4 animate-spin text-teal-700" />
           Memuat request koreksi…
         </div>
       ) : requests.length === 0 ? (
-        <p className="rounded-lg border border-slate-800 bg-zinc-950/50 px-3 py-4 text-sm text-slate-500">
+        <p className="rounded-lg border border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
           Belum ada request koreksi worksheet.
         </p>
       ) : (
         <ul className="space-y-2">
           {requests.map((request) => (
-            <li key={request.id} className="rounded-lg border border-slate-800 bg-zinc-950/50 p-3">
+            <li key={request.id} className="rounded-lg border border-slate-200 bg-white p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-100">
+                  <p className="text-sm font-semibold text-slate-900">
                     {request.staffName} · {request.department}
                   </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
+                  <p className="mt-0.5 text-xs text-slate-600">
                     {formatBusinessDateLabel(request.business_date)} · status {request.sessionStatus}
                   </p>
                 </div>
-                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+                <span className="rounded-full bg-amber-50/30 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
                   PENDING
                 </span>
               </div>
-              <p className="mt-2 text-sm text-slate-300">{request.reason}</p>
+              <p className="mt-2 text-sm text-slate-700">{request.reason}</p>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   disabled={!canEdit || busyId === request.id}
                   onClick={() => void reviewRequest(request, "APPROVED")}
-                  className="min-h-10 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white disabled:opacity-50"
+                  className="min-h-10 rounded-lg bg-teal-600 px-3 text-xs font-bold text-white disabled:opacity-50"
                 >
                   Approve & Buka
                 </button>
@@ -1943,7 +2050,7 @@ function WorksheetEditRequestPanel({
                   type="button"
                   disabled={!canEdit || busyId === request.id}
                   onClick={() => void reviewRequest(request, "REJECTED")}
-                  className="min-h-10 rounded-lg border border-red-500/40 px-3 text-xs font-bold text-red-200 disabled:opacity-50"
+                  className="min-h-10 rounded-lg border border-red-200 px-3 text-xs font-bold text-red-700 disabled:opacity-50"
                 >
                   Reject
                 </button>
@@ -1956,18 +2063,29 @@ function WorksheetEditRequestPanel({
   );
 }
 
-export function MonitoringDashboard() {
+export function MonitoringDashboard({
+  activeTab,
+  showNavigation = true,
+}: {
+  activeTab?: MonitoringTabId;
+  showNavigation?: boolean;
+}) {
   const supabase = useMemo(() => getSupabaseClientOrNull(), []);
   const canEdit = canEditStaffData(getStaffSession()?.role);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [startDate, setStartDate] = useState(() => resolveBusinessDate());
   const [endDate, setEndDate] = useState(() => resolveBusinessDate());
-  const [activeMonitoringTab, setActiveMonitoringTab] = useState<MonitoringTabId>("overview");
+  const [activeMonitoringTab, setActiveMonitoringTab] = useState<MonitoringTabId>(activeTab ?? "overview");
+  const [isReportOpen, setIsReportOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (activeTab) setActiveMonitoringTab(activeTab);
+  }, [activeTab]);
 
   const [ledgerExportRows, setLedgerExportRows] = useState<StockLedgerExportRow[]>([]);
   const [inventorySummaryRows, setInventorySummaryRows] = useState<InventorySummaryRow[]>([]);
@@ -2140,6 +2258,23 @@ export function MonitoringDashboard() {
         row.note.toLowerCase().includes(normalizedSearch)
     );
   }, [complaintOnlyRows, normalizedSearch]);
+
+  const remakeServiceRows = useMemo(
+    () => menuIssueRows.filter((row) => row.serviceDeductible),
+    [menuIssueRows]
+  );
+
+  const filteredRemakeServiceRows = useMemo(() => {
+    if (!normalizedSearch) return remakeServiceRows;
+    return remakeServiceRows.filter(
+      (row) =>
+        row.menuName.toLowerCase().includes(normalizedSearch) ||
+        row.department.toLowerCase().includes(normalizedSearch) ||
+        row.reasonLabel.toLowerCase().includes(normalizedSearch) ||
+        row.note.toLowerCase().includes(normalizedSearch) ||
+        row.deductionTargetLabel.toLowerCase().includes(normalizedSearch)
+    );
+  }, [normalizedSearch, remakeServiceRows]);
 
   const filteredDemandEvents = useMemo(() => {
     if (!normalizedSearch) return demandEvents;
@@ -2443,7 +2578,7 @@ export function MonitoringDashboard() {
     const topReasonEntry = Array.from(reasonQty.entries()).sort((a, b) => b[1] - a[1])[0] ?? null;
 
     return {
-      recordCount: menuIssueRows.length,
+      recordCount: complaintOnlyRows.length,
       totalQty,
       evidenceCount,
       barQty,
@@ -3004,9 +3139,12 @@ export function MonitoringDashboard() {
           quantity,
           reason,
           note,
+          loss_responsibility_scope,
+          responsible_staff_id,
           photo_url,
           created_at,
           menu_item:menu_item_id ( id, menu_name, department, price ),
+          responsible_staff:responsible_staff_id ( name ),
           worksheet_session:session_id ( business_date, department )
         `
         )
@@ -3025,6 +3163,24 @@ export function MonitoringDashboard() {
           if (!session || !menu) continue;
 
           const reason = issue.reason || "other";
+          const serviceDeductible = SERVICE_DEDUCTIBLE_MENU_ISSUE_REASONS.has(reason);
+          const responsibleStaffRaw = issue.responsible_staff;
+          const responsibleStaff = Array.isArray(responsibleStaffRaw)
+            ? responsibleStaffRaw[0]
+            : responsibleStaffRaw;
+          const scope =
+            issue.loss_responsibility_scope === "staff" || issue.loss_responsibility_scope === "general"
+              ? issue.loss_responsibility_scope
+              : "unknown";
+          const responsibleStaffName =
+            scope === "staff" ? responsibleStaff?.name ?? "Staff tidak ditemukan" : "";
+          const deductionTargetLabel = !serviceDeductible
+            ? "Tidak potong service"
+            : scope === "staff"
+              ? responsibleStaffName
+              : scope === "general"
+                ? "Team dept"
+                : "Team dept (abu-abu)";
           issueRows.push({
             id: issue.id,
             businessDate: session.business_date,
@@ -3034,6 +3190,10 @@ export function MonitoringDashboard() {
             reason,
             reasonLabel: MENU_ISSUE_REASON_LABEL[reason] ?? reason,
             note: issue.note ?? "",
+            serviceDeductible,
+            lossResponsibilityScope: scope,
+            responsibleStaffName,
+            deductionTargetLabel,
             photoUrl: issue.photo_url ?? "",
             createdAt: issue.created_at,
           });
@@ -3667,12 +3827,18 @@ export function MonitoringDashboard() {
     await downloadComplaintXlsx(`laporan-complaint-tamu-${csvDateSuffix}.xlsx`, rows);
   };
 
+  const handleExportRemakeService = async () => {
+    const rows = normalizedSearch ? filteredRemakeServiceRows : remakeServiceRows;
+    await downloadRemakeServiceXlsx(`audit-remake-service-${csvDateSuffix}.xlsx`, rows);
+  };
+
   const exportPackFileCount = [
     inventorySummaryRows.length > 0,
     ledgerExportRows.length > 0,
     salesExportRows.length > 0,
     demandPlanningRows.length > 0,
     complaintOnlyRows.length > 0,
+    remakeServiceRows.length > 0,
   ].filter(Boolean).length;
   const exportPackDisabled = exportPackFileCount === 0;
 
@@ -3683,6 +3849,7 @@ export function MonitoringDashboard() {
     if (salesExportRows.length > 0) await handleExportSales();
     if (demandPlanningRows.length > 0) await handleExportDemandPlanning();
     if (complaintOnlyRows.length > 0) await handleExportComplaint();
+    if (remakeServiceRows.length > 0) await handleExportRemakeService();
   };
 
   const handleStartDateChange = (value: string) => {
@@ -4167,43 +4334,90 @@ export function MonitoringDashboard() {
   };
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
-      <aside className="sticky top-5 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 shadow-lg shadow-black/20 backdrop-blur">
-        <div className="mb-3 border-b border-zinc-800 px-2 pb-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Dashboard</p>
-          <p className="mt-1 truncate text-sm font-semibold text-zinc-100">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:items-start">
+      {showNavigation ? (
+      <aside className="rounded-xl border border-slate-200 bg-white p-3 shadow-[0_2px_8px_rgba(0,0,0,0.04)] lg:sticky lg:top-6 lg:col-span-3 lg:h-[calc(100vh-6rem)] lg:overflow-y-auto lg:scrollbar-thin">
+        <div className="mb-3 border-b border-slate-200 px-2 pb-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-teal-700">Dashboard</p>
+          <p className="mt-1 truncate text-sm font-semibold text-slate-900">
             {MONITORING_TABS.find((tab) => tab.id === activeMonitoringTab)?.label ?? "Monitoring"}
           </p>
         </div>
         <nav className="space-y-2" aria-label="Monitoring tabs">
           {MONITORING_TABS.map((tab) => {
             const Icon = tab.icon;
+            const ReportIcon = REPORT_SALES_SUMMARY_NAV_ITEM.icon;
             const active = activeMonitoringTab === tab.id;
             return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveMonitoringTab(tab.id)}
-                className={`flex min-h-12 w-full items-center gap-3 rounded-lg border px-3 text-left text-sm font-semibold transition ${
-                  active
-                    ? "border-cyan-300 bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-950/30"
-                    : "border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100"
-                }`}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span className="min-w-0">
-                  <span className="block truncate">{tab.label}</span>
-                  <span className={`block truncate text-[11px] ${active ? "text-zinc-800" : "text-zinc-500"}`}>
-                    {tab.description}
+              <div key={tab.id} className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveMonitoringTab(tab.id)}
+                  className={`flex min-h-12 w-full items-center gap-3 rounded-lg border px-3 text-left text-sm font-semibold transition ${
+                    active
+                      ? "border-teal-200 bg-teal-50 text-teal-700 font-medium"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block truncate">{tab.label}</span>
+                    <span className={`block truncate text-[11px] ${active ? "text-teal-700" : "text-slate-600"}`}>
+                      {tab.description}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+
+                {tab.id === "overview" ? (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setIsReportOpen(!isReportOpen)}
+                      aria-expanded={isReportOpen}
+                      className={`bg-white border border-slate-200 text-slate-900 hover:bg-slate-50 p-4 rounded-xl flex w-full items-start gap-4 transition-colors font-medium ${
+                        isReportOpen ? "rounded-b-none" : ""
+                      }`}
+                    >
+                      <ReportIcon className="mt-0.5 h-5 w-5 shrink-0 text-slate-900" />
+                      <span className="min-w-0 flex-1 text-left">
+                        <span className="block text-slate-900 font-semibold text-base">
+                          {REPORT_SALES_SUMMARY_NAV_ITEM.label}
+                        </span>
+                        <span className="block text-slate-500 text-sm font-normal">
+                          {REPORT_SALES_SUMMARY_NAV_ITEM.description}
+                        </span>
+                      </span>
+                      <ChevronDown
+                        className={`mt-0.5 h-5 w-5 shrink-0 text-slate-900 transition-transform duration-200 ${
+                          isReportOpen ? "rotate-180" : ""
+                        }`}
+                      />
+                    </button>
+
+                    {isReportOpen && (
+                      <div className="pl-6 pr-2 py-2 space-y-2 bg-slate-50/50 border-x border-b border-slate-200 rounded-b-xl -mt-2">
+                        {REPORT_SUB_MENU_ITEMS.map((item) => (
+                          <Link
+                            key={item.href}
+                            href={item.href}
+                            className="group hover:bg-teal-50 hover:text-teal-700 p-2 rounded-lg transition-all flex flex-col cursor-pointer"
+                          >
+                            <span className="text-slate-900 font-medium text-sm group-hover:text-teal-700">{item.label}</span>
+                            <span className="text-slate-500 text-xs group-hover:text-teal-700">{item.description}</span>
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </nav>
       </aside>
+      ) : null}
 
-      <div className="min-w-0 space-y-6">
+      <div className={`min-w-0 space-y-6 ${showNavigation ? "lg:col-span-9" : "lg:col-span-12"}`}>
 
       {activeMonitoringTab === "inventory" ? (
       <section className="grid gap-6 lg:grid-cols-2">
@@ -4217,27 +4431,27 @@ export function MonitoringDashboard() {
       </section>
       ) : null}
 
-      <div className="flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 xl:flex-row xl:items-center">
-        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-200">
-          <span className="h-2 w-2 rounded-full bg-cyan-300" />
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_2px_8px_rgba(0,0,0,0.04)] xl:flex-row xl:items-center">
+        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700">
+          <span className="h-2 w-2 rounded-full bg-teal-600" />
           {dateRangeLabel}
         </div>
 
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
           <input
             type="search"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Live search menu atau bahan baku…"
-            className="min-h-11 w-full rounded-xl border border-zinc-800 bg-zinc-950 py-2.5 pl-10 pr-10 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400/40"
+            className="min-h-11 w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100"
             aria-label="Pencarian live dashboard monitoring"
           />
           {searchTerm.length > 0 && (
             <button
               type="button"
               onClick={() => setSearchTerm("")}
-              className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:bg-zinc-800 hover:text-slate-100"
+              className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900"
               aria-label="Hapus pencarian"
             >
               <X className="h-4 w-4" />
@@ -4245,8 +4459,8 @@ export function MonitoringDashboard() {
           )}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
-          <CalendarDays className="h-4 w-4 text-cyan-300" aria-hidden />
+        <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+          <CalendarDays className="h-4 w-4 text-teal-700" aria-hidden />
           <label className="sr-only" htmlFor="monitoring-start-date">
             Tanggal mulai
           </label>
@@ -4255,9 +4469,9 @@ export function MonitoringDashboard() {
             type="date"
             value={startDate}
             onChange={(e) => handleStartDateChange(e.target.value)}
-            className="min-h-9 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400/40"
+            className="min-h-9 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-sm text-slate-900 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100"
           />
-          <span className="text-xs text-slate-500">s/d</span>
+          <span className="text-xs text-slate-600">s/d</span>
           <label className="sr-only" htmlFor="monitoring-end-date">
             Tanggal akhir
           </label>
@@ -4266,14 +4480,14 @@ export function MonitoringDashboard() {
             type="date"
             value={endDate}
             onChange={(e) => handleEndDateChange(e.target.value)}
-            className="min-h-9 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400/40"
+            className="min-h-9 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-sm text-slate-900 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100"
           />
         </div>
 
         <button
           type="button"
           onClick={() => setRefreshKey((k) => k + 1)}
-          className="flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 text-sm font-semibold text-zinc-200 transition hover:border-cyan-400/60 hover:text-cyan-200"
+          className="flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-900 transition-all hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 active:scale-[0.98]"
         >
           <RefreshCw className="h-4 w-4" />
           Refresh
@@ -4281,13 +4495,13 @@ export function MonitoringDashboard() {
       </div>
 
       {dateRangeInvalid && (
-        <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+        <p className="rounded-xl border border-amber-200 bg-amber-50/30 px-4 py-3 text-sm text-amber-900">
           Rentang tanggal tidak valid. Pastikan tanggal mulai tidak melebihi tanggal akhir.
         </p>
       )}
 
       {error && (
-        <p className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</p>
+        <p className="rounded-xl border border-red-200 bg-red-50/30 px-4 py-3 text-sm text-red-700">{error}</p>
       )}
 
       {activeMonitoringTab === "sales" ? (
@@ -4299,25 +4513,25 @@ export function MonitoringDashboard() {
       ) : (
         <>
           {activeMonitoringTab === "overview" ? (
-            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
               <div className="mb-3 flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-400" />
-                <h3 className="text-base font-semibold text-slate-100">Prioritas Hari Ini</h3>
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+                <h3 className="text-lg font-bold text-slate-900">Prioritas Hari Ini</h3>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 {priorityItems.map((item, index) => (
                   <div
                     key={`${item.title}-${index}`}
-                    className={`rounded-lg border px-3 py-2.5 ${
+                    className={`rounded-lg border bg-white px-3 py-2.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)] ${
                       item.tone === "critical"
-                        ? "border-red-800/60 bg-red-950/20"
+                        ? "border-slate-200 border-l-4 border-l-red-500 bg-red-50/30"
                         : item.tone === "warning"
-                          ? "border-amber-700/50 bg-amber-950/20"
-                          : "border-slate-800 bg-zinc-950/60"
+                          ? "border-slate-200 border-l-4 border-l-amber-500 bg-amber-50/30"
+                          : "border-slate-200 bg-white"
                     }`}
                   >
-                    <p className="text-sm font-semibold text-slate-100">{item.title}</p>
-                    <p className="mt-1 text-xs leading-snug text-slate-400">{item.detail}</p>
+                    <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                    <p className="mt-1 text-xs leading-snug text-slate-600">{item.detail}</p>
                   </div>
                 ))}
               </div>
@@ -4325,57 +4539,57 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "overview" ? (
-            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
                   <span
                     className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${
                       foundationReadinessTone === "critical"
-                        ? "border-red-500/40 bg-red-500/10 text-red-200"
+                        ? "border-red-200 bg-red-50/30 text-red-700"
                         : foundationReadinessTone === "warning"
-                          ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
-                          : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                          ? "border-amber-200 bg-amber-50/30 text-amber-900"
+                          : "border-teal-200 bg-teal-50 text-teal-700"
                     }`}
                   >
                     <ShieldCheck className="h-5 w-5" aria-hidden="true" />
                   </span>
                   <div className="min-w-0">
-                    <h3 className="text-base font-semibold text-slate-100">Fondasi Operasional</h3>
-                    <p className="text-xs text-slate-500">
+                    <h3 className="text-lg font-bold text-slate-900">Fondasi Operasional</h3>
+                    <p className="text-xs text-slate-600">
                       Inventory, resep, supplier, purchasing, dan sales readiness.
                     </p>
                   </div>
                 </div>
                 <div className="grid grid-cols-4 gap-2 sm:min-w-[420px]">
-                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                    <p className="text-xs text-slate-500">Score</p>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs text-slate-600">Score</p>
                     <p
                       className={`mt-1 text-lg font-semibold tabular-nums ${
                         foundationReadinessTone === "critical"
-                          ? "text-red-200"
+                          ? "text-red-700"
                           : foundationReadinessTone === "warning"
-                            ? "text-amber-100"
-                            : "text-emerald-200"
+                            ? "text-amber-900"
+                            : "text-teal-700"
                       }`}
                     >
                       {foundationReadinessScore}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2">
-                    <p className="text-xs text-red-200/70">Kritis</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-red-200">
+                  <div className="rounded-lg border border-red-200 bg-red-50/30 px-3 py-2">
+                    <p className="text-xs text-red-700/70">Kritis</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-red-700">
                       {formatQtyId(foundationIssueCounts.critical)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2">
-                    <p className="text-xs text-amber-100/70">Waspada</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/30 px-3 py-2">
+                    <p className="text-xs text-amber-900/70">Waspada</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-900">
                       {formatQtyId(foundationIssueCounts.warning)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-slate-700 bg-zinc-950/70 px-3 py-2">
-                    <p className="text-xs text-slate-500">Issue</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs text-slate-600">Issue</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                       {formatQtyId(foundationIssues.length)}
                     </p>
                   </div>
@@ -4383,7 +4597,7 @@ export function MonitoringDashboard() {
               </div>
 
               {foundationIssues.length === 0 ? (
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 text-sm text-emerald-200">
+                <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-3 text-sm text-teal-700">
                   Fondasi data utama sudah siap untuk inventory, purchasing, AI, dan fase POS berikutnya.
                 </div>
               ) : (
@@ -4391,35 +4605,35 @@ export function MonitoringDashboard() {
                   {foundationIssues.slice(0, 6).map((issue) => (
                     <div
                       key={issue.id}
-                      className={`rounded-lg border px-3 py-2.5 ${
+                      className={`rounded-lg border bg-white px-3 py-2.5 shadow-[0_2px_8px_rgba(0,0,0,0.04)] ${
                         issue.severity === "critical"
-                          ? "border-red-500/30 bg-red-500/10"
+                          ? "border-slate-200 border-l-4 border-l-red-500 bg-red-50/30"
                           : issue.severity === "warning"
-                            ? "border-amber-500/30 bg-amber-500/10"
-                            : "border-slate-700 bg-zinc-950/70"
+                            ? "border-slate-200 border-l-4 border-l-amber-500 bg-amber-50/30"
+                            : "border-slate-200 bg-white"
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold text-slate-100">{issue.title}</p>
-                          <p className="mt-1 text-xs leading-snug text-slate-400">{issue.detail}</p>
+                          <p className="text-sm font-semibold text-slate-900">{issue.title}</p>
+                          <p className="mt-1 text-xs leading-snug text-slate-600">{issue.detail}</p>
                         </div>
                         <span
                           className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                             issue.severity === "critical"
-                              ? "bg-red-500/15 text-red-200"
+                              ? "bg-red-100 text-red-700"
                               : issue.severity === "warning"
-                                ? "bg-amber-500/15 text-amber-100"
-                                : "bg-slate-500/15 text-slate-300"
+                                ? "bg-amber-100 text-amber-900"
+                                : "bg-slate-100 text-slate-700"
                           }`}
                         >
                           {FOUNDATION_SEVERITY_LABEL[issue.severity]} · {issue.count}
                         </span>
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                         <span>{issue.area}</span>
                         <span className="text-slate-700">/</span>
-                        <span className="text-slate-300">{issue.actionLabel}</span>
+                        <span className="text-slate-700">{issue.actionLabel}</span>
                       </div>
                     </div>
                   ))}
@@ -4430,15 +4644,15 @@ export function MonitoringDashboard() {
 
           {activeMonitoringTab === "overview" ? (
             <section className="grid gap-4 xl:grid-cols-2">
-              <div className="rounded-xl border border-emerald-500/25 bg-zinc-900/70 p-4 shadow-xl shadow-black/10">
+              <div className="rounded-xl border border-teal-200 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-400/30 bg-emerald-400/10 text-emerald-200">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 text-teal-700">
                       <ShoppingCart className="h-5 w-5" aria-hidden="true" />
                     </span>
                     <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-slate-100">Purchase Order Command</h3>
-                      <p className="text-xs text-slate-500">
+                      <h3 className="text-base font-semibold text-slate-900">Purchase Order Command</h3>
+                      <p className="text-xs text-slate-600">
                         {poExecutiveSummary.supplierReadyCount} supplier siap · {poExecutiveSummary.autoReplenishmentLines} line urgent
                       </p>
                     </div>
@@ -4446,7 +4660,7 @@ export function MonitoringDashboard() {
                   <button
                     type="button"
                     onClick={() => setActiveMonitoringTab("demand")}
-                    className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20"
+                    className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-700 hover:bg-teal-700/20"
                   >
                     <ShoppingCart className="h-3.5 w-3.5" aria-hidden="true" />
                     Demand
@@ -4454,56 +4668,56 @@ export function MonitoringDashboard() {
                 </div>
 
                 <div className="grid gap-2 sm:grid-cols-4">
-                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                    <p className="text-xs text-slate-500">Draft</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs text-slate-600">Draft</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                       {formatQtyId(poExecutiveSummary.draftLines)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2">
-                    <p className="text-xs text-emerald-200/70">Auto PO</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-emerald-200">
+                  <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2">
+                    <p className="text-xs text-teal-700/70">Auto PO</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-teal-700">
                       {formatQtyId(poExecutiveSummary.autoReplenishmentLines)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2">
-                    <p className="text-xs text-amber-100/70">Unassigned</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/30 px-3 py-2">
+                    <p className="text-xs text-amber-900/70">Unassigned</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-900">
                       {formatQtyId(poExecutiveSummary.unassignedLines)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                    <p className="text-xs text-slate-500">Value</p>
-                    <p className="mt-1 truncate text-sm font-semibold tabular-nums text-slate-100">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs text-slate-600">Value</p>
+                    <p className="mt-1 truncate text-sm font-semibold tabular-nums text-slate-900">
                       {formatRupiah(poExecutiveSummary.draftAmount)}
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-3 rounded-lg border border-slate-800 bg-zinc-950/60 px-3 py-2.5">
+                <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-xs text-slate-500">Supplier prioritas</p>
-                      <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                      <p className="text-xs text-slate-600">Supplier prioritas</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-slate-900">
                         {poExecutiveSummary.topSupplier?.name ?? "Belum ada supplier urgent"}
                       </p>
                     </div>
-                    <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold tabular-nums text-emerald-200">
+                    <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-teal-700">
                       {formatQtyId(poExecutiveSummary.topSupplier?.lines ?? 0)} bahan
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-red-500/25 bg-zinc-900/70 p-4 shadow-xl shadow-black/10">
+              <div className="rounded-xl border border-red-200 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-red-400/30 bg-red-400/10 text-red-200">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-red-400/30 bg-red-400/10 text-red-700">
                       <MessageSquareWarning className="h-5 w-5" aria-hidden="true" />
                     </span>
                     <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-slate-100">Complaint Quality Board</h3>
-                      <p className="text-xs text-slate-500">
+                      <h3 className="text-base font-semibold text-slate-900">Complaint Quality Board</h3>
+                      <p className="text-xs text-slate-600">
                         {complaintSummary.recordCount} catatan · {complaintSummary.evidenceCount} evidence foto
                       </p>
                     </div>
@@ -4511,7 +4725,7 @@ export function MonitoringDashboard() {
                   <button
                     type="button"
                     onClick={() => setActiveMonitoringTab("control")}
-                    className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200 hover:bg-red-500/20"
+                    className="inline-flex min-h-9 shrink-0 items-center gap-2 rounded-lg border border-red-200 bg-red-50/30 px-3 text-xs font-semibold text-red-700 hover:bg-red-100"
                   >
                     <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
                     Complaint
@@ -4519,48 +4733,48 @@ export function MonitoringDashboard() {
                 </div>
 
                 <div className="grid gap-2 sm:grid-cols-4">
-                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2">
-                    <p className="text-xs text-red-200/70">Qty</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-red-200">
+                  <div className="rounded-lg border border-red-200 bg-red-50/30 px-3 py-2">
+                    <p className="text-xs text-red-700/70">Qty</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-red-700">
                       {formatQtyId(complaintSummary.totalQty)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                    <p className="text-xs text-slate-500">Bar</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs text-slate-600">Bar</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                       {formatQtyId(complaintSummary.barQty)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                    <p className="text-xs text-slate-500">Kitchen</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <p className="text-xs text-slate-600">Kitchen</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                       {formatQtyId(complaintSummary.kitchenQty)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2">
-                    <p className="text-xs text-amber-100/70">Evidence</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/30 px-3 py-2">
+                    <p className="text-xs text-amber-900/70">Evidence</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-amber-900">
                       {formatQtyId(complaintSummary.evidenceCount)}
                     </p>
                   </div>
                 </div>
 
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-lg border border-slate-800 bg-zinc-950/60 px-3 py-2.5">
-                    <p className="text-xs text-slate-500">Menu paling sering</p>
-                    <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                    <p className="text-xs text-slate-600">Menu paling sering</p>
+                    <p className="mt-1 truncate text-sm font-semibold text-slate-900">
                       {complaintSummary.topMenu?.name ?? "Belum ada complaint"}
                     </p>
-                    <p className="mt-1 text-xs tabular-nums text-red-200">
+                    <p className="mt-1 text-xs tabular-nums text-red-700">
                       {formatQtyId(complaintSummary.topMenu?.qty ?? 0)} qty
                     </p>
                   </div>
-                  <div className="rounded-lg border border-slate-800 bg-zinc-950/60 px-3 py-2.5">
-                    <p className="text-xs text-slate-500">Alasan dominan</p>
-                    <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                    <p className="text-xs text-slate-600">Alasan dominan</p>
+                    <p className="mt-1 truncate text-sm font-semibold text-slate-900">
                       {complaintSummary.topReason?.label ?? "Belum ada alasan"}
                     </p>
-                    <p className="mt-1 text-xs tabular-nums text-amber-100">
+                    <p className="mt-1 text-xs tabular-nums text-amber-900">
                       {formatQtyId(complaintSummary.topReason?.qty ?? 0)} qty
                     </p>
                   </div>
@@ -4576,7 +4790,7 @@ export function MonitoringDashboard() {
             <StatusIndicator
               label="Spillage Alert"
               active={hasSpillageAlert}
-              activeClassName="bg-red-500"
+              activeClassName="bg-red-600"
               detail={
                 hasSpillageAlert
                   ? "Pemakaian rusak/basi staf melebihi ambang 15% pemakaian teori dalam rentang terpilih."
@@ -4588,7 +4802,7 @@ export function MonitoringDashboard() {
             <StatusIndicator
               label="Live COGS Monitor"
               active={cogsAlerts.length > 0}
-              activeClassName="bg-amber-500"
+              activeClassName="bg-amber-600"
               detail={
                 cogsAlerts.length > 0
                   ? `${cogsAlerts.length} bahan mengalami kenaikan harga supplier.`
@@ -4598,7 +4812,7 @@ export function MonitoringDashboard() {
             <StatusIndicator
               label="Stock Runway"
               active={runwayEntries.some((r) => r.urgency !== "safe")}
-              activeClassName="bg-orange-500"
+              activeClassName="bg-amber-600"
               detail={
                 runwayEntries.length > 0
                   ? runwayEntries
@@ -4620,8 +4834,8 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "overview" && cogsAlerts.length > 0 && (
-            <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
-              <div className="mb-3 flex items-center gap-2 text-amber-200">
+            <section className="rounded-xl border border-amber-200 bg-amber-50/30 p-4">
+              <div className="mb-3 flex items-center gap-2 text-amber-900">
                 <TrendingUp className="h-4 w-4" />
                 <h3 className="text-sm font-semibold">Fluktuasi HPP — Kenaikan Harga Supplier</h3>
               </div>
@@ -4629,10 +4843,10 @@ export function MonitoringDashboard() {
                 {cogsAlerts.map((alert) => (
                   <li
                     key={alert.ingredientName}
-                    className="flex items-center justify-between rounded-lg border border-slate-800 bg-zinc-950/80 px-3 py-2 text-sm"
+                    className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
                   >
-                    <span className="text-slate-200">{alert.ingredientName}</span>
-                    <span className="tabular-nums text-amber-300">
+                    <span className="text-slate-800">{alert.ingredientName}</span>
+                    <span className="tabular-nums text-amber-900">
                       {formatRupiah(alert.previousPrice)} → {formatRupiah(alert.currentPrice)} (
                       +{alert.changePercent.toFixed(1)}%)
                     </span>
@@ -4643,14 +4857,14 @@ export function MonitoringDashboard() {
           )}
 
           {activeMonitoringTab === "overview" && runwayEntries.length > 0 && (
-            <section className="rounded-xl border border-slate-800 bg-zinc-900/50 p-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2">
-                  <Package className="h-4 w-4 text-slate-400" />
-                  <h3 className="text-sm font-semibold text-slate-200">Stock Runway Calculator</h3>
-                  <span className="text-xs text-slate-500">(per {formatBusinessDateLabel(endDate)})</span>
+                  <Package className="h-4 w-4 text-slate-600" />
+                  <h3 className="text-sm font-semibold text-slate-800">Stock Runway Calculator</h3>
+                  <span className="text-xs text-slate-600">(per {formatBusinessDateLabel(endDate)})</span>
                 </div>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-600">
                   {runwaySource || "Sumber belum tersedia."}
                 </p>
               </div>
@@ -4660,10 +4874,10 @@ export function MonitoringDashboard() {
                     key={entry.ingredientName}
                     className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${
                       entry.urgency === "critical"
-                        ? "bg-red-500/15 text-red-300 ring-red-500/40"
+                        ? "bg-red-100 text-red-700 ring-red-200"
                         : entry.urgency === "warning"
-                          ? "bg-amber-500/15 text-amber-200 ring-amber-500/40"
-                          : "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
+                          ? "bg-amber-100 text-amber-900 ring-amber-200"
+                          : "bg-teal-50 text-teal-700 ring-emerald-500/30"
                     }`}
                   >
                     <span className="font-semibold">{entry.ingredientName}</span>{" "}
@@ -4682,35 +4896,35 @@ export function MonitoringDashboard() {
             </section>
           )}
           {activeMonitoringTab === "control" ? (
-            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-red-300" />
+                  <AlertTriangle className="h-4 w-4 text-red-700" />
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-200">Complaint Tamu Report</h3>
-                    <p className="mt-0.5 text-xs text-slate-500">
+                    <h3 className="text-sm font-semibold text-slate-800">Complaint Tamu Report</h3>
+                    <p className="mt-0.5 text-xs text-slate-600">
                       Hanya baris dengan alasan Complaint tamu.
                     </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
                     {filteredComplaintRows.length} catatan
                   </span>
                   <button
                     type="button"
                     onClick={() => void handleExportComplaint()}
                     disabled={filteredComplaintRows.length === 0}
-                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 text-xs font-semibold text-red-200 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50/30 px-3 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <Download className="h-3.5 w-3.5" aria-hidden="true" />
                     XLSX Complaint
                   </button>
                 </div>
               </div>
-              <div className="overflow-x-auto rounded-lg border border-slate-800">
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
                 <table className="w-full min-w-[860px] text-left text-sm">
-                  <thead className="bg-zinc-950 text-slate-400">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
                     <tr>
                       <th className="px-3 py-2 font-medium">Tanggal</th>
                       <th className="px-3 py-2 font-medium">Dept</th>
@@ -4721,10 +4935,10 @@ export function MonitoringDashboard() {
                       <th className="px-3 py-2 font-medium">Foto</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/80">
+                  <tbody className="divide-y divide-slate-100">
                     {filteredComplaintRows.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                        <td colSpan={7} className="px-3 py-6 text-center text-slate-600">
                           Belum ada complaint tamu dalam rentang ini.
                         </td>
                       </tr>
@@ -4732,17 +4946,17 @@ export function MonitoringDashboard() {
                       filteredComplaintRows.slice(0, 40).map((row) => {
                         const photoUrls = splitStoredPhotoUrls(row.photoUrl);
                         return (
-                          <tr key={row.id} className="hover:bg-zinc-950/50">
-                            <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                          <tr key={row.id} className="hover:bg-slate-50/80">
+                            <td className="whitespace-nowrap px-3 py-2 text-xs font-medium text-slate-900">
                               {formatBusinessDateLabel(row.businessDate)}
                             </td>
-                            <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
-                            <td className="px-3 py-2 text-slate-100">{row.menuName}</td>
-                            <td className="px-3 py-2 text-right tabular-nums text-red-200">
+                            <td className="px-3 py-2 font-medium capitalize text-slate-900">{row.department}</td>
+                            <td className="px-3 py-2 text-slate-900">{row.menuName}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-red-700">
                               {formatQtyId(row.quantity)}
                             </td>
-                            <td className="px-3 py-2 text-amber-200">{row.reasonLabel}</td>
-                            <td className="max-w-xs px-3 py-2 text-slate-400">
+                            <td className="px-3 py-2 text-amber-900">{row.reasonLabel}</td>
+                            <td className="max-w-xs px-3 py-2 text-slate-600">
                               {row.note || "-"}
                             </td>
                             <td className="px-3 py-2">
@@ -4754,7 +4968,111 @@ export function MonitoringDashboard() {
                                       href={photoUrl}
                                       target="_blank"
                                       rel="noreferrer"
-                                      className="text-indigo-300 underline decoration-indigo-500/40 underline-offset-4"
+                                      className="text-teal-700 underline decoration-teal-300 underline-offset-4"
+                                    >
+                                      Foto {index + 1}
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-slate-600">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+          {activeMonitoringTab === "control" ? (
+            <section className="rounded-xl border border-amber-200 bg-white p-4">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-amber-900" />
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-800">Remake Service Audit</h3>
+                    <p className="mt-0.5 text-xs text-slate-600">
+                      Remake human error yang masuk potongan service.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-xs tabular-nums text-amber-900">
+                    {filteredRemakeServiceRows.length} catatan
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleExportRemakeService()}
+                    disabled={filteredRemakeServiceRows.length === 0}
+                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-amber-200 bg-amber-50/30 px-3 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    XLSX Remake
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full min-w-[980px] text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Tanggal</th>
+                      <th className="px-3 py-2 font-medium">Dept</th>
+                      <th className="px-3 py-2 font-medium">Menu</th>
+                      <th className="px-3 py-2 text-right font-medium">Qty</th>
+                      <th className="px-3 py-2 font-medium">Alasan</th>
+                      <th className="px-3 py-2 font-medium">Target Potongan</th>
+                      <th className="px-3 py-2 font-medium">Catatan</th>
+                      <th className="px-3 py-2 font-medium">Foto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredRemakeServiceRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="px-3 py-6 text-center text-slate-600">
+                          Belum ada remake human error dalam rentang ini.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredRemakeServiceRows.slice(0, 40).map((row) => {
+                        const photoUrls = splitStoredPhotoUrls(row.photoUrl);
+                        return (
+                          <tr key={row.id} className="hover:bg-slate-50/80">
+                            <td className="whitespace-nowrap px-3 py-2 text-xs font-medium text-slate-900">
+                              {formatBusinessDateLabel(row.businessDate)}
+                            </td>
+                            <td className="px-3 py-2 font-medium capitalize text-slate-900">{row.department}</td>
+                            <td className="px-3 py-2 text-slate-900">{row.menuName}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-amber-900">
+                              {formatQtyId(row.quantity)}
+                            </td>
+                            <td className="px-3 py-2 text-amber-900">{row.reasonLabel}</td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                                  row.lossResponsibilityScope === "staff"
+                                    ? "bg-red-50/30 text-red-700"
+                                    : "bg-amber-50/30 text-amber-900"
+                                }`}
+                              >
+                                {row.deductionTargetLabel}
+                              </span>
+                            </td>
+                            <td className="max-w-xs px-3 py-2 text-slate-600">
+                              {row.note || "-"}
+                            </td>
+                            <td className="px-3 py-2">
+                              {photoUrls.length > 0 ? (
+                                <div className="flex flex-wrap gap-2">
+                                  {photoUrls.map((photoUrl, index) => (
+                                    <a
+                                      key={`${photoUrl}-${index}`}
+                                      href={photoUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-teal-700 underline decoration-teal-300 underline-offset-4"
                                     >
                                       Foto {index + 1}
                                     </a>
@@ -4782,7 +5100,7 @@ export function MonitoringDashboard() {
               title="Sales Contributor Beverages"
               items={filteredTopBeverages}
               unitLabel="cup"
-              barColorClass="bg-indigo-500"
+              barColorClass="bg-teal-600"
               emptyLabel={
                 isSingleDayRange
                   ? "Belum ada penjualan minuman tercatat hari ini."
@@ -4793,7 +5111,7 @@ export function MonitoringDashboard() {
               title="Sales Contributor Foods"
               items={filteredTopFoods}
               unitLabel="porsi"
-              barColorClass="bg-amber-500"
+              barColorClass="bg-amber-600"
               emptyLabel={
                 isSingleDayRange
                   ? "Belum ada penjualan makanan tercatat hari ini."
@@ -4804,15 +5122,15 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "overview" || activeMonitoringTab === "demand" ? (
-            <section className="rounded-xl border border-cyan-500/30 bg-zinc-900/60 p-4">
+            <section className="rounded-xl border border-teal-200 bg-white p-4">
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 text-teal-700">
                     <Sparkles className="h-5 w-5" aria-hidden="true" />
                   </span>
                   <div className="min-w-0">
-                    <h3 className="text-base font-semibold text-slate-100">AI Inventory Intelligence</h3>
-                    <p className="text-xs text-slate-500">
+                    <h3 className="text-base font-semibold text-slate-900">AI Inventory Intelligence</h3>
+                    <p className="text-xs text-slate-600">
                       {aiAnalyzeDataContext.length} bahan - {DEMAND_SCENARIO_LABEL[demandScenario]} - coverage{" "}
                       {coverageDays} hari
                     </p>
@@ -4822,7 +5140,7 @@ export function MonitoringDashboard() {
                   type="button"
                   onClick={() => void handleRunAiAnalyze()}
                   disabled={aiAnalyzeLoading || aiAnalyzeDataContext.length === 0}
-                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 text-sm font-semibold text-teal-700 transition hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {aiAnalyzeLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -4834,7 +5152,7 @@ export function MonitoringDashboard() {
               </div>
 
               {aiAnalyzeError ? (
-                <p className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                <p className="mb-3 rounded-lg border border-red-200 bg-red-50/30 px-3 py-2 text-sm text-red-700">
                   {aiAnalyzeError}
                 </p>
               ) : null}
@@ -4842,27 +5160,27 @@ export function MonitoringDashboard() {
               {aiAnalyzeResult ? (
                 <div aria-live="polite">
                   <div className="mb-4 grid gap-2 sm:grid-cols-4">
-                    <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                      <p className="text-xs text-slate-500">Produk</p>
-                      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-100">
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <p className="text-xs text-slate-600">Produk</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                         {formatQtyId(aiAnalyzeResult.summary.total_products)}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
-                      <p className="text-xs text-emerald-200/70">Fast moving</p>
-                      <p className="mt-1 text-lg font-semibold tabular-nums text-emerald-200">
+                    <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2">
+                      <p className="text-xs text-teal-700/70">Fast moving</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-teal-700">
                         {formatQtyId(aiAnalyzeResult.summary.fast_moving_count)}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
-                      <p className="text-xs text-amber-100/70">Low moving</p>
-                      <p className="mt-1 text-lg font-semibold tabular-nums text-amber-100">
+                    <div className="rounded-lg border border-amber-200 bg-amber-50/30 px-3 py-2">
+                      <p className="text-xs text-amber-900/70">Low moving</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-amber-900">
                         {formatQtyId(aiAnalyzeResult.summary.low_moving_count)}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2">
-                      <p className="text-xs text-red-200/70">Stok kritis</p>
-                      <p className="mt-1 text-lg font-semibold tabular-nums text-red-200">
+                    <div className="rounded-lg border border-red-200 bg-red-50/30 px-3 py-2">
+                      <p className="text-xs text-red-700/70">Stok kritis</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-red-700">
                         {formatQtyId(aiAnalyzeResult.summary.critical_stock_count)}
                       </p>
                     </div>
@@ -4871,9 +5189,9 @@ export function MonitoringDashboard() {
                   <div className="grid gap-4 xl:grid-cols-3">
                     <div className="min-w-0">
                       <div className="mb-2 flex items-center justify-between gap-2">
-                        <h4 className="text-sm font-semibold text-slate-100">PO Prioritas</h4>
+                        <h4 className="text-sm font-semibold text-slate-900">PO Prioritas</h4>
                         <div className="flex shrink-0 items-center gap-2">
-                          <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+                          <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
                             {aiAnalyzeResult.purchase_orders.length}
                           </span>
                           {activeMonitoringTab === "demand" && canEdit ? (
@@ -4886,7 +5204,7 @@ export function MonitoringDashboard() {
                                 supplierCatalog.length === 0 ||
                                 aiAnalyzeResult.purchase_orders.length === 0
                               }
-                              className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                              className="inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-700 hover:bg-teal-700/20 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <ShoppingCart className="h-3.5 w-3.5" aria-hidden="true" />
                               Ke Draft
@@ -4894,30 +5212,30 @@ export function MonitoringDashboard() {
                           ) : null}
                         </div>
                       </div>
-                      <div className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-zinc-950/60">
+                      <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
                         {aiAnalyzeResult.purchase_orders.length === 0 ? (
-                          <p className="px-3 py-4 text-sm text-slate-500">Belum ada rekomendasi PO.</p>
+                          <p className="px-3 py-4 text-sm text-slate-600">Belum ada rekomendasi PO.</p>
                         ) : (
                           aiAnalyzeResult.purchase_orders.slice(0, 5).map((item, index) => (
                             <div key={`${item.product_id ?? item.product_name}-${index}`} className="px-3 py-2.5">
                               <div className="flex items-start justify-between gap-3">
-                                <p className="min-w-0 text-sm font-medium text-slate-100">{item.product_name}</p>
+                                <p className="min-w-0 text-sm font-medium text-slate-900">{item.product_name}</p>
                                 <span
                                   className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                                     item.priority === "high"
-                                      ? "bg-red-500/15 text-red-200"
+                                      ? "bg-red-100 text-red-700"
                                       : item.priority === "medium"
-                                        ? "bg-amber-500/15 text-amber-100"
-                                        : "bg-slate-500/15 text-slate-300"
+                                        ? "bg-amber-100 text-amber-900"
+                                        : "bg-slate-100 text-slate-700"
                                   }`}
                                 >
                                   {AI_ANALYZE_PRIORITY_LABEL[item.priority]}
                                 </span>
                               </div>
-                              <p className="mt-1 text-xs text-emerald-200">
+                              <p className="mt-1 text-xs text-teal-700">
                                 Qty {formatQtyId(item.recommended_qty)}
                               </p>
-                              <p className="mt-1 text-xs leading-snug text-slate-400">{item.reason}</p>
+                              <p className="mt-1 text-xs leading-snug text-slate-600">{item.reason}</p>
                             </div>
                           ))
                         )}
@@ -4926,35 +5244,35 @@ export function MonitoringDashboard() {
 
                     <div className="min-w-0">
                       <div className="mb-2 flex items-center justify-between gap-2">
-                        <h4 className="text-sm font-semibold text-slate-100">Kontrol Inventory</h4>
-                        <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+                        <h4 className="text-sm font-semibold text-slate-900">Kontrol Inventory</h4>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
                           {aiAnalyzeResult.inventory_control.length}
                         </span>
                       </div>
-                      <div className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-zinc-950/60">
+                      <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
                         {aiAnalyzeResult.inventory_control.length === 0 ? (
-                          <p className="px-3 py-4 text-sm text-slate-500">Belum ada risiko inventory.</p>
+                          <p className="px-3 py-4 text-sm text-slate-600">Belum ada risiko inventory.</p>
                         ) : (
                           aiAnalyzeResult.inventory_control.slice(0, 5).map((item, index) => (
                             <div key={`${item.product_id ?? item.product_name}-${index}`} className="px-3 py-2.5">
                               <div className="flex items-start justify-between gap-3">
-                                <p className="min-w-0 text-sm font-medium text-slate-100">{item.product_name}</p>
+                                <p className="min-w-0 text-sm font-medium text-slate-900">{item.product_name}</p>
                                 <span
                                   className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                                     item.risk_level === "high"
-                                      ? "bg-red-500/15 text-red-200"
+                                      ? "bg-red-100 text-red-700"
                                       : item.risk_level === "medium"
-                                        ? "bg-amber-500/15 text-amber-100"
-                                        : "bg-emerald-500/15 text-emerald-200"
+                                        ? "bg-amber-100 text-amber-900"
+                                        : "bg-teal-50 text-teal-700"
                                   }`}
                                 >
                                   {AI_ANALYZE_RISK_LABEL[item.risk_level]}
                                 </span>
                               </div>
-                              <p className="mt-1 text-xs text-slate-500">
+                              <p className="mt-1 text-xs text-slate-600">
                                 Stok {item.current_stock === null ? "-" : formatQtyId(item.current_stock)}
                               </p>
-                              <p className="mt-1 text-xs leading-snug text-slate-400">{item.recommended_action}</p>
+                              <p className="mt-1 text-xs leading-snug text-slate-600">{item.recommended_action}</p>
                             </div>
                           ))
                         )}
@@ -4963,30 +5281,30 @@ export function MonitoringDashboard() {
 
                     <div className="min-w-0">
                       <div className="mb-2 flex items-center justify-between gap-2">
-                        <h4 className="text-sm font-semibold text-slate-100">Movement Produk</h4>
-                        <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+                        <h4 className="text-sm font-semibold text-slate-900">Movement Produk</h4>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
                           {aiAnalyzeResult.product_classification.length}
                         </span>
                       </div>
-                      <div className="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-zinc-950/60">
+                      <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
                         {aiAnalyzeResult.product_classification.length === 0 ? (
-                          <p className="px-3 py-4 text-sm text-slate-500">Belum ada klasifikasi movement.</p>
+                          <p className="px-3 py-4 text-sm text-slate-600">Belum ada klasifikasi movement.</p>
                         ) : (
                           aiAnalyzeResult.product_classification.slice(0, 5).map((item, index) => (
                             <div key={`${item.product_id ?? item.product_name}-${index}`} className="px-3 py-2.5">
                               <div className="flex items-start justify-between gap-3">
-                                <p className="min-w-0 text-sm font-medium text-slate-100">{item.product_name}</p>
+                                <p className="min-w-0 text-sm font-medium text-slate-900">{item.product_name}</p>
                                 <span
                                   className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                                     item.classification === "fast_moving"
-                                      ? "bg-emerald-500/15 text-emerald-200"
-                                      : "bg-amber-500/15 text-amber-100"
+                                      ? "bg-teal-50 text-teal-700"
+                                      : "bg-amber-100 text-amber-900"
                                   }`}
                                 >
                                   {AI_ANALYZE_CLASSIFICATION_LABEL[item.classification]}
                                 </span>
                               </div>
-                              <p className="mt-1 text-xs leading-snug text-slate-400">{item.reason}</p>
+                              <p className="mt-1 text-xs leading-snug text-slate-600">{item.reason}</p>
                             </div>
                           ))
                         )}
@@ -4995,7 +5313,7 @@ export function MonitoringDashboard() {
                   </div>
                 </div>
               ) : (
-                <div className="rounded-lg border border-dashed border-slate-700 bg-zinc-950/50 px-3 py-4 text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
                   Siap membaca demand planning {dateRangeLabel}.
                 </div>
               )}
@@ -5003,11 +5321,11 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "demand" ? (
-            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h3 className="text-base font-semibold text-slate-100">Demand Event Calendar</h3>
-                  <p className="text-xs text-slate-500">
+                  <h3 className="text-base font-semibold text-slate-900">Demand Event Calendar</h3>
+                  <p className="text-xs text-slate-600">
                     Catat promo/KOL/libur, lalu cek expected uplift vs actual uplift setelah event berjalan.
                   </p>
                 </div>
@@ -5017,7 +5335,7 @@ export function MonitoringDashboard() {
                       type="button"
                       disabled={holidaySyncing}
                       onClick={() => void handleSyncNationalHolidays()}
-                      className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-700 bg-zinc-950 px-3 text-xs font-semibold text-slate-200 hover:border-indigo-400 hover:text-indigo-200 disabled:opacity-50"
+                      className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 hover:border-teal-200 hover:text-teal-700 disabled:opacity-50"
                     >
                       {holidaySyncing ? (
                         <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -5027,7 +5345,7 @@ export function MonitoringDashboard() {
                       {holidaySyncing ? "Sync..." : "Sync Libur Nasional"}
                     </button>
                   ) : null}
-                  <span className="rounded-full bg-zinc-950 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                  <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
                     {filteredDemandEvents.length} event
                   </span>
                 </div>
@@ -5037,8 +5355,8 @@ export function MonitoringDashboard() {
                 <p
                   className={`mb-3 rounded-lg border px-3 py-2 text-sm ${
                     eventNotice.variant === "success"
-                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-                      : "border-red-500/40 bg-red-500/10 text-red-300"
+                      ? "border-teal-200 bg-teal-50 text-teal-700"
+                      : "border-red-200 bg-red-50/30 text-red-700"
                   }`}
                 >
                   {eventNotice.message}
@@ -5046,22 +5364,22 @@ export function MonitoringDashboard() {
               ) : null}
 
               {canEdit ? (
-                <div className="mb-4 grid gap-3 rounded-xl border border-slate-800 bg-zinc-950/60 p-3 lg:grid-cols-[1.2fr_0.9fr_0.8fr_0.8fr_0.7fr]">
+                <div className="mb-4 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-2 xl:grid-cols-5">
                   <label className="block">
-                    <span className="mb-1 block text-xs text-slate-500">Nama event</span>
+                    <span className="mb-1 block text-xs text-slate-600">Nama event</span>
                     <input
                       value={eventForm.title}
                       onChange={(e) => handleEventFormChange({ title: e.target.value })}
                       placeholder="Contoh: KOL TikTok weekend"
-                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100 placeholder:text-slate-600"
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900 placeholder:text-slate-400"
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-xs text-slate-500">Tipe</span>
+                    <span className="mb-1 block text-xs text-slate-600">Tipe</span>
                     <select
                       value={eventForm.eventType}
                       onChange={(e) => handleEventFormChange({ eventType: e.target.value })}
-                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900"
                     >
                       {Object.entries(DEMAND_EVENT_TYPE_LABEL).map(([value, label]) => (
                         <option key={value} value={value}>
@@ -5071,13 +5389,13 @@ export function MonitoringDashboard() {
                     </select>
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-xs text-slate-500">Dept target</span>
+                    <span className="mb-1 block text-xs text-slate-600">Dept target</span>
                     <select
                       value={eventForm.department}
                       onChange={(e) =>
                         handleEventFormChange({ department: e.target.value as "" | Department })
                       }
-                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900"
                     >
                       <option value="">Semua</option>
                       <option value="bar">Bar</option>
@@ -5085,55 +5403,55 @@ export function MonitoringDashboard() {
                     </select>
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-xs text-slate-500">Mulai</span>
+                    <span className="mb-1 block text-xs text-slate-600">Mulai</span>
                     <input
                       type="date"
                       value={eventForm.startDate}
                       onChange={(e) => handleEventFormChange({ startDate: e.target.value })}
-                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900"
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-xs text-slate-500">Selesai</span>
+                    <span className="mb-1 block text-xs text-slate-600">Selesai</span>
                     <input
                       type="date"
                       value={eventForm.endDate}
                       onChange={(e) => handleEventFormChange({ endDate: e.target.value })}
-                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100"
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900"
                     />
                   </label>
                   <label className="block lg:col-span-2">
-                    <span className="mb-1 block text-xs text-slate-500">Expected uplift %</span>
+                    <span className="mb-1 block text-xs text-slate-600">Expected uplift %</span>
                     <input
                       type="number"
                       value={eventForm.expectedUpliftPct}
                       onChange={(e) => handleEventFormChange({ expectedUpliftPct: e.target.value })}
-                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm tabular-nums text-slate-100"
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm tabular-nums text-slate-900"
                     />
                   </label>
                   <label className="block lg:col-span-2">
-                    <span className="mb-1 block text-xs text-slate-500">Catatan</span>
+                    <span className="mb-1 block text-xs text-slate-600">Catatan</span>
                     <input
                       value={eventForm.notes}
                       onChange={(e) => handleEventFormChange({ notes: e.target.value })}
                       placeholder="Contoh: fokus beverage, Reels IG, voucher 20%"
-                      className="min-h-10 w-full rounded-lg border border-slate-800 bg-zinc-900 px-3 text-sm text-slate-100 placeholder:text-slate-600"
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900 placeholder:text-slate-400"
                     />
                   </label>
                   <button
                     type="button"
                     disabled={eventSaving}
                     onClick={() => void handleSaveDemandEvent()}
-                    className="min-h-10 self-end rounded-lg bg-indigo-600 px-3 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                    className="min-h-10 self-end rounded-lg bg-teal-600 px-3 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
                   >
                     {eventSaving ? "Menyimpan..." : "Simpan Event"}
                   </button>
                 </div>
               ) : null}
 
-              <div className="overflow-x-auto rounded-lg border border-slate-800">
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
                 <table className="w-full min-w-[940px] text-left text-sm">
-                  <thead className="bg-zinc-950 text-slate-400">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
                     <tr>
                       <th className="px-3 py-2 font-medium">Event</th>
                       <th className="px-3 py-2 font-medium">Periode</th>
@@ -5145,51 +5463,51 @@ export function MonitoringDashboard() {
                       <th className="px-3 py-2 font-medium">Status</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/80">
+                  <tbody className="divide-y divide-slate-100">
                     {filteredDemandEvents.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
+                        <td colSpan={8} className="px-3 py-6 text-center text-slate-600">
                           Belum ada demand event dalam rentang ini.
                         </td>
                       </tr>
                     ) : (
                       filteredDemandEvents.slice(0, 20).map((event) => (
-                        <tr key={event.id} className="hover:bg-zinc-950/50">
+                        <tr key={event.id} className="hover:bg-slate-50/80">
                           <td className="px-3 py-2">
                             <span className="flex flex-col">
-                              <span className="font-medium text-slate-100">{event.title}</span>
-                              <span className="text-xs text-slate-500">
+                              <span className="font-medium text-slate-900">{event.title}</span>
+                              <span className="text-xs text-slate-600">
                                 {DEMAND_EVENT_TYPE_LABEL[event.event_type] ?? event.event_type}
                                 {event.notes ? ` · ${event.notes}` : ""}
                               </span>
                             </span>
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                          <td className="whitespace-nowrap px-3 py-2 text-xs font-medium text-slate-900">
                             {formatBusinessDateLabel(event.start_date)} s/d {formatBusinessDateLabel(event.end_date)}
                           </td>
-                          <td className="px-3 py-2 capitalize text-slate-400">{event.department ?? "semua"}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-indigo-200">
+                          <td className="px-3 py-2 font-medium capitalize text-slate-900">{event.department ?? "semua"}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-teal-700">
                             +{Number(event.expected_uplift_pct).toFixed(0)}%
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                          <td className="px-3 py-2 text-right font-medium tabular-nums text-slate-900">
                             {formatQtyId(event.baselineQty)}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-slate-100">
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-900">
                             {formatQtyId(event.eventQty)}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums text-emerald-200">
+                          <td className="px-3 py-2 text-right tabular-nums text-teal-700">
                             {event.actualUpliftPct === null ? "-" : `${event.actualUpliftPct.toFixed(1)}%`}
                           </td>
                           <td className="px-3 py-2">
                             <span
                               className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
                                 event.effectiveness === "effective"
-                                  ? "bg-emerald-500/15 text-emerald-300"
+                                  ? "bg-teal-50 text-teal-700"
                                   : event.effectiveness === "underperform"
-                                    ? "bg-red-500/15 text-red-300"
+                                    ? "bg-red-100 text-red-700"
                                     : event.effectiveness === "pending"
-                                      ? "bg-indigo-500/15 text-indigo-300"
-                                      : "bg-slate-500/15 text-slate-300"
+                                      ? "bg-teal-50 text-teal-700"
+                                      : "bg-slate-100 text-slate-700"
                               }`}
                             >
                               {event.effectiveness === "effective"
@@ -5211,13 +5529,13 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "demand" ? (
-          <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
               <div>
-                <h3 className="text-base font-semibold text-slate-100">
+                <h3 className="text-base font-semibold text-slate-900">
                   Sales-Based Demand Planning
                 </h3>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-600">
                   Pemakaian bahan 7 hari terakhir dihitung dari sales menu × resep. Rekomendasi order
                   mengikuti skenario demand dan target coverage PO.
                 </p>
@@ -5232,8 +5550,8 @@ export function MonitoringDashboard() {
                       onClick={() => setDemandScenario(scenario)}
                       className={`min-h-10 rounded-lg border px-3 text-sm font-semibold transition ${
                         active
-                          ? "border-indigo-500 bg-indigo-600 text-white"
-                          : "border-slate-700 bg-zinc-950 text-slate-300 hover:border-indigo-500/60 hover:text-indigo-200"
+                          ? "border-teal-200 bg-teal-50 text-teal-700"
+                          : "border-slate-200 bg-white text-slate-700 hover:border-teal-200 hover:text-teal-700"
                       }`}
                     >
                       {DEMAND_SCENARIO_LABEL[scenario]} ×
@@ -5245,7 +5563,7 @@ export function MonitoringDashboard() {
                   type="button"
                   onClick={() => void handleExportDemandPlanning()}
                   disabled={demandPlanningRows.length === 0}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-emerald-500/50 bg-emerald-600/15 px-3 text-sm font-semibold text-emerald-200 hover:bg-emerald-600/25 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex min-h-10 items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 text-sm font-semibold text-teal-700 transition-all hover:bg-teal-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Download className="h-4 w-4" />
                   Export Demand
@@ -5254,30 +5572,30 @@ export function MonitoringDashboard() {
             </div>
 
             <div className="mb-3 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Basis data</p>
-                <p className="mt-1 text-sm font-semibold text-slate-200">
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-slate-600">Basis data</p>
+                <p className="mt-1 text-sm font-semibold text-slate-800">
                   {formatBusinessDateLabel(demandDateKeys[0])} s/d{" "}
                   {formatBusinessDateLabel(demandDateKeys[demandDateKeys.length - 1])}
                 </p>
               </div>
-              <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Skenario</p>
-                <p className="mt-1 text-sm font-semibold text-indigo-200">
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-slate-600">Skenario</p>
+                <p className="mt-1 text-sm font-semibold text-teal-700">
                   {DEMAND_SCENARIO_LABEL[demandScenario]} ×{demandMultiplier.toLocaleString("id-ID")}
                 </p>
               </div>
-              <div className="rounded-lg border border-slate-800 bg-zinc-950/70 px-3 py-2">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Coverage</p>
-                <p className="mt-1 text-sm font-semibold text-emerald-200">
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-slate-600">Coverage</p>
+                <p className="mt-1 text-sm font-semibold text-teal-700">
                   {coverageDays} hari operasional
                 </p>
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-slate-800">
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
               <table className="w-full min-w-[1120px] text-left text-sm">
-                <thead className="bg-zinc-950 text-slate-400">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
                   <tr>
                     <th className="px-3 py-2 font-medium">Bahan</th>
                     <th className="px-3 py-2 font-medium">Dept</th>
@@ -5293,45 +5611,45 @@ export function MonitoringDashboard() {
                     <th className="px-3 py-2 text-right font-medium">Rekomendasi Order</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/80">
+                <tbody className="divide-y divide-slate-100">
                   {demandPlanningRows.length === 0 ? (
                     <tr>
-                      <td colSpan={14} className="px-3 py-8 text-center text-slate-500">
+                      <td colSpan={14} className="px-3 py-8 text-center text-slate-600">
                         Belum ada pemakaian bahan dari sales menu dalam 7 hari terakhir.
                       </td>
                     </tr>
                   ) : (
                     demandPlanningRows.slice(0, 30).map((row) => (
-                      <tr key={row.ingredientId} className="hover:bg-zinc-950/50">
-                        <td className="px-3 py-2 text-slate-100">
+                      <tr key={row.ingredientId} className="hover:bg-slate-50/80">
+                        <td className="px-3 py-2 text-slate-900">
                           <span className="flex flex-col">
                             <span>{row.ingredientName}</span>
-                            <span className="text-[10px] text-slate-500">
+                            <span className="text-[10px] text-slate-600">
                               Supplier: {row.supplierName || "Belum ada"}
                             </span>
                           </span>
                         </td>
-                        <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
+                        <td className="px-3 py-2 font-medium capitalize text-slate-900">{row.department}</td>
                         {demandDateKeys.map((date) => (
-                          <td key={date} className="px-3 py-2 text-right tabular-nums text-slate-300">
+                          <td key={date} className="px-3 py-2 text-right font-medium tabular-nums text-slate-900">
                             {formatQtyWithUnit(row.dailyUsage[date] ?? 0, row.unit)}
                           </td>
                         ))}
-                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-100">
+                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-900">
                           {formatQtyWithUnit(row.totalUsage, row.unit)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-indigo-200">
+                        <td className="px-3 py-2 text-right tabular-nums text-teal-700">
                           {formatQtyWithUnit(row.averageDailyUsage, row.unit)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-amber-200">
+                        <td className="px-3 py-2 text-right tabular-nums text-amber-900">
                           {formatQtyWithUnit(row.peakDailyUsage, row.unit)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                        <td className="px-3 py-2 text-right font-medium tabular-nums text-slate-900">
                           {formatQtyWithUnit(row.currentStock, row.unit)}
                         </td>
                         <td
                           className={`px-3 py-2 text-right tabular-nums font-semibold ${
-                            row.recommendedOrderQty > 0 ? "text-emerald-300" : "text-slate-500"
+                            row.recommendedOrderQty > 0 ? "text-teal-700" : "text-slate-600"
                           }`}
                         >
                           {formatQtyWithUnit(row.recommendedOrderQty, row.unit)}
@@ -5346,11 +5664,11 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "inventory" ? (
-          <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h3 className="text-base font-semibold text-slate-100">Inventory Monitor</h3>
-                <p className="text-xs text-slate-500">
+                <h3 className="text-base font-semibold text-slate-900">Inventory Monitor</h3>
+                <p className="text-xs text-slate-600">
                   Low stock, receive audit, dan ledger detail untuk rentang {dateRangeLabel}.
                 </p>
               </div>
@@ -5359,26 +5677,26 @@ export function MonitoringDashboard() {
             <div
               className={`mb-4 flex items-start gap-3 rounded-xl border px-4 py-3 ${
                 lowStockCountToday > 0
-                  ? "border-red-800/60 bg-red-950/20"
-                  : "border-slate-800 bg-zinc-950/50"
+                  ? "border-red-200 bg-red-50/30"
+                  : "border-slate-200 bg-white"
               }`}
               role="status"
             >
               <AlertTriangle
                 className={`mt-0.5 h-5 w-5 shrink-0 ${
-                  lowStockCountToday > 0 ? "animate-pulse text-amber-400" : "text-slate-500"
+                  lowStockCountToday > 0 ? "animate-pulse text-amber-700" : "text-slate-600"
                 }`}
                 aria-hidden
               />
               <p
                 className={`text-sm leading-snug ${
-                  lowStockCountToday > 0 ? "font-medium text-red-200" : "text-slate-400"
+                  lowStockCountToday > 0 ? "font-medium text-red-700" : "text-slate-600"
                 }`}
               >
                 Terdapat{" "}
                 <span
                   className={`tabular-nums font-bold ${
-                    lowStockCountToday > 0 ? "text-red-300" : "text-slate-300"
+                    lowStockCountToday > 0 ? "text-red-700" : "text-slate-700"
                   }`}
                 >
                   {lowStockCountToday}
@@ -5390,21 +5708,21 @@ export function MonitoringDashboard() {
 
             <LiveStockTable rows={filteredLiveStockRows} businessDate={endDate} />
 
-            <div className="mb-4 rounded-xl border border-slate-800 bg-zinc-950/60 p-4">
+            <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <h4 className="text-sm font-semibold text-slate-100">Receive Audit</h4>
-                  <p className="text-xs text-slate-500">
+                  <h4 className="text-sm font-semibold text-slate-900">Receive Audit</h4>
+                  <p className="text-xs text-slate-600">
                     Jejak siapa input barang masuk dan kapan.
                   </p>
                 </div>
-                <span className="rounded-full bg-zinc-900 px-2.5 py-0.5 text-xs tabular-nums text-slate-400">
+                <span className="rounded-full bg-slate-50 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-slate-900">
                   {filteredReceiveAuditRows.length} entry
                 </span>
               </div>
-              <div className="overflow-x-auto rounded-lg border border-slate-800">
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
                 <table className="w-full min-w-[760px] text-left text-sm">
-                  <thead className="bg-zinc-950 text-slate-400">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
                     <tr>
                       <th className="px-3 py-2 font-medium">Tanggal</th>
                       <th className="px-3 py-2 font-medium">Dept</th>
@@ -5414,26 +5732,26 @@ export function MonitoringDashboard() {
                       <th className="px-3 py-2 font-medium">Waktu Input</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/80">
+                  <tbody className="divide-y divide-slate-100">
                     {filteredReceiveAuditRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
+                        <td colSpan={6} className="px-3 py-6 text-center text-slate-600">
                           Belum ada receive entry dalam rentang ini.
                         </td>
                       </tr>
                     ) : (
                       filteredReceiveAuditRows.slice(0, 30).map((row) => (
-                        <tr key={row.id} className="hover:bg-zinc-900/60">
-                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                        <tr key={row.id} className="hover:bg-slate-50/80">
+                          <td className="whitespace-nowrap px-3 py-2 text-xs font-medium text-slate-900">
                             {formatBusinessDateLabel(row.businessDate)}
                           </td>
-                          <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
-                          <td className="px-3 py-2 text-slate-100">{row.ingredientName}</td>
-                          <td className="px-3 py-2 text-slate-300">{row.staffName}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-slate-100">
+                          <td className="px-3 py-2 font-medium capitalize text-slate-900">{row.department}</td>
+                          <td className="px-3 py-2 text-slate-900">{row.ingredientName}</td>
+                          <td className="px-3 py-2 font-medium text-slate-900">{row.staffName}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-900">
                             {formatQtyWithUnit(row.quantity, row.unit)}
                           </td>
-                          <td className="px-3 py-2 text-xs text-slate-500">
+                          <td className="px-3 py-2 text-xs font-medium text-slate-900">
                             {new Date(row.createdAt).toLocaleString("id-ID")}
                           </td>
                         </tr>
@@ -5448,7 +5766,7 @@ export function MonitoringDashboard() {
               <DepartmentLedgerTable
                 title="Departemen Bar"
                 emoji="☕"
-                accentClass="border-indigo-500/30"
+                accentClass="border-teal-200"
                 rows={barLedgerRows}
                 showDateColumn={!isSingleDayRange}
                 emptyMessage={
@@ -5460,7 +5778,7 @@ export function MonitoringDashboard() {
               <DepartmentLedgerTable
                 title="Departemen Kitchen"
                 emoji="🍳"
-                accentClass="border-amber-500/30"
+                accentClass="border-amber-200"
                 rows={kitchenLedgerRows}
                 showDateColumn={!isSingleDayRange}
                 emptyMessage={
@@ -5474,15 +5792,15 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "export" ? (
-            <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 text-teal-700">
                     <Download className="h-5 w-5" aria-hidden="true" />
                   </span>
                   <div className="min-w-0">
-                    <h3 className="text-base font-semibold text-slate-100">Download Center</h3>
-                    <p className="text-xs text-slate-500">
+                    <h3 className="text-base font-semibold text-slate-900">Download Center</h3>
+                    <p className="text-xs text-slate-600">
                       {dateRangeLabel} · {normalizedSearch ? "filter aktif" : "semua data"}
                     </p>
                   </div>
@@ -5491,7 +5809,7 @@ export function MonitoringDashboard() {
                   type="button"
                   onClick={() => void handleExportOperationalPack()}
                   disabled={exportPackDisabled}
-                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/50 bg-cyan-500/15 px-4 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-4 text-sm font-semibold text-teal-700 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Download className="h-4 w-4" aria-hidden="true" />
                   Download Paket ({exportPackFileCount})
@@ -5532,49 +5850,57 @@ export function MonitoringDashboard() {
                     disabled: demandPlanningRows.length === 0,
                     onClick: handleExportDemandPlanning,
                   },
-                  {
-                    title: "Complaint Tamu",
-                    detail: "Complaint pelanggan, catatan, bukti foto",
-                    rows: complaintOnlyRows.length,
-                    accent: "red",
-                    disabled: complaintOnlyRows.length === 0,
-                    onClick: handleExportComplaint,
-                  },
-                ].map((item) => (
+	                  {
+	                    title: "Complaint Tamu",
+	                    detail: "Complaint pelanggan, catatan, bukti foto",
+	                    rows: complaintOnlyRows.length,
+	                    accent: "red",
+	                    disabled: complaintOnlyRows.length === 0,
+	                    onClick: handleExportComplaint,
+	                  },
+	                  {
+	                    title: "Remake Service Audit",
+	                    detail: "Human error, target potongan, bukti foto",
+	                    rows: remakeServiceRows.length,
+	                    accent: "amber",
+	                    disabled: remakeServiceRows.length === 0,
+	                    onClick: handleExportRemakeService,
+	                  },
+	                ].map((item) => (
                   <div
                     key={item.title}
-                    className="rounded-lg border border-slate-800 bg-zinc-950/65 px-4 py-3"
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-3"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-100">{item.title}</p>
-                        <p className="mt-1 text-xs leading-snug text-slate-500">{item.detail}</p>
+                        <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                        <p className="mt-1 text-xs leading-snug text-slate-600">{item.detail}</p>
                       </div>
                       <span
                         className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${
                           item.disabled
-                            ? "bg-slate-500/10 text-slate-500"
+                            ? "bg-slate-500/10 text-slate-600"
                             : item.accent === "emerald"
-                              ? "bg-emerald-500/15 text-emerald-200"
+                              ? "bg-teal-50 text-teal-700"
                               : item.accent === "cyan"
-                                ? "bg-cyan-500/15 text-cyan-200"
+                                ? "bg-teal-50 text-teal-700"
                               : item.accent === "indigo"
-                                  ? "bg-indigo-500/15 text-indigo-200"
+                                  ? "bg-teal-50 text-teal-700"
                                   : item.accent === "amber"
-                                    ? "bg-amber-500/15 text-amber-100"
-                                    : "bg-red-500/15 text-red-200"
+                                    ? "bg-amber-100 text-amber-900"
+                                    : "bg-red-100 text-red-700"
                         }`}
                       >
                         {formatQtyId(item.rows)} row
                       </span>
                     </div>
                     <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <span className="text-xs text-slate-500">{item.disabled ? "Belum ada data" : "Siap download"}</span>
+                      <span className="text-xs text-slate-600">{item.disabled ? "Belum ada data" : "Siap download"}</span>
                       <button
                         type="button"
                         onClick={() => void item.onClick()}
                         disabled={item.disabled}
-                        className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-slate-700 bg-zinc-900 px-3 text-xs font-semibold text-slate-200 hover:border-cyan-400/50 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:border-teal-200 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Download className="h-3.5 w-3.5" aria-hidden="true" />
                         XLSX
@@ -5587,12 +5913,12 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "demand" ? (
-          <section className="rounded-xl border border-slate-800 bg-zinc-900/60 p-4">
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-4 flex items-center gap-2">
-              <ShoppingCart className="h-5 w-5 text-indigo-400" />
+              <ShoppingCart className="h-5 w-5 text-teal-700" />
               <div>
-                <h3 className="text-base font-semibold text-slate-100">Gateway PO Supplier</h3>
-                <p className="text-xs text-slate-500">
+                <h3 className="text-base font-semibold text-slate-900">Gateway PO Supplier</h3>
+                <p className="text-xs text-slate-600">
                   Thursday Last Order (WIB) · minimum order sebagai peringatan visual (soft warning).
                 </p>
               </div>
@@ -5601,7 +5927,7 @@ export function MonitoringDashboard() {
             {thursdayOrderClosed && (
               <div
                 role="alert"
-                className="mb-4 rounded-xl border border-red-500/50 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200"
+                className="mb-4 rounded-xl border border-red-200 bg-red-50/30 px-4 py-3 text-sm font-medium text-red-700"
               >
                 🚨 Pembelian Ditutup: Batas akhir order (Thursday Last Order) telah terlewati. Jadwal PO dialihkan ke
                 minggu depan.
@@ -5609,22 +5935,22 @@ export function MonitoringDashboard() {
             )}
 
             {poSuccess && (
-              <p className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+              <p className="mb-3 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-700">
                 {poSuccess}
               </p>
             )}
 
             {poError && (
-              <p className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              <p className="mb-3 rounded-lg border border-red-200 bg-red-50/30 px-3 py-2 text-sm text-red-700">
                 {poError}
               </p>
             )}
 
-            <div className="mb-4 rounded-lg border border-indigo-500/30 bg-zinc-950/80 p-3">
-              <label htmlFor="coverage-days" className="block text-sm font-medium text-slate-200">
+            <div className="mb-4 rounded-lg border border-teal-200 bg-white p-3">
+              <label htmlFor="coverage-days" className="block text-sm font-medium text-slate-800">
                 Target Kebutuhan Operasional (Hari)
               </label>
-              <p className="mt-0.5 text-xs text-slate-500">
+              <p className="mt-0.5 text-xs text-slate-600">
                 Ubah menjadi 4 pada hari Kamis untuk cover stok hingga Senin.
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -5632,7 +5958,7 @@ export function MonitoringDashboard() {
                   type="button"
                   disabled={thursdayOrderClosed || coverageDays <= 1}
                   onClick={() => handleCoverageDaysChange(coverageDays - 1)}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-zinc-900 text-lg font-semibold text-slate-200 hover:border-indigo-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-lg font-semibold text-slate-800 hover:border-teal-600/50 disabled:cursor-not-allowed disabled:opacity-40"
                   aria-label="Kurangi hari coverage"
                 >
                   −
@@ -5646,18 +5972,18 @@ export function MonitoringDashboard() {
                   value={coverageDays}
                   disabled={thursdayOrderClosed}
                   onChange={(e) => handleCoverageDaysChange(Number(e.target.value))}
-                  className="min-h-10 w-20 rounded-lg border border-slate-800 bg-zinc-900 px-2 text-center text-sm tabular-nums text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="min-h-10 w-20 rounded-lg border border-slate-200 bg-slate-50 px-2 text-center text-sm tabular-nums text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <button
                   type="button"
                   disabled={thursdayOrderClosed || coverageDays >= 31}
                   onClick={() => handleCoverageDaysChange(coverageDays + 1)}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-zinc-900 text-lg font-semibold text-slate-200 hover:border-indigo-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-lg font-semibold text-slate-800 hover:border-teal-600/50 disabled:cursor-not-allowed disabled:opacity-40"
                   aria-label="Tambah hari coverage"
                 >
                   +
                 </button>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-600">
                   Rekomendasi qty = (avg sales 7 hari × skenario demand × hari) + min. stok − stok saat ini
                 </span>
               </div>
@@ -5665,7 +5991,7 @@ export function MonitoringDashboard() {
 
             <div className="grid gap-3 lg:grid-cols-2">
               {supplierPoCards.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-slate-700 px-3 py-6 text-center text-sm text-slate-500 lg:col-span-2">
+                <p className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-600 lg:col-span-2">
                   Belum ada supplier aktif. Tambahkan supplier di Master Data Supplier.
                 </p>
               ) : (
@@ -5679,14 +6005,14 @@ export function MonitoringDashboard() {
                       key={supplier.id}
                       className={`rounded-xl border p-4 ${
                         lineCount > 0
-                          ? "border-emerald-500/30 bg-emerald-500/5"
-                          : "border-slate-800 bg-zinc-950/60"
+                          ? "border-teal-200 bg-teal-50"
+                          : "border-slate-200 bg-white"
                       }`}
                     >
                       <div className="mb-3 flex items-start justify-between gap-3">
                         <div>
-                          <h4 className="text-sm font-semibold text-slate-100">{supplier.name}</h4>
-                          <p className="mt-1 text-xs text-slate-500">
+                          <h4 className="text-sm font-semibold text-slate-900">{supplier.name}</h4>
+                          <p className="mt-1 text-xs text-slate-600">
                             Min. order {formatRupiah(Number(supplier.min_order_amount))}
                             {!phoneReady ? " · WhatsApp belum lengkap" : ""}
                           </p>
@@ -5694,8 +6020,8 @@ export function MonitoringDashboard() {
                         <span
                           className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
                             lineCount > 0
-                              ? "bg-emerald-500/15 text-emerald-300"
-                              : "bg-slate-500/10 text-slate-500"
+                              ? "bg-teal-50 text-teal-700"
+                              : "bg-slate-500/10 text-slate-600"
                           }`}
                         >
                           {lineCount} bahan
@@ -5703,27 +6029,27 @@ export function MonitoringDashboard() {
                       </div>
 
                       {orderGroup && orderGroup.lines.length > 0 ? (
-                        <ul className="mb-3 max-h-44 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-zinc-950/70 p-2 text-sm">
+                        <ul className="mb-3 max-h-44 space-y-1 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 text-sm scrollbar-thin">
                           {orderGroup.lines.map((line) => (
                             <li
                               key={line.ingredientId}
                               className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5"
                             >
                               <span className="min-w-0">
-                                <span className="block truncate text-slate-200">{line.ingredientName}</span>
-                                <span className="text-[11px] text-slate-500">
+                                <span className="block truncate text-slate-800">{line.ingredientName}</span>
+                                <span className="text-[11px] text-slate-600">
                                   Stok {formatQtyWithUnit(line.currentStock, line.unit)} · limit{" "}
                                   {formatQtyWithUnit(line.minimumStock, line.unit)}
                                 </span>
                               </span>
-                              <span className="shrink-0 tabular-nums text-emerald-200">
+                              <span className="shrink-0 tabular-nums text-teal-700">
                                 {formatPoWaQuantity(line.quantity)} {line.unit}
                               </span>
                             </li>
                           ))}
                         </ul>
                       ) : (
-                        <p className="mb-3 rounded-lg border border-dashed border-slate-800 px-3 py-5 text-center text-sm text-slate-500">
+                        <p className="mb-3 rounded-lg border border-dashed border-slate-200 px-3 py-5 text-center text-sm text-slate-600">
                           Tidak ada bahan supplier ini yang menyentuh batas order.
                         </p>
                       )}
@@ -5733,7 +6059,7 @@ export function MonitoringDashboard() {
                           type="button"
                           disabled={!canSendSupplierPo}
                           onClick={() => void handleSendSupplierLowStockPO(supplier, orderGroup)}
-                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                          className="flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-3 text-sm font-medium text-white transition-all hover:bg-teal-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                         >
                           {poSubmitting ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -5745,7 +6071,7 @@ export function MonitoringDashboard() {
                           Kirim WhatsApp
                         </button>
                       ) : (
-                        <p className="text-center text-xs text-slate-500">
+                        <p className="text-center text-xs text-slate-600">
                           Mode penonton: kirim PO tidak tersedia.
                         </p>
                       )}
@@ -5756,7 +6082,7 @@ export function MonitoringDashboard() {
             </div>
 
             {unassignedLowStockGroup ? (
-              <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/30 px-4 py-3 text-sm text-amber-900">
                 {unassignedLowStockGroup.lines.length} bahan low-stock belum punya supplier.
                 Lengkapi Primary Supplier di Master Ingredients supaya bisa masuk kartu supplier.
               </div>
@@ -5765,19 +6091,19 @@ export function MonitoringDashboard() {
           ) : null}
 
           {activeMonitoringTab === "sales" && filteredSalesRows.length > 0 && (
-            <section className="rounded-xl border border-slate-800 bg-zinc-900/40 p-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="mb-3 flex items-center gap-2">
-                <TrendingDown className="h-4 w-4 text-slate-500" />
-                <h3 className="text-sm font-semibold text-slate-200">
+                <TrendingDown className="h-4 w-4 text-slate-600" />
+                <h3 className="text-sm font-semibold text-slate-800">
                   Ringkasan Penjualan
                   {!isSingleDayRange && (
-                    <span className="ml-2 font-normal text-slate-500">({dateRangeLabel})</span>
+                    <span className="ml-2 font-normal text-slate-600">({dateRangeLabel})</span>
                   )}
                 </h3>
               </div>
-              <div className="overflow-x-auto rounded-lg border border-slate-800">
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
                 <table className="w-full min-w-[640px] text-left text-sm">
-                  <thead className="bg-zinc-950 text-slate-400">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600">
                     <tr>
 	                      {!isSingleDayRange && <th className="px-3 py-2 font-medium">Tanggal</th>}
 	                      <th className="px-3 py-2 font-medium">Menu</th>
@@ -5788,24 +6114,24 @@ export function MonitoringDashboard() {
                       <th className="px-3 py-2 text-right font-medium">Revenue</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/80">
+                  <tbody className="divide-y divide-slate-100">
                     {filteredSalesRows.map((row, idx) => (
                       <tr key={`${row.menu_name}-${row.session_date}-${idx}`}>
                         {!isSingleDayRange && (
-                          <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-500">
+                          <td className="whitespace-nowrap px-3 py-2 text-xs font-medium text-slate-900">
                             {formatBusinessDateLabel(row.session_date)}
                           </td>
                         )}
-                        <td className="px-3 py-2 text-slate-100">{row.menu_name}</td>
-	                        <td className="px-3 py-2 capitalize text-slate-400">{row.department}</td>
-	                        <td className="px-3 py-2 text-slate-400">{salesMenuCategoryLabel(row.category)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                        <td className="px-3 py-2 text-slate-900">{row.menu_name}</td>
+	                        <td className="px-3 py-2 font-medium capitalize text-slate-900">{row.department}</td>
+	                        <td className="px-3 py-2 font-medium text-slate-900">{salesMenuCategoryLabel(row.category)}</td>
+                        <td className="px-3 py-2 text-right font-medium tabular-nums text-slate-900">
                           {formatQtyId(row.quantity_sold)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                        <td className="px-3 py-2 text-right font-medium tabular-nums text-slate-900">
                           {formatRupiah(row.unit_price)}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums font-medium text-emerald-300">
+                        <td className="px-3 py-2 text-right tabular-nums font-medium text-teal-700">
                           {formatRupiah(row.total_gross_revenue)}
                         </td>
                       </tr>

@@ -10,11 +10,11 @@ const config: Config = {
     extend: {
       colors: {
         artha: {
-          bg: "#0f1419",
-          surface: "#1a2332",
-          border: "#2d3a4f",
-          accent: "#c9a227",
-          muted: "#8b9cb3",
+          bg: "#f8fafc",
+          surface: "#ffffff",
+          border: "#e2e8f0",
+          accent: "#0f766e",
+          muted: "#475569",
         },
       },
       keyframes: {

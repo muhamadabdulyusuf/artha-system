@@ -150,7 +150,7 @@ export function StockAdjustmentPanel() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 py-6 text-sm text-zinc-400">
+      <div className="flex items-center gap-2 py-6 text-sm text-slate-600">
         <Loader2 className="h-4 w-4 animate-spin" />
         Memuat data koreksi stok…
       </div>
@@ -160,28 +160,28 @@ export function StockAdjustmentPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-indigo-400">
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-teal-700">
           Jurnal Koreksi Stok (Admin)
         </h3>
-        <p className="mt-1 text-xs text-zinc-500">
+        <p className="mt-1 text-xs text-slate-600">
           Setiap koreksi menambah record baru di stock_log berstatus ADJUSTMENT — data lama tidak
           dihapus.
         </p>
       </div>
 
       {error ? (
-        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700">
           {error}
         </p>
       ) : null}
 
       {toast ? (
-        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+        <p className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-700">
           {toast}
         </p>
       ) : null}
 
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 space-y-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-4">
         <div className="flex flex-wrap gap-2">
           {(["all", "bar", "kitchen"] as const).map((d) => (
             <button
@@ -190,8 +190,8 @@ export function StockAdjustmentPanel() {
               onClick={() => setDepartmentFilter(d)}
               className={`rounded-lg px-3 py-1.5 text-xs font-semibold uppercase ${
                 departmentFilter === d
-                  ? "bg-indigo-600 text-white"
-                  : "bg-zinc-800 text-zinc-400"
+                  ? "bg-teal-600 text-white"
+                  : "bg-slate-50 text-slate-600"
               }`}
             >
               {d === "all" ? "Semua" : d}
@@ -199,7 +199,7 @@ export function StockAdjustmentPanel() {
           ))}
         </div>
 
-        <div className="text-xs text-zinc-400">
+        <div className="text-xs text-slate-600">
           <p>Pilih bahan</p>
           <div
             ref={ingredientPickerRef}
@@ -211,23 +211,23 @@ export function StockAdjustmentPanel() {
             <button
               type="button"
               onClick={() => setIngredientPickerOpen((open) => !open)}
-              className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-zinc-700 bg-zinc-950 px-3 pr-12 text-left text-sm text-zinc-50 hover:border-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
+              className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 pr-12 text-left text-sm text-slate-900 hover:border-slate-200 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100"
               aria-label="Buka pilihan bahan"
             >
               <span className="min-w-0">
                 {selected ? (
                   <>
                     <span className="block truncate font-medium">{selected.name}</span>
-                    <span className="mt-0.5 block truncate text-xs text-zinc-500">
+                    <span className="mt-0.5 block truncate text-xs text-slate-600">
                       {selected.department} · stok {Number(selected.current_stock).toLocaleString("id-ID")} {selected.unit}
                     </span>
                   </>
                 ) : (
-                  <span className="text-zinc-500">Klik pilih bahan...</span>
+                  <span className="text-slate-600">Klik pilih bahan...</span>
                 )}
               </span>
               <ChevronDown
-                className={`h-4 w-4 shrink-0 text-zinc-500 transition ${ingredientPickerOpen ? "rotate-180" : ""}`}
+                className={`h-4 w-4 shrink-0 text-slate-600 transition ${ingredientPickerOpen ? "rotate-180" : ""}`}
               />
             </button>
             {selected ? (
@@ -239,7 +239,7 @@ export function StockAdjustmentPanel() {
                   setIngredientSearch("");
                   setIngredientPickerOpen(true);
                 }}
-                className="absolute right-9 top-2 flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                className="absolute right-9 top-2 flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-50 hover:text-slate-700"
                 aria-label="Hapus pilihan bahan"
               >
                 <X className="h-4 w-4" />
@@ -249,10 +249,10 @@ export function StockAdjustmentPanel() {
               <div
                 id="stock-adjustment-ingredient-list"
                 role="listbox"
-                className="absolute z-20 mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 shadow-xl shadow-black/40"
+                className="absolute z-20 mt-2 w-full rounded-lg border border-slate-200 bg-white p-2 shadow-xl shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
               >
                 <div className="relative mb-2">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
                   <input
                     ref={ingredientSearchInputRef}
                     type="search"
@@ -268,23 +268,23 @@ export function StockAdjustmentPanel() {
                     placeholder="Search bahan..."
                     autoCorrect="off"
                     spellCheck={false}
-                    className="min-h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 pl-9 pr-9 text-sm text-zinc-50 placeholder:text-zinc-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
+                    className="min-h-10 w-full rounded-md border border-slate-200 bg-white pl-9 pr-9 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-300 focus:outline-none focus:ring-1 focus:ring-teal-100"
                     aria-label="Cari bahan untuk koreksi stok"
                   />
                   {ingredientSearch ? (
                     <button
                       type="button"
                       onClick={() => setIngredientSearch("")}
-                      className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                      className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-600 hover:bg-slate-50 hover:text-slate-700"
                       aria-label="Hapus pencarian bahan"
                     >
                       <X className="h-4 w-4" />
                     </button>
                   ) : null}
                 </div>
-                <div className="max-h-64 overflow-y-auto">
+                <div className="max-h-64 overflow-y-auto scrollbar-thin">
                   {filteredIngredients.length === 0 ? (
-                    <p className="px-3 py-3 text-sm text-zinc-500">Bahan tidak ditemukan.</p>
+                    <p className="px-3 py-3 text-sm text-slate-600">Bahan tidak ditemukan.</p>
                   ) : (
                     filteredIngredients.map((ing) => (
                       <button
@@ -295,8 +295,8 @@ export function StockAdjustmentPanel() {
                         onClick={() => selectIngredient(ing)}
                         className={`flex w-full items-start justify-between gap-3 rounded-md px-3 py-2 text-left text-sm ${
                           selectedId === ing.id
-                            ? "bg-indigo-600 text-white"
-                            : "text-zinc-200 hover:bg-zinc-900"
+                            ? "bg-teal-600 text-white"
+                            : "text-slate-700 hover:bg-slate-50/80"
                         }`}
                       >
                         <span className="min-w-0">
@@ -319,7 +319,7 @@ export function StockAdjustmentPanel() {
 
         {selected && canEdit ? (
           <>
-            <label className="block text-xs text-zinc-400">
+            <label className="block text-xs text-slate-600">
               Stok baru
               <input
                 type="number"
@@ -327,46 +327,46 @@ export function StockAdjustmentPanel() {
                 step="any"
                 value={newQty}
                 onChange={(e) => setNewQty(e.target.value)}
-                className="mt-1 min-h-11 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm tabular-nums text-zinc-50"
+                className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm tabular-nums text-slate-900"
               />
             </label>
-            <label className="block text-xs text-zinc-400">
-              Alasan koreksi <span className="text-red-400">*</span>
+            <label className="block text-xs text-slate-600">
+              Alasan koreksi <span className="text-red-700">*</span>
               <textarea
                 rows={3}
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder="Contoh: Koreksi typo opname staff, barang ditemukan di gudang"
-                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-50"
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
               />
             </label>
             <button
               type="button"
               disabled={isSaving || !reason.trim()}
               onClick={() => void handleAdjust()}
-              className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 text-sm font-bold text-white disabled:opacity-50"
+              className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-600 text-sm font-bold text-white disabled:opacity-50"
             >
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <PenLine className="h-4 w-4" />}
               Simpan Koreksi & Catat Audit
             </button>
           </>
         ) : selected && !canEdit ? (
-          <p className="text-sm text-zinc-500">Mode penonton: koreksi stok tidak tersedia.</p>
+          <p className="text-sm text-slate-600">Mode penonton: koreksi stok tidak tersedia.</p>
         ) : null}
       </div>
 
       <div>
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-600">
           Riwayat audit terbaru
         </h4>
         {logs.length === 0 ? (
-          <p className="text-sm text-zinc-500">Belum ada entri stock_log.</p>
+          <p className="text-sm text-slate-600">Belum ada entri stock_log.</p>
         ) : (
-          <ul className="max-h-64 space-y-2 overflow-y-auto text-xs text-zinc-400">
+          <ul className="max-h-64 space-y-2 overflow-y-auto text-xs text-slate-600 scrollbar-thin">
             {logs.map((log) => (
-              <li key={log.id} className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
-                <p className="text-zinc-200">{log.message}</p>
-                <p className="mt-1 text-zinc-600">
+              <li key={log.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <p className="text-slate-700">{log.message}</p>
+                <p className="mt-1 text-slate-600">
                   {log.event_type} · {new Date(log.created_at).toLocaleString("id-ID")}
                 </p>
               </li>

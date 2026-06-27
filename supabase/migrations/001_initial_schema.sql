@@ -11,6 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- -----------------------------------------------------------------------------
 
 CREATE TYPE staff_role AS ENUM (
+  'master_admin',
   'admin',
   'op_manager',
   'bar_staff',
@@ -47,7 +48,7 @@ CREATE TABLE staff (
 
   CONSTRAINT staff_pin_code_numeric CHECK (pin_code ~ '^[0-9]{6}$'),
   CONSTRAINT staff_department_role_check CHECK (
-    (role IN ('admin', 'op_manager', 'viewer') AND department IS NULL)
+    (role IN ('master_admin', 'admin', 'op_manager', 'viewer') AND department IS NULL)
     OR
     (role = 'bar_staff' AND department = 'bar')
     OR
